@@ -1,0 +1,23 @@
+msgid "bad_audience"
+msgstr "Make sure that the entity_id in configuration is correct"
+
+msgid "cert_no_accepted"
+msgstr "Make sure the Identity Provider metadata XML file you are using in the config setting is correct and corresponds to the IdP you are attempting to talk to. You get this error if the certificate used by the IdP to sign the SAML responses has changed and you don't have the updated IdP metadata XML file"
+
+msgid "status_responder"
+msgstr "Make sure the Identity Provider metadata XML file you are using in the config setting is correct and corresponds to the IdP you are attempting to talk to. You get this error if the certificate used by the IdP to sign the SAML responses is invalid or if the IdP is unable to verify its signature"
+
+msgid "missing_assertion_signature"
+msgstr "Missing signature. Please ensure that the assertions are properly signed."
+
+msgid "assertion_cert_not_accepted"
+msgstr "The certificate used to sign the assertions has not been accepted. It is possible that the certificate has expired or is not supported."
+
+msgid "missing_envelope_signature"
+msgstr "Missing envelope signature. Please make sure you uploaded correctly the Cryptr Certificate to your IdP."
+
+msgid "invalid_nameid_policy"
+msgstr "Name ID Policy is invalid. Please make sure you used the correct Key and Format for the NameID"
+
+msgid "bad_digest"
+msgstr "Please make sure that you selected the correct Signature Algorithm (SHA-256)"

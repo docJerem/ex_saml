@@ -1,0 +1,29 @@
+msgid "bad_audience"
+msgstr "Assurez-vous que l'entity_id dans la configuration est correct"
+
+msgid "cert_no_accepted"
+msgstr "Assurez-vous que le fichier XML de métadonnées du fournisseur d'identité que vous utilisez dans le paramètre de configuration est correct et correspond à l'IdP avec lequel vous essayez de parler, vous obtenez cette erreur si le certificat utilisé par l'IdP pour signer les réponses SAML a changé et que vous ne disposez pas du fichier XML de métadonnées de l'IdP mis à jour"
+
+msgid "status_responder"
+msgstr "Assurez-vous que le fichier XML de métadonnées du fournisseur d'identité que vous utilisez dans le paramètre de configuration est correct et correspond à l'IdP avec lequel vous essayez de parler, vous obtenez cette erreur si le certificat utilisé par l'IdP pour signer les réponses SAML est invalide ou que l'IdP n'est pas en mesure de vérifier sa signature"
+
+msgid "missing_assertion_signature"
+msgstr "Signature manquante. Veuillez vous assurer que les assertions sont correctement signées."
+
+msgid "assertion_cert_not_accepted"
+msgstr "Le certificat utilisé pour signer les assertions n'a pas été accepté. Il est possible que le certificat ait expiré ou qu'il ne soit pas pris en charge."
+
+msgid "missing_envelope_signature"
+msgstr "La Signature pour les enveloppes est manquantes. Assurez-vous que vous avec correctement uploadé votre Certificat Cryptr sur votre IdP."
+
+msgid "invalid_nameid_policy"
+msgstr "La règle spécifié pour le NameID est invalide. Assurez-vous d'utiliser la bonne clé et le bon format sur votre IdP."
+
+msgid "invalid_nonce"
+msgstr "Vous êtes probablement en train de rejouer la requête deux fois si le défi occasionnel pour l'attaque anti-rejeu est invalide ou manquant"
+
+msgid "missing_assertion_key"
+msgstr "Authentification non autorisée, RelayState ou réponse d'authentification invalide"
+
+msgid "bad_digest"
+msgstr "Assurez-vous d'avoir utilisé le bon Algorithme de Signature"
