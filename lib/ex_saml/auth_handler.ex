@@ -64,6 +64,11 @@ defmodule ExSaml.AuthHandler do
   done.
   """
   def request_idp(conn, idp_id) do
+    conn =
+      conn
+      |> put_private(:ex_saml_nonce, :crypto.strong_rand_bytes(18) |> Base.encode64())
+      |> put_private(:ex_saml_idp, ExSaml.Helper.get_idp(idp_id))
+
     %IdpData{id: ^idp_id, esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} =
       idp = Helper.get_idp(idp_id)
 
