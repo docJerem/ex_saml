@@ -3,8 +3,7 @@ defmodule ExSaml.Assertion do
   SAML assertion returned from IDP upon successful user authentication.
 
   The assertion attributes returned by the IdP are available in `attributes` field
-  as a map. Any computed attributes (using a Plug Pipeline by way of configuration)
-  are available in `computed` field as map.
+  as a map. Any computed attributes are available in `computed` field as map.
 
   The attributes can be accessed directly from `attributes` or `computed` maps.
   The `ExSaml.get_attribute/2` function can be used as well. This function will

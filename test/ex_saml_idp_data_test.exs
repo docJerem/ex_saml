@@ -121,13 +121,6 @@ defmodule ExSamlIdpDataTest do
     assert idp_data.base_url == nil
   end
 
-  test "valid-idp-config-6", %{sps: sps} do
-    idp_config = Map.put(@idp_config1, :pre_session_create_pipeline, MyPipeline)
-    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-    assert idp_data.valid?
-    assert idp_data.pre_session_create_pipeline == MyPipeline
-  end
-
   test "valid-idp-config-7", %{sps: sps} do
     idp_config = %{@idp_config1 | metadata_file: "test/data/azure_fed_metadata.xml"}
     %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
