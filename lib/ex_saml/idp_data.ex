@@ -15,7 +15,6 @@ defmodule ExSaml.IdpData do
             base_url: nil,
             metadata: nil,
             metadata_file: nil,
-            pre_session_create_pipeline: nil,
             use_redirect_for_req: false,
             remove_saml_encoding: false,
             sign_requests: true,
@@ -44,7 +43,6 @@ defmodule ExSaml.IdpData do
           base_url: nil | binary(),
           metadata: nil | binary(),
           metadata_file: nil | binary(),
-          pre_session_create_pipeline: nil | module(),
           use_redirect_for_req: boolean(),
           use_redirect_for_slo: boolean(),
           sign_requests: boolean(),
@@ -124,7 +122,6 @@ defmodule ExSaml.IdpData do
         metadata: Map.get(opts_map, :metadata)
     }
     |> set_metadata(opts_map)
-    |> set_pipeline(opts_map)
     |> set_allowed_target_urls(opts_map)
     |> set_boolean_attr(opts_map, :use_redirect_for_req)
     |> set_boolean_attr(opts_map, :sign_requests)
@@ -205,12 +202,6 @@ defmodule ExSaml.IdpData do
       | metadata_file: Map.get(opts_map, :metadata_file, @default_metadata_file),
         metadata: opts_map[:metadata]
     }
-  end
-
-  @spec set_pipeline(%IdpData{}, map()) :: %IdpData{}
-  defp set_pipeline(%IdpData{} = idp_data, %{} = opts_map) do
-    pipeline = Map.get(opts_map, :pre_session_create_pipeline)
-    %IdpData{idp_data | pre_session_create_pipeline: pipeline}
   end
 
   defp set_allowed_target_urls(%IdpData{} = idp_data, %{} = opts_map) do
