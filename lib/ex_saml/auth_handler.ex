@@ -7,6 +7,8 @@ defmodule ExSaml.AuthHandler do
 
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 6, redirect: 3]
 
+  @relay_state_cache_ttl :timer.minutes(5)
+
   @sso_init_resp_template """
   <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\"
     \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">
@@ -90,7 +92,7 @@ defmodule ExSaml.AuthHandler do
         redirect_uri: get_session(conn, :redirect_uri)
         # target_url: target_url
       },
-      ttl: RelayStateCache.ttl()
+      ttl: @relay_state_cache_ttl
     )
 
     {idp_signin_url, req_xml_frag} =
@@ -147,7 +149,7 @@ defmodule ExSaml.AuthHandler do
             user_token: get_session(conn, :user_token),
             redirect_uri: get_session(conn, :redirect_uri)
           },
-          ttl: RelayStateCache.ttl()
+          ttl: @relay_state_cache_ttl
         )
 
         {idp_signin_url, req_xml_frag} =
