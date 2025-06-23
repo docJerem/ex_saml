@@ -11,10 +11,7 @@ defmodule ExSaml.Application do
       # Starts a worker by calling: ExSaml.Worker.start_link(arg)
       # {ExSaml.Worker, arg}
       {ExSaml.Provider, []},
-      {ExSaml.BoostrapProvidersLoader, []},
-      ExSaml.AssertionCache,
-      ExSaml.RelayStateCache,
-      ExSaml.AuthorizationCodeCache
+      {ExSaml.BoostrapProvidersLoader, []}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
