@@ -9,55 +9,6 @@ defmodule ExSaml.AuthHandler do
 
   @relay_state_cache_ttl :timer.minutes(5)
 
-  @sso_init_resp_template """
-  <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\"
-    \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">
-  <html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">
-    <head>
-      <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"/>
-    </head>
-    <body>
-      <script nonce=\"<%= nonce %>\">
-        document.addEventListener(\"DOMContentLoaded\", function () {
-          document.getElementById(\"sso-req-form\").submit();
-        });
-      </script>
-      <noscript>
-        <p><strong>Note:</strong>
-          Since your browser does not support JavaScript, you must press
-          the button below to proceed.
-        </p>
-      </noscript>
-      <form id=\"sso-req-form\" method=\"post\" action=\"<%= action %>\">
-        <%= if target_url do %>
-        <input type=\"hidden\" name=\"target_url\" value=\"<%= target_url %>\" />
-        <% end %>
-        <input type=\"hidden\" name=\"_csrf_token\" value=\"<%= csrf_token %>\" />
-        <noscript><input type=\"submit\" value=\"Submit\" /></noscript>
-      </form>
-    </body>
-  </html>
-  """
-
-  @doc "Prepare the request before to start send_signin_req"
-  # sobelow_skip ["XSS.SendResp"]
-  def initiate_sso_req(conn) do
-    import Plug.CSRFProtection, only: [get_csrf_token: 0]
-
-    target_url = conn.private[:ex_saml_target_url] || "/"
-
-    opts = [
-      nonce: conn.private[:ex_saml_nonce],
-      action: URI.encode(conn.request_path),
-      target_url: URI.encode_www_form(target_url),
-      csrf_token: get_csrf_token()
-    ]
-
-    conn
-    |> put_resp_header("content-type", "text/html")
-    |> send_resp(200, EEx.eval_string(@sso_init_resp_template, opts))
-  end
-
   @doc """
   Handles the full SAML request to the IdP without requiring an intermediate HTML form.
   Can be called directly in a Phoenix controller action.
@@ -66,13 +17,10 @@ defmodule ExSaml.AuthHandler do
   done.
   """
   def request_idp(conn, idp_id) do
-    conn =
-      conn
-      |> put_private(:ex_saml_nonce, :crypto.strong_rand_bytes(18) |> Base.encode64())
-      |> put_private(:ex_saml_idp, ExSaml.Helper.get_idp(idp_id))
+    conn = put_private(conn, :ex_saml_idp, ExSaml.Helper.get_idp(idp_id))
 
     %IdpData{id: ^idp_id, esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} =
-      idp = Helper.get_idp(idp_id)
+      idp = conn.private[:ex_saml_idp]
 
     sp = ensure_sp_uris_set(sp_rec, conn)
     assertion_key = get_session(conn, "ex_saml_assertion_key")
