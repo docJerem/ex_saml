@@ -12,16 +12,8 @@ defmodule ExSaml.AuthRouter do
   plug(:check_target_url)
   plug(:dispatch)
 
-  get "/signin/*idp_id_seg" do
-    conn |> ExSaml.AuthHandler.initiate_sso_req()
-  end
-
   post "/signin/*idp_id_seg" do
     conn |> ExSaml.AuthHandler.send_signin_req()
-  end
-
-  get "/signout/*idp_id_seg" do
-    conn |> ExSaml.AuthHandler.initiate_sso_req()
   end
 
   post "/signout/*idp_id_seg" do
