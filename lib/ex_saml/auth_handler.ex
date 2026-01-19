@@ -17,10 +17,18 @@ defmodule ExSaml.AuthHandler do
   done.
   """
   def request_idp(conn, idp_id) do
-    conn = put_private(conn, :ex_saml_idp, ExSaml.Helper.get_idp(idp_id))
+    case ExSaml.Helper.get_idp(idp_id) do
+      nil ->
+        Logger.error("ExSaml: IDP not found for id '#{idp_id}'. Check your :ex_saml :identity_providers configuration.")
+        send_resp(conn, 500, "IDP configuration not found") |> halt()
 
-    %IdpData{id: ^idp_id, esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} =
-      idp = conn.private[:ex_saml_idp]
+      %IdpData{id: ^idp_id, esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} = idp ->
+        do_request_idp(conn, idp_id, idp, idp_rec, sp_rec)
+    end
+  end
+
+  defp do_request_idp(conn, idp_id, idp, idp_rec, sp_rec) do
+    conn = put_private(conn, :ex_saml_idp, idp)
 
     sp = ensure_sp_uris_set(sp_rec, conn)
     assertion_key = get_session(conn, "ex_saml_assertion_key")
