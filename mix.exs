@@ -1,13 +1,21 @@
 defmodule ExSaml.MixProject do
   use Mix.Project
 
+  @source_url "https://github.com/docJerem/ex_saml"
+  @version "1.0.0"
+
   def project do
     [
       app: :ex_saml,
-      version: "0.1.0",
+      deps: deps(),
+      description: description(),
       elixir: "~> 1.15",
+      package: package(),
+      preferred_cli_env: preferred_cli_env(),
+      source_url: @source_url,
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      test_coverage: [tool: ExCoveralls],
+      version: @version
     ]
   end
 
@@ -22,18 +30,48 @@ defmodule ExSaml.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:plug, "~> 1.18"},
-      {:esaml, "~> 4.6"},
-      {:sweet_xml, "~> 0.7"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
-      {:ex_doc, "~> 0.38", only: :dev, runtime: false},
+      {:esaml, "~> 4.6"},
       {:elixir_uuid, "~> 1.2"},
-
-      # Cache
+      {:excoveralls, "~> 0.18", only: :test, runtime: false},
+      {:ex_doc, "~> 0.38", only: :dev, runtime: false},
+      {:gettext, ">= 0.26.0"},
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:nebulex, "~> 2.6"},
-      {:gettext, ">= 0.26.0"}
-      # Maybe to remove
-      # {:cleeck, in_umbrella: true},
+      {:plug, "~> 1.18"},
+      {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
+      {:sweet_xml, "~> 0.7"}
+    ]
+  end
+
+  defp description do
+    """
+    SAML 2.0 Service Provider (SP) library for Elixir/Phoenix applications.
+    Enables SP-initiated and IdP-initiated SSO, Single Logout, SP metadata generation,
+    and multi-IdP support with pluggable assertion storage.
+    """
+  end
+
+  defp package do
+    [
+      maintainers: [
+        "Jeremie Flandrin"
+      ],
+      licenses: ["MIT"],
+      links: %{
+        "Github" => @source_url
+      }
+    ]
+  end
+
+  defp preferred_cli_env do
+    [
+      coveralls: :test,
+      "coveralls.detail": :test,
+      "coveralls.post": :test,
+      "coveralls.html": :test,
+      "coveralls.cobertura": :test
     ]
   end
 end
