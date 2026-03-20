@@ -27,3 +27,7 @@ ex_saml-*.tar
 
 # Other
 .DS_Store
+
+
+/.agents/
+/samly_legacy/

@@ -3,7 +3,9 @@
 [![Hex.pm](https://img.shields.io/hexpm/v/ex_saml.svg)](https://hex.pm/packages/ex_saml)
 [![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/ex_saml)
 
-SAML 2.0 Service Provider (SP) library for Elixir/Phoenix applications. Fork of [Samly](https://hex.pm/packages/samly) with enhanced security, configurable caching, and streamlined routing.
+SAML 2.0 Service Provider (SP) library for Elixir/Phoenix applications.
+
+Originally built from the [Samly](https://hex.pm/packages/samly) codebase (by [handnot2](https://github.com/handnot2/samly)), before the [Dropbox fork](https://github.com/dropbox/samly) was created. Dropbox's fork has since been [declared unmaintained](https://github.com/dropbox/samly/pull/23#issuecomment-2537921498). ExSaml is the actively maintained successor, with enhanced security, configurable caching, and streamlined routing.
 
 ## Features
 
@@ -191,7 +193,11 @@ ExSaml.Provider (GenServer managing SP/IdP state)
 ExSaml.State (assertion storage: ETS | Session | Cache)
 ```
 
-## Key Differences from Samly
+## Migrating from Samly
+
+If you're coming from [Samly](https://hex.pm/packages/samly) or the [Dropbox fork](https://github.com/dropbox/samly), see the [Migration Guide](guides/migrating_from_samly.md) for a step-by-step walkthrough covering module renaming, config changes, removed features, and a migration checklist.
+
+### Key Differences
 
 - **Security Plug** - Centralized security headers with CSP nonce support
 - **Configurable cache backend** - Cache module set via `config.exs` instead of hardcoded
