@@ -1,21 +1,17 @@
 defmodule ExSaml.Provider do
   @moduledoc """
-  SAML 2.0 Service Provider
+  SAML 2.0 Service Provider.
 
-  This should be added to the hosting Phoenix/Plug application's supervision tree.
-  This GenServer initializes the SP configuration and loads the IDP medata XML
-  containing information on how to communicate with the IDP.
+  GenServer that initializes the SP configuration and loads the IdP metadata XML.
+  Add it to your application's supervision tree:
 
   ```elixir
-  # application.ex
-
-    children = [
-      # ...
-      worker(ExSaml.Provider, []),
-    ]
+  children = [
+    ExSaml.Provider
+  ]
   ```
 
-  Check README.md `Configuration` section.
+  See the README for full configuration options.
   """
 
   use GenServer

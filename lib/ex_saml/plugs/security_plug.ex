@@ -1,4 +1,15 @@
 defmodule ExSaml.SecurityPlug do
+  @moduledoc """
+  Plug that sets security headers on SAML responses.
+
+  Applied automatically by `ExSaml.Router`. Sets the following headers:
+    * `content-security-policy` - with a per-request nonce (available via `conn.private[:ex_saml_nonce]`)
+    * `cache-control` / `pragma` - no caching
+    * `x-frame-options` - SAMEORIGIN
+    * `x-xss-protection` - enabled with block mode
+    * `x-content-type-options` - nosniff
+  """
+
   import Plug.Conn
   alias Plug.Conn
 

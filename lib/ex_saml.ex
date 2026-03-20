@@ -1,6 +1,9 @@
 defmodule ExSaml do
   @moduledoc """
-  Elixir library used to enable SAML SP SSO to a Phoenix/Plug based application.
+  SAML 2.0 Service Provider (SP) library for Elixir/Phoenix applications.
+
+  Provides functions to retrieve active SAML assertions and their attributes
+  from the current Plug session.
   """
 
   alias Plug.Conn
@@ -20,7 +23,7 @@ defmodule ExSaml do
   ## Examples
 
       # When there is an authenticated SAML assertion
-      %Assertion{} = ExSaml.get_active_assertion()
+      %Assertion{} = ExSaml.get_active_assertion(conn)
   """
   @spec get_active_assertion(Conn.t()) :: nil | Assertion.t()
   def get_active_assertion(conn) do
@@ -47,7 +50,7 @@ defmodule ExSaml do
 
   ## Examples
 
-      assertion = ExSaml.get_active_assertion()
+      assertion = ExSaml.get_active_assertion(conn)
       # returns a list if the attribute is multi-valued
       roles = ExSaml.get_attribute(assertion, "roles")
       computed_fullname = ExSaml.get_attribute(assertion, "fullname")
@@ -60,39 +63,43 @@ defmodule ExSaml do
     Map.get(assertion.computed, name) || Map.get(assertion.attributes, name)
   end
 
-  @doc "Provide metadata URI path with a dynamic scope"
+  @doc "Returns the SP metadata URI for the given IdP."
   def get_metadata_uri(host \\ "", scope \\ "", idp_id),
     do: "#{host}#{scope}/sp/metadata/#{idp_id}"
 
+  @doc "Returns the Assertion Consumer Service (ACS) URI for the given IdP."
   def get_acs_uri(host \\ "", scope \\ "", idp_id),
     do: "#{host}#{scope}/sp/consume/#{idp_id}"
 
+  @doc "Returns the Single Logout (SLO) URI for the given IdP."
   def get_slo_uri(host \\ "", scope \\ "", idp_id),
     do: "#{host}#{scope}/auth/signout/#{idp_id}"
 
+  @doc "Returns the SLO response URI for the given IdP."
   def get_slo_response_uri(host \\ "", scope \\ "", idp_id),
     do: "#{host}#{scope}/sp/signout/#{idp_id}"
 
-  @doc "Provide signin URI path with a dynamic scope"
+  @doc "Returns the sign-in URI for the given IdP."
   def get_signin_uri(host \\ "", scope \\ "", idp_id), do: "#{host}#{scope}/auth/signin/#{idp_id}"
 
   @doc """
-  External `Ecto.Repo` to manage persisted service provider configurations
+  Lists service providers from the configured accessor function.
 
-  Manage your repo in `config.exs`.
+  Requires `service_providers_accessor` to be set in config:
 
-  ## Example
-
-      config :ex_saml, repo: Cleeck.Repo
-
+      config :ex_saml,
+        service_providers_accessor: &MyApp.Saml.service_providers/0
   """
   def list_service_providers,
     do: Application.get_env(:ex_saml, :service_providers_accessor).()
 
   @doc """
-  External `Ecto.Repo` to manage persisted identity provider configurations
+  Lists identity providers from the configured accessor function.
 
-  See `get_service_provider/0` for example.
+  Requires `identity_providers_accessor` to be set in config:
+
+      config :ex_saml,
+        identity_providers_accessor: &MyApp.Saml.identity_providers/0
   """
   def list_identity_providers,
     do: Application.get_env(:ex_saml, :identity_providers_accessor).()

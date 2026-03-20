@@ -1,5 +1,15 @@
 defmodule ExSaml.SPHandler do
-  @moduledoc false
+  @moduledoc """
+  Handles Service Provider SAML responses: metadata generation, assertion consumption,
+  and logout handling.
+
+  ## Functions
+
+    * `send_metadata/1` - Returns SP metadata XML for the given IdP
+    * `consume_signin_response/2` - Processes the IdP sign-in response and returns the assertion
+    * `handle_logout_response/1` - Processes the IdP logout response
+    * `handle_logout_request/1` - Processes an IdP-initiated logout request
+  """
 
   require Logger
   import Plug.Conn
@@ -18,6 +28,7 @@ defmodule ExSaml.SPHandler do
 
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
 
+  @doc "Returns the SP metadata XML for the IdP in `conn.private[:ex_saml_idp]`."
   # sobelow_skip ["XSS.SendResp"]
   def send_metadata(conn) do
     %IdpData{} = idp = conn.private[:ex_saml_idp]
@@ -35,7 +46,12 @@ defmodule ExSaml.SPHandler do
     #     conn |> send_resp(500, "request_failed")
   end
 
-  @doc "After the AuthHandler.send_signin_req, receive the response from the IDP"
+  @doc """
+  Processes the IdP sign-in response and extracts the SAML assertion.
+
+  Returns `{:ok, %{assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
+  on success, or `{:error, reason}` on failure.
+  """
   def consume_signin_response(conn, %IdpData{id: idp_id, esaml_sp_rec: sp_rec} = idp_data) do
     sp = ensure_sp_uris_set(sp_rec, conn)
 
@@ -112,6 +128,7 @@ defmodule ExSaml.SPHandler do
     end
   end
 
+  @doc "Processes the IdP logout response and redirects to the target URL."
   # sobelow_skip ["XSS.SendResp"]
   def handle_logout_response(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
@@ -141,7 +158,7 @@ defmodule ExSaml.SPHandler do
     #     conn |> send_resp(500, "request_failed")
   end
 
-  # non-ui logout request from IDP
+  @doc "Handles an IdP-initiated logout request."
   def handle_logout_request(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
     %IdpData{esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} = idp
@@ -191,10 +208,12 @@ defmodule ExSaml.SPHandler do
     #     conn |> send_resp(500, "request_failed")
   end
 
+  @doc "Returns the target URL from session or relay state cache."
   def target_url(conn, relay_state) do
     get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url]
   end
 
+  @doc "Returns the fallback target URL from application config (defaults to `\"/\"`)."
   def target_url, do: Application.get_env(:ex_saml, :fallback_target_url, "/")
 
   defp safe_decode_www_form(nil), do: ""

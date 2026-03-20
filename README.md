@@ -80,7 +80,7 @@ config :ex_saml, ExSaml.Provider,
   idp_id_from: :path_segment  # or :subdomain
 ```
 
-Supported `nameid_format` values: `:email`, `:x509`, `:windows`, `:kerberos`, `:persistent`, `:transient`.
+Supported `nameid_format` values: `:email`, `:x509`, `:windows`, `:krb`, `:persistent`, `:transient`.
 
 ### State Store
 
@@ -139,13 +139,19 @@ forward "/sso", ExSaml.Router
 ```
 
 This exposes:
-- `GET /sso/sp/metadata/:idp_id` - SP metadata endpoint
-- `POST /sso/sp/consume/:idp_id` - Assertion Consumer Service (ACS)
-- `POST /sso/sp/logout/:idp_id` - Single Logout endpoint
 - `POST /sso/auth/signin/:idp_id` - Initiate sign-in
 - `POST /sso/auth/signout/:idp_id` - Initiate sign-out
+- `POST /sso/csp-report` - CSP violation report endpoint
+
+SP endpoints (metadata, ACS, SLO) are configured via `ExSaml.Helper` URI builders and handled by `ExSaml.SPHandler`.
 
 ## Usage
+
+### Requesting an IdP Directly
+
+```elixir
+ExSaml.AuthHandler.request_idp(conn, idp_id)
+```
 
 ### Initiating Sign-In
 
@@ -162,12 +168,19 @@ ExSaml.AuthHandler.send_signout_req(conn)
 ### Retrieving the Active Assertion
 
 ```elixir
-assertion_key = Plug.Conn.get_session(conn, "ex_saml_assertion_key")
-assertion = ExSaml.State.get_assertion(conn, assertion_key)
+assertion = ExSaml.get_active_assertion(conn)
+```
+
+To get a specific attribute:
+
+```elixir
+email = ExSaml.get_attribute(assertion, "email")
 ```
 
 The `ExSaml.Assertion` struct contains:
+- `idp_id` - Identity Provider identifier
 - `subject` - User identity (`name`, `in_response_to`, `notonorafter`)
+- `issuer` - IdP entity ID
 - `attributes` - IdP-provided attributes
 - `computed` - Locally computed attributes
 - `conditions` / `authn` - Additional SAML metadata
@@ -179,15 +192,17 @@ Request
   |
   v
 ExSaml.Router
-  |-- /sp/*    -> ExSaml.SPHandler (metadata, ACS, SLO)
-  |-- /auth/*  -> ExSaml.AuthRouter -> ExSaml.AuthHandler
-  |-- /csp-report -> ExSaml.CsprRouter
+  |-- /auth/*      -> ExSaml.AuthRouter -> ExSaml.AuthHandler
+  |-- /csp-report  -> ExSaml.CsprRouter
   |
   v
 ExSaml.SecurityPlug (CSP nonce, security headers)
   |
   v
 ExSaml.Provider (GenServer managing SP/IdP state)
+  |
+  v
+ExSaml.SPHandler (metadata, ACS, SLO)
   |
   v
 ExSaml.State (assertion storage: ETS | Session | Cache)

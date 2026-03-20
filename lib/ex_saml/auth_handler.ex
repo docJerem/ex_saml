@@ -1,5 +1,13 @@
 defmodule ExSaml.AuthHandler do
-  @moduledoc false
+  @moduledoc """
+  Handles SAML authentication requests (sign-in and sign-out) with the Identity Provider.
+
+  ## Functions
+
+    * `request_idp/2` - Initiates a full SAML SSO request to a specific IdP
+    * `send_signin_req/1` - Sends a sign-in request using the IdP from `conn.private[:ex_saml_idp]`
+    * `send_signout_req/1` - Sends a sign-out request for the current session
+  """
 
   require Logger
   import Plug.Conn
@@ -67,7 +75,12 @@ defmodule ExSaml.AuthHandler do
     )
   end
 
-  @doc "Run the request to the Identity Provider"
+  @doc """
+  Sends a SAML sign-in request to the IdP.
+
+  Expects `conn.private[:ex_saml_idp]` and `conn.private[:ex_saml_target_url]` to be set.
+  If the user already has a valid assertion for this IdP, redirects to the target URL.
+  """
   def send_signin_req(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
     %IdpData{esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} = idp
@@ -124,6 +137,12 @@ defmodule ExSaml.AuthHandler do
     #     conn |> send_resp(500, "request_failed")
   end
 
+  @doc """
+  Sends a SAML sign-out request to the IdP.
+
+  Expects `conn.private[:ex_saml_idp]` to be set. Requires an active assertion
+  for the current IdP, otherwise returns 403.
+  """
   def send_signout_req(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
     %IdpData{esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} = idp

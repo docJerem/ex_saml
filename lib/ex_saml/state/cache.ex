@@ -1,5 +1,16 @@
 defmodule ExSaml.State.Cache do
-  @moduledoc false
+  @moduledoc """
+  Stores SAML assertions using a Nebulex cache backend.
+
+  Suitable for distributed environments. Assertions have a default TTL of 5 minutes.
+
+  ## Configuration
+
+      config :ex_saml, ExSaml.State,
+        store: ExSaml.State.Cache
+
+      config :ex_saml, cache: MyApp.Cache
+  """
   alias ExSaml.AssertionCache
 
   @behaviour ExSaml.State.Store
@@ -9,8 +20,10 @@ defmodule ExSaml.State.Cache do
   @impl ExSaml.State.Store
   def init(opts \\ []), do: opts
 
+  @doc "Lists all cached assertions as `{key, value}` tuples."
   def list_assertions(), do: AssertionCache.all(nil, return: {:key, :value})
 
+  @doc "Returns the remaining TTL for the given assertion key."
   def ttl_assertion({_, _} = key), do: AssertionCache.ttl(key)
 
   @impl ExSaml.State.Store

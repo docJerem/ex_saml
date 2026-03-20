@@ -1,5 +1,14 @@
 defmodule ExSaml.Router do
-  @moduledoc false
+  @moduledoc """
+  Main SAML router. Forward this in your Phoenix router:
+
+      forward "/sso", ExSaml.Router
+
+  Routes:
+    * `/auth/signin/*idp_id` - Initiate sign-in (POST)
+    * `/auth/signout/*idp_id` - Initiate sign-out (POST)
+    * `/csp-report` - CSP violation report endpoint
+  """
 
   use Plug.Router
 
