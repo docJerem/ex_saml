@@ -21,7 +21,7 @@ defmodule ExSaml.State.Cache do
   def init(opts \\ []), do: opts
 
   @doc "Lists all cached assertions as `{key, value}` tuples."
-  def list_assertions(), do: AssertionCache.all(nil, return: {:key, :value})
+  def list_assertions, do: AssertionCache.all(nil, return: {:key, :value})
 
   @doc "Returns the remaining TTL for the given assertion key."
   def ttl_assertion({_, _} = key), do: AssertionCache.ttl(key)

@@ -18,7 +18,7 @@ defmodule ExSaml.Provider do
   require Logger
 
   require ExSaml.Esaml
-  alias ExSaml.{State}
+  alias ExSaml.State
 
   @doc false
   def start_link(gs_opts \\ []) do

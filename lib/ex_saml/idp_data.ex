@@ -109,7 +109,7 @@ defmodule ExSaml.IdpData do
     |> verify_slo_url()
   end
 
-  def oasis_redirect_flow_uri(), do: @deflate_saml_encoding
+  def oasis_redirect_flow_uri, do: @deflate_saml_encoding
 
   @spec save_idp_config(%IdpData{}, map()) :: %IdpData{}
   defp save_idp_config(idp_data, %{id: id, sp_id: sp_id} = opts_map)
@@ -136,6 +136,8 @@ defmodule ExSaml.IdpData do
   defp load_metadata(idp_data = %IdpData{metadata: metadata}) when not is_nil(metadata),
     do: from_xml(metadata, idp_data)
 
+  # metadata_file comes from application config set by the developer, not from user input.
+  # sobelow_skip ["Traversal.FileModule"]
   defp load_metadata(idp_data = %IdpData{metadata_file: metadata_file})
        when not is_nil(metadata_file) do
     case File.read(idp_data.metadata_file) do
@@ -218,39 +220,37 @@ defmodule ExSaml.IdpData do
   defp override_nameid_format(%IdpData{} = idp_data, idp_config) do
     nameid_format =
       case Map.get(idp_config, :nameid_format, "") do
-        "" ->
-          idp_data.nameid_format
-
-        format when is_binary(format) ->
-          to_charlist(format)
-
-        :email ->
-          ~c"urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
-
-        :x509 ->
-          ~c"urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName"
-
-        :windows ->
-          ~c"urn:oasis:names:tc:SAML:1.1:nameid-format:WindowsDomainQualifiedName"
-
-        :krb ->
-          ~c"urn:oasis:names:tc:SAML:2.0:nameid-format:kerberos"
-
-        :persistent ->
-          ~c"urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
-
-        :transient ->
-          ~c"urn:oasis:names:tc:SAML:2.0:nameid-format:transient"
-
-        invalid_nameid_format ->
-          Logger.error(
-            "[ExSaml] invalid nameid_format [#{inspect(idp_data.metadata_file)}]: #{inspect(invalid_nameid_format)}"
-          )
-
-          idp_data.nameid_format
+        "" -> idp_data.nameid_format
+        format when is_binary(format) -> to_charlist(format)
+        atom_format when is_atom(atom_format) -> resolve_nameid_format(atom_format, idp_data)
       end
 
     %IdpData{idp_data | nameid_format: nameid_format}
+  end
+
+  defp resolve_nameid_format(:email, _),
+    do: ~c"urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+
+  defp resolve_nameid_format(:x509, _),
+    do: ~c"urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName"
+
+  defp resolve_nameid_format(:windows, _),
+    do: ~c"urn:oasis:names:tc:SAML:1.1:nameid-format:WindowsDomainQualifiedName"
+
+  defp resolve_nameid_format(:krb, _), do: ~c"urn:oasis:names:tc:SAML:2.0:nameid-format:kerberos"
+
+  defp resolve_nameid_format(:persistent, _),
+    do: ~c"urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
+
+  defp resolve_nameid_format(:transient, _),
+    do: ~c"urn:oasis:names:tc:SAML:2.0:nameid-format:transient"
+
+  defp resolve_nameid_format(invalid, idp_data) do
+    Logger.error(
+      "[ExSaml] invalid nameid_format [#{inspect(idp_data.metadata_file)}]: #{inspect(invalid)}"
+    )
+
+    idp_data.nameid_format
   end
 
   @spec set_boolean_attr(%IdpData{}, map(), atom()) :: %IdpData{}
@@ -306,7 +306,7 @@ defmodule ExSaml.IdpData do
     }
   end
 
-  # @spec to_esaml_idp_metadata(IdpData.t(), map()) :: :esaml_idp_metadata
+  # @spec to_esaml_idp_metadata(%IdpData{}, map()) :: :esaml_idp_metadata
   defp to_esaml_idp_metadata(%IdpData{} = idp_data, %{} = idp_config) do
     {sso_url, slo_url} = get_sso_slo_urls(idp_data, idp_config)
     sso_url = if is_binary(sso_url), do: String.to_charlist(sso_url), else: []
@@ -426,12 +426,10 @@ defmodule ExSaml.IdpData do
     |> xpath(key_selector |> add_ns())
     |> Enum.map(fn e ->
       # Extract base64 encoded cert from XML (strip away any whitespace)
-      cert = xpath(e, @cert_selector |> add_ns())
-
-      cert
+      e
+      |> xpath(@cert_selector |> add_ns())
       |> String.split()
-      |> Enum.map(&String.trim/1)
-      |> Enum.join()
+      |> Enum.map_join(&String.trim/1)
     end)
   end
 

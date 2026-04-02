@@ -25,7 +25,7 @@ defmodule ExSaml.RelayStateCache do
   @doc "Atomically retrieves and deletes the relay state (anti-replay)."
   def take(key), do: assertion_cache().take(cache_key(key))
 
-  defp assertion_cache(), do: Application.get_env(:ex_saml, :cache)
+  defp assertion_cache, do: Application.get_env(:ex_saml, :cache)
 
   defp cache_key(key), do: {__MODULE__, key}
 end

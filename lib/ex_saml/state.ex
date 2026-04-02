@@ -41,7 +41,7 @@ defmodule ExSaml.State do
   end
 
   @doc "Generates a cryptographically random URL-safe identifier."
-  def gen_id() do
+  def gen_id do
     24 |> :crypto.strong_rand_bytes() |> Base.url_encode64()
   end
 end

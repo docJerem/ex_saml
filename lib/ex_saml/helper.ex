@@ -73,7 +73,6 @@ defmodule ExSaml.Helper do
       {:ok, Assertion.from_rec(assertion_rec)}
     else
       {:error, reason} -> {:error, reason}
-      error -> {:error, {:invalid_request, "#{inspect(error)}"}}
     end
   end
 
@@ -109,11 +108,9 @@ defmodule ExSaml.Helper do
   end
 
   defp decode_saml_payload(saml_encoding, saml_payload) do
-    try do
-      xml = :esaml_binding.decode_response(saml_encoding, saml_payload)
-      {:ok, xml}
-    rescue
-      error -> {:error, {:invalid_response, "#{inspect(error)}"}}
-    end
+    xml = :esaml_binding.decode_response(saml_encoding, saml_payload)
+    {:ok, xml}
+  rescue
+    error -> {:error, {:invalid_response, "#{inspect(error)}"}}
   end
 end

@@ -92,21 +92,19 @@ defmodule ExSaml.SpData do
   end
 
   defp load_cert(%SpData{certfile: certfile} = sp_data, %{} = opts_map) do
-    try do
-      cert =
-        if sp_data.cert !== :undefined,
-          do: sp_data.cert,
-          else: :esaml_util.load_certificate(certfile)
+    cert =
+      if sp_data.cert !== :undefined,
+        do: sp_data.cert,
+        else: :esaml_util.load_certificate(certfile)
 
-      %SpData{sp_data | cert: cert}
-    rescue
-      _error ->
-        Logger.error(
-          "[ExSaml] Failed load SP certfile [#{inspect(certfile)}]: #{inspect(opts_map)}"
-        )
+    %SpData{sp_data | cert: cert}
+  rescue
+    _error ->
+      Logger.error(
+        "[ExSaml] Failed load SP certfile [#{inspect(certfile)}]: #{inspect(opts_map)}"
+      )
 
-        %SpData{sp_data | valid?: false}
-    end
+      %SpData{sp_data | valid?: false}
   end
 
   @spec load_key(%SpData{}, map()) :: %SpData{}
@@ -119,16 +117,12 @@ defmodule ExSaml.SpData do
   end
 
   defp load_key(%SpData{keyfile: keyfile} = sp_data, %{} = opts_map) do
-    try do
-      key = :esaml_util.load_private_key(keyfile)
-      %SpData{sp_data | key: key}
-    rescue
-      _error ->
-        Logger.error(
-          "[ExSaml] Failed load SP keyfile [#{inspect(keyfile)}]: #{inspect(opts_map)}"
-        )
+    key = :esaml_util.load_private_key(keyfile)
+    %SpData{sp_data | key: key}
+  rescue
+    _error ->
+      Logger.error("[ExSaml] Failed load SP keyfile [#{inspect(keyfile)}]: #{inspect(opts_map)}")
 
-        %SpData{sp_data | key: :undefined, valid?: false}
-    end
+      %SpData{sp_data | key: :undefined, valid?: false}
   end
 end
