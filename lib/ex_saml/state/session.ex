@@ -17,8 +17,8 @@ defmodule ExSaml.State.Session do
         opts: [key: :my_assertion]
   """
 
-  alias Plug.Conn
   alias ExSaml.Assertion
+  alias Plug.Conn
 
   @behaviour ExSaml.State.Store
 

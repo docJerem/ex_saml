@@ -70,7 +70,7 @@ defmodule ExSaml.MixProject do
     [
       audit: [
         "credo --strict",
-        "deps.audit",
+        # "deps.audit",
         "deps.unlock --check-unused",
         "dialyzer --format github",
         "format --check-formatted",

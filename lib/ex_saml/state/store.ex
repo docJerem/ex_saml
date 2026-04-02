@@ -2,8 +2,8 @@ defmodule ExSaml.State.Store do
   @moduledoc """
   Specification for ExSaml state stores.
   """
-  alias Plug.Conn
   alias ExSaml.Assertion
+  alias Plug.Conn
 
   @typedoc """
   Options passed during the store initialization.

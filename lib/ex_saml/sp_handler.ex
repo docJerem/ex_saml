@@ -21,8 +21,8 @@ defmodule ExSaml.SPHandler do
     Esaml,
     Helper,
     IdpData,
-    State,
     RelayStateCache,
+    State,
     Subject
   }
 
@@ -90,18 +90,15 @@ defmodule ExSaml.SPHandler do
 
   # IDP-initiated flow auth response
   defp validate_authresp(_conn, idp_data, %{subject: %{in_response_to: ""}}, relay_state) do
-    if idp_data.allow_idp_initiated_flow do
-      if idp_data.allowed_target_urls do
-        if relay_state in idp_data.allowed_target_urls do
-          :ok
-        else
-          {:error, :invalid_target_url}
-        end
-      else
+    cond do
+      !idp_data.allow_idp_initiated_flow ->
+        {:error, :idp_first_flow_not_allowed}
+
+      idp_data.allowed_target_urls && relay_state not in idp_data.allowed_target_urls ->
+        {:error, :invalid_target_url}
+
+      true ->
         :ok
-      end
-    else
-      {:error, :idp_first_flow_not_allowed}
     end
   end
 
@@ -173,26 +170,32 @@ defmodule ExSaml.SPHandler do
     rls = conn.body_params["RelayState"]
     relay_state = safe_decode_www_form(rls)
 
-    with {:ok, payload} <- Helper.decode_idp_signout_req(sp, saml_encoding, saml_request) do
-      Esaml.esaml_logoutreq(name: nameid, issuer: _issuer) = payload
-      assertion_key = {idp_id, nameid}
+    case Helper.decode_idp_signout_req(sp, saml_encoding, saml_request) do
+      {:ok, payload} ->
+        Esaml.esaml_logoutreq(name: nameid, issuer: _issuer) = payload
+        assertion_key = {idp_id, nameid}
 
-      {conn, return_status} =
-        case State.get_assertion(conn, assertion_key) do
-          %Assertion{idp_id: ^idp_id, subject: %Subject{name: ^nameid}} ->
-            conn = State.delete_assertion(conn, assertion_key)
-            {conn, :success}
+        {conn, return_status} =
+          case State.get_assertion(conn, assertion_key) do
+            %Assertion{idp_id: ^idp_id, subject: %Subject{name: ^nameid}} ->
+              conn = State.delete_assertion(conn, assertion_key)
+              {conn, :success}
 
-          _ ->
-            {conn, :denied}
-        end
+            _ ->
+              {conn, :denied}
+          end
 
-      {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_rec, return_status)
+        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_rec, return_status)
 
-      conn
-      |> configure_session(drop: true)
-      |> send_saml_request(idp_signout_url, idp.use_redirect_for_req, resp_xml_frag, relay_state)
-    else
+        conn
+        |> configure_session(drop: true)
+        |> send_saml_request(
+          idp_signout_url,
+          idp.use_redirect_for_req,
+          resp_xml_frag,
+          relay_state
+        )
+
       error ->
         Logger.error("#{inspect(error)}")
         {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_rec, :denied)

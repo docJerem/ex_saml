@@ -11,7 +11,7 @@ defmodule ExSaml.AuthHandler do
 
   require Logger
   import Plug.Conn
-  alias ExSaml.{Assertion, IdpData, Helper, State, RelayStateCache, Subject}
+  alias ExSaml.{Assertion, Helper, IdpData, RelayStateCache, State, Subject}
 
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 6, redirect: 3]
 
@@ -40,7 +40,6 @@ defmodule ExSaml.AuthHandler do
       %{
         relay_state: relay_state,
         session_id: session_id,
-        # TODO: Audit the nonce
         saml_nonce:
           fetch_cookies(conn, encrypted: ~w(saml_nonce)).cookies["saml_nonce"] || UUID.uuid4(),
         idp_id: idp_id,
@@ -59,9 +58,6 @@ defmodule ExSaml.AuthHandler do
     # NOTE: conflict with the current Gateway User session ?
     # # if yes then we need to add an option to put back the user token session
     |> configure_session(renew: true)
-
-    # TODO: The following session elements has currently no TTL
-    # NOTE: We need to audit
     |> put_session("relay_state", relay_state)
     |> put_session("idp_id", idp_id)
     # |> put_session("target_url", target_url)

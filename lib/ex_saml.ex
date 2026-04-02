@@ -6,8 +6,8 @@ defmodule ExSaml do
   from the current Plug session.
   """
 
-  alias Plug.Conn
   alias ExSaml.{Assertion, State}
+  alias Plug.Conn
 
   @doc """
   Returns authenticated user SAML Assertion.

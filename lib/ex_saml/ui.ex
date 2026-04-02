@@ -1,7 +1,5 @@
 defmodule ExSaml.UI do
-  @moduledoc """
-
-  """
+  @moduledoc false
   def value(:entity_id, %{saml_service_provider_id: entity_id, sp_id: nil}),
     do: entity_id
 
