@@ -29,6 +29,7 @@ defmodule ExSaml.SPHandler do
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
 
   @doc "Returns the SP metadata XML for the IdP in `conn.private[:ex_saml_idp]`."
+  # metadata is generated from SP config by Helper.sp_metadata/1, not from user input.
   # sobelow_skip ["XSS.SendResp"]
   def send_metadata(conn) do
     %IdpData{} = idp = conn.private[:ex_saml_idp]
@@ -129,6 +130,7 @@ defmodule ExSaml.SPHandler do
   end
 
   @doc "Processes the IdP logout response and redirects to the target URL."
+  # Error details are logged server-side only; the response body is a static string, not user input.
   # sobelow_skip ["XSS.SendResp"]
   def handle_logout_response(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
@@ -149,7 +151,9 @@ defmodule ExSaml.SPHandler do
       |> configure_session(drop: true)
       |> redirect(302, target_url)
     else
-      error -> conn |> send_resp(403, "invalid_request #{inspect(error)}")
+      error ->
+        Logger.error("[ExSaml] Logout response validation failed: #{inspect(error)}")
+        conn |> send_resp(403, "invalid_request")
     end
 
     # rescue

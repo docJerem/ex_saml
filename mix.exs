@@ -6,6 +6,7 @@ defmodule ExSaml.MixProject do
 
   def project do
     [
+      aliases: aliases(),
       app: :ex_saml,
       deps: deps(),
       description: description(),
@@ -65,6 +66,23 @@ defmodule ExSaml.MixProject do
     ]
   end
 
+  defp aliases do
+    [
+      audit: [
+        "credo --strict",
+        "deps.audit",
+        "deps.unlock --check-unused",
+        "dialyzer --format github",
+        "format --check-formatted",
+        "sobelow --config --skip",
+        # Hex does not work in alias
+        # so "hex.audit" become:
+        &run_hex_audit/1,
+        &run_hex_outdated/1
+      ]
+    ]
+  end
+
   defp preferred_cli_env do
     [
       coveralls: :test,
@@ -74,4 +92,8 @@ defmodule ExSaml.MixProject do
       "coveralls.cobertura": :test
     ]
   end
+
+  defp run_hex_audit(_), do: Mix.shell().cmd("mix hex.audit")
+
+  defp run_hex_outdated(_), do: Mix.shell().cmd("mix hex.outdated --within-requirements")
 end

@@ -136,6 +136,8 @@ defmodule ExSaml.IdpData do
   defp load_metadata(idp_data = %IdpData{metadata: metadata}) when not is_nil(metadata),
     do: from_xml(metadata, idp_data)
 
+  # metadata_file comes from application config set by the developer, not from user input.
+  # sobelow_skip ["Traversal.FileModule"]
   defp load_metadata(idp_data = %IdpData{metadata_file: metadata_file})
        when not is_nil(metadata_file) do
     case File.read(idp_data.metadata_file) do
