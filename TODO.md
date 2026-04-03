@@ -2,38 +2,11 @@
 
 ## Cache Layer
 
-### 1. Add `take/1` to `AssertionCache`
+### Done
 
-**File:** `lib/ex_saml/caches/assertion_cache.ex`
-
-Add a `take/1` function that atomically gets and deletes the entry (get + delete).
-This is used by `saml_web` to consume assertions once (anti-replay).
-
-```elixir
-def take(key) do
-  cache = assertion_cache()
-  ck = cache_key(key)
-  value = cache.get(ck)
-  if value, do: cache.delete(ck)
-  value
-end
-```
-
-### 2. Create `AuthorizationCodeCache` module
-
-**File:** `lib/ex_saml/caches/authorization_code_cache.ex` (new)
-
-Same delegate pattern as `AssertionCache` and `RelayStateCache`. Needs:
-
-- `ttl/0` — returns `:timer.seconds(30)`
-- `get/1` — retrieve code data
-- `put/3` — store code with TTL
-- `take/1` — get + delete (consume the code)
-- `put_new!/2` — store only if key doesn't exist (prevent code reuse)
-
-### 3. `RelayStateCache.take/1`
-
-Already has `take/1` — no action needed.
+- [x] Add `take/1` to `AssertionCache` — delegates to cache backend's `take/1`
+- [x] Create `AuthorizationCodeCache` module with `ttl/0`, `get/1`, `put/1-2`, `take/1`, `put_new!/2`
+- [x] `RelayStateCache.take/1` — already existed
 
 ---
 
