@@ -289,7 +289,14 @@ defmodule ExSaml.Core.Xml.Dsig do
   or `:any` to accept any valid certificate.
   """
   @spec verify(record(:xmlElement), [fingerprint()] | :any) ::
-          :ok | {:error, :bad_digest | :bad_signature | :cert_not_accepted | :no_signature | :multiple_signatures}
+          :ok
+          | {:error,
+             :bad_digest
+             | :bad_signature
+             | :cert_not_accepted
+             | :no_signature
+             | :multiple_signatures
+             | :insecure_algorithm}
   def verify(element, fingerprints) do
     ds_ns = [
       {~c"ds", :"http://www.w3.org/2000/09/xmldsig#"},
@@ -305,8 +312,22 @@ defmodule ExSaml.Core.Xml.Dsig do
         {:error, :no_signature}
 
       [algo_attr] when Record.is_record(algo_attr, :xmlAttribute) ->
-        {hash_function, _, _} = signature_props(xmlAttribute(algo_attr, :value))
-        do_verify(element, fingerprints, hash_function, ds_ns)
+        algo = xmlAttribute(algo_attr, :value)
+
+        case signature_props(algo) do
+          {:sha, _, _} ->
+            require Logger
+
+            Logger.error(
+              "[ExSaml.Core] RSA-SHA1 signature rejected: algorithm is cryptographically broken. " <>
+                "The IdP must be configured to use RSA-SHA256 or stronger."
+            )
+
+            {:error, :insecure_algorithm}
+
+          {hash_function, _, _} ->
+            do_verify(element, fingerprints, hash_function, ds_ns)
+        end
 
       _ ->
         {:error, :multiple_signatures}

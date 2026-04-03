@@ -126,9 +126,17 @@ defmodule ExSaml.Core.Xml.DsigTest do
   end
 
   describe "verify/1" do
-    test "valid SHA1 signature" do
+    test "SHA1 signature is rejected as insecure" do
+      import ExUnit.CaptureLog
+
       doc = parse_xml(@sha1_signed_xml)
-      assert :ok = Dsig.verify(doc)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :insecure_algorithm} = Dsig.verify(doc)
+        end)
+
+      assert log =~ "RSA-SHA1 signature rejected"
     end
 
     test "valid SHA256 signature" do
@@ -141,34 +149,55 @@ defmodule ExSaml.Core.Xml.DsigTest do
   end
 
   describe "verify/2" do
-    test "with matching fingerprint" do
+    test "SHA1 with matching fingerprint is still rejected" do
+      import ExUnit.CaptureLog
+
       doc = parse_xml(@sha1_signed_xml)
 
       fingerprint =
         <<198, 86, 10, 182, 119, 241, 20, 3, 198, 88, 35, 42, 145, 76, 251, 113, 52, 21, 246,
           156>>
 
-      assert :ok = Dsig.verify(doc, [fingerprint])
+      capture_log(fn ->
+        assert {:error, :insecure_algorithm} = Dsig.verify(doc, [fingerprint])
+      end)
     end
 
-    test "unknown cert returns {:error, :cert_not_accepted}" do
+    test "SHA1 unknown cert returns {:error, :insecure_algorithm} before cert check" do
+      import ExUnit.CaptureLog
+
       doc = parse_xml(@sha1_signed_xml)
-      assert {:error, :cert_not_accepted} = Dsig.verify(doc, [<<198>>])
+
+      capture_log(fn ->
+        assert {:error, :insecure_algorithm} = Dsig.verify(doc, [<<198>>])
+      end)
     end
 
-    test "bad digest returns {:error, :bad_digest}" do
+    test "SHA1 bad digest returns {:error, :insecure_algorithm} before digest check" do
+      import ExUnit.CaptureLog
+
       doc = parse_xml(@bad_digest_xml)
-      assert {:error, :bad_digest} = Dsig.verify(doc)
+
+      capture_log(fn ->
+        assert {:error, :insecure_algorithm} = Dsig.verify(doc)
+      end)
     end
 
-    test "bad signature returns {:error, :bad_signature}" do
+    test "SHA1 bad signature returns {:error, :insecure_algorithm} before signature check" do
+      import ExUnit.CaptureLog
+
       doc = parse_xml(@bad_signature_xml)
-      assert {:error, :bad_signature} = Dsig.verify(doc)
+
+      capture_log(fn ->
+        assert {:error, :insecure_algorithm} = Dsig.verify(doc)
+      end)
     end
   end
 
   describe "sign and verify roundtrip" do
-    test "sign with SHA1 key and verify" do
+    test "sign with SHA1 key is rejected on verify" do
+      import ExUnit.CaptureLog
+
       doc =
         parse_xml(
           ~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|
@@ -179,7 +208,9 @@ defmodule ExSaml.Core.Xml.DsigTest do
       signed_xml =
         Dsig.sign(doc, key, cert_bin, "http://www.w3.org/2000/09/xmldsig#rsa-sha1")
 
-      assert :ok = Dsig.verify(signed_xml, [:crypto.hash(:sha, cert_bin)])
+      capture_log(fn ->
+        assert {:error, :insecure_algorithm} = Dsig.verify(signed_xml, [:crypto.hash(:sha, cert_bin)])
+      end)
     end
 
     test "sign with SHA256 key and verify" do
