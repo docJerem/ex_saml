@@ -1,5 +1,6 @@
 defmodule ExSamlSpDataTest do
   use ExUnit.Case
+  import ExUnit.CaptureLog
   alias ExSaml.SpData
 
   @sp_config1 %{
@@ -28,26 +29,50 @@ defmodule ExSamlSpDataTest do
 
   test "invalid-sp-config-1" do
     sp_config = %{@sp_config1 | id: ""}
-    %SpData{} = sp_data = SpData.load_provider(sp_config)
-    refute sp_data.valid?
+
+    log =
+      capture_log(fn ->
+        %SpData{} = sp_data = SpData.load_provider(sp_config)
+        refute sp_data.valid?
+      end)
+
+    assert log =~ "Invalid SP Config"
   end
 
   test "invalid-sp-config-2" do
     sp_config = %{@sp_config1 | certfile: "non-existent.crt"}
-    %SpData{} = sp_data = SpData.load_provider(sp_config)
-    refute sp_data.valid?
+
+    log =
+      capture_log(fn ->
+        %SpData{} = sp_data = SpData.load_provider(sp_config)
+        refute sp_data.valid?
+      end)
+
+    assert log =~ "Failed load SP certfile"
   end
 
   test "invalid-sp-config-3" do
     sp_config = %{@sp_config1 | keyfile: "non-existent.pem"}
-    %SpData{} = sp_data = SpData.load_provider(sp_config)
-    refute sp_data.valid?
+
+    log =
+      capture_log(fn ->
+        %SpData{} = sp_data = SpData.load_provider(sp_config)
+        refute sp_data.valid?
+      end)
+
+    assert log =~ "Failed load SP keyfile"
   end
 
   test "invalid-sp-config-4" do
     sp_config = %{@sp_config1 | certfile: "test/data/test.pem"}
-    %SpData{} = sp_data = SpData.load_provider(sp_config)
-    refute sp_data.valid?
+
+    log =
+      capture_log(fn ->
+        %SpData{} = sp_data = SpData.load_provider(sp_config)
+        refute sp_data.valid?
+      end)
+
+    assert log =~ "Failed load SP certfile"
   end
 
   @tag :skip

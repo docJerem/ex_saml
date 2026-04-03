@@ -1,5 +1,6 @@
 defmodule ExSamlIdpDataTest do
   use ExUnit.Case
+  import ExUnit.CaptureLog
   alias ExSaml.{IdpData, SpData}
 
   @sp_config1 %{
@@ -146,8 +147,14 @@ defmodule ExSamlIdpDataTest do
 
   test "valid-idp-config-11", %{sps: sps} do
     idp_config = %{@idp_config1 | metadata_file: "test/data/testshib_metadata.xml"}
-    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-    assert idp_data.valid?
+
+    log =
+      capture_log(fn ->
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        assert idp_data.valid?
+      end)
+
+    assert log =~ "SLO Endpoint missing"
   end
 
   test "url-test-1", %{sps: sps} do
@@ -195,8 +202,14 @@ defmodule ExSamlIdpDataTest do
 
   test "invalid-idp-config-2", %{sps: sps} do
     idp_config = %{@idp_config1 | sp_id: "unknown-sp"}
-    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-    refute idp_data.valid?
+
+    log =
+      capture_log(fn ->
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        refute idp_data.valid?
+      end)
+
+    assert log =~ "Unknown/invalid sp_id"
   end
 
   test "valid-idp-config-signing-turned-off", %{sps: sps} do
@@ -221,8 +234,13 @@ defmodule ExSamlIdpDataTest do
         sign_metadata: false
       })
 
-    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-    refute idp_data.valid?
+    log =
+      capture_log(fn ->
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        refute idp_data.valid?
+      end)
+
+    assert log =~ "SP cert or key missing"
   end
 
   test "invalid-idp-config-signing-on-key-missing", %{sps: sps} do
@@ -234,8 +252,13 @@ defmodule ExSamlIdpDataTest do
         sign_metadata: false
       })
 
-    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-    refute idp_data.valid?
+    log =
+      capture_log(fn ->
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        refute idp_data.valid?
+      end)
+
+    assert log =~ "SP cert or key missing"
   end
 
   test "nameid-format-in-metadata-but-not-config-should-use-metadata", %{sps: sps} do
