@@ -1,8 +1,97 @@
 # TODO
 
-Items removed from code during the Credo audit cleanup.
+## Cache Layer
 
-## Audit the SAML nonce (`auth_handler.ex`)
+### 1. Add `take/1` to `AssertionCache`
+
+**File:** `lib/ex_saml/caches/assertion_cache.ex`
+
+Add a `take/1` function that atomically gets and deletes the entry (get + delete).
+This is used by `saml_web` to consume assertions once (anti-replay).
+
+```elixir
+def take(key) do
+  cache = assertion_cache()
+  ck = cache_key(key)
+  value = cache.get(ck)
+  if value, do: cache.delete(ck)
+  value
+end
+```
+
+### 2. Create `AuthorizationCodeCache` module
+
+**File:** `lib/ex_saml/caches/authorization_code_cache.ex` (new)
+
+Same delegate pattern as `AssertionCache` and `RelayStateCache`. Needs:
+
+- `ttl/0` — returns `:timer.seconds(30)`
+- `get/1` — retrieve code data
+- `put/3` — store code with TTL
+- `take/1` — get + delete (consume the code)
+- `put_new!/2` — store only if key doesn't exist (prevent code reuse)
+
+### 3. `RelayStateCache.take/1`
+
+Already has `take/1` — no action needed.
+
+---
+
+## Security Fixes (from SECURITY_REVIEW.md)
+
+### P0 — Critical
+
+- [ ] **XXE (CVE-2026-28809):** Add `allow_entities: false` to all `:xmerl_scan.string/2` calls
+  - `lib/ex_saml/core/binding.ex:44` — decode_response DEFLATE path
+  - `lib/ex_saml/core/binding.ex:60` — decode_response fallback path
+  - `lib/ex_saml/core/sp.ex:518` — decrypt_assertion
+
+- [ ] **XSW (Signature Wrapping):** Reject responses containing multiple assertions. Verify
+  that the extracted assertion element matches the signed element by ID.
+  - `lib/ex_saml/core/sp.ex` — `extract_assertion/3`
+
+- [ ] **NotBefore validation:** Add time lower bound check in assertion validation.
+  Current code only checks NotOnOrAfter (upper bound).
+  - `lib/ex_saml/core/saml.ex` — add `validate_not_before/1`
+
+### P1 — High
+
+- [ ] **Optional signatures warning:** Log a warning when `idp_signs_envelopes` or
+  `idp_signs_assertions` is set to `false`. Consider requiring at least one.
+  - `lib/ex_saml/core/sp.ex` — `verify_envelope_signature/2`, `verify_assertion_signature/2`
+
+- [ ] **Certificate validation:** Require fingerprint validation (never use `:any` in
+  production). Add certificate expiry check.
+  - `lib/ex_saml/core/xml/dsig.ex` — `check_fingerprints/2`
+
+- [ ] **Algorithm whitelist:** Return `{:error, :unsupported_algorithm}` for unknown
+  signature algorithms instead of crashing.
+  - `lib/ex_saml/core/xml/dsig.ex` — `verify/2`
+
+- [ ] **Replay detection:** Use `check_dupe_ets/2` as the default duplicate detection
+  function instead of a no-op.
+  - `lib/ex_saml/core/sp.ex` — `validate_assertion/2`
+
+### P2 — Medium / Low
+
+- [ ] **Comment injection:** Strip XML comments and normalize whitespace in extracted
+  NameID and attribute values.
+  - `lib/ex_saml/core/saml.ex` — `decode_assertion_subject/1`
+
+- [ ] **PKCS#7 padding:** Implement proper PKCS#7 padding validation instead of dropping
+  all trailing bytes < 16.
+  - `lib/ex_saml/core/sp.ex` — `strip_pkcs7_padding/1`
+
+### Done
+
+- [x] **SHA-1 rejection:** RSA-SHA1 signatures are now rejected on verification with
+  `{:error, :insecure_algorithm}` and an error log.
+
+---
+
+## Previous Audit Items
+
+### Audit the SAML nonce (`auth_handler.ex`)
 
 **Previous location:** `ExSaml.AuthHandler.request_idp/2` (line ~43)
 
@@ -17,7 +106,7 @@ and later retrieved during `validate_authresp` in `SPHandler`.
 - Ensure the `UUID.uuid4()` fallback is acceptable — it is random but not
   cryptographically tied to the session.
 
-## Session elements have no TTL (`auth_handler.ex`)
+### Session elements have no TTL (`auth_handler.ex`)
 
 **Previous location:** `ExSaml.AuthHandler.request_idp/2` (line ~63)
 
