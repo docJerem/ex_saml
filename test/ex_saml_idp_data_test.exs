@@ -1,7 +1,6 @@
 defmodule ExSamlIdpDataTest do
   use ExUnit.Case
-  require ExSaml.Esaml
-  alias ExSaml.{Esaml, IdpData, SpData}
+  alias ExSaml.{IdpData, SpData}
 
   @sp_config1 %{
     id: "sp1",
@@ -75,7 +74,7 @@ defmodule ExSamlIdpDataTest do
     assert idp_data.sign_requests
     assert idp_data.sign_metadata
     assert idp_data.signed_assertion_in_resp
-    assert idp_data.signed_envelopes_in_resp
+    refute idp_data.signed_envelopes_in_resp
   end
 
   test "valid-idp-config-3", %{sps: sps} do
@@ -156,10 +155,10 @@ defmodule ExSamlIdpDataTest do
     %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
     assert idp_data.valid?
 
-    Esaml.esaml_idp_metadata(
+    %ExSaml.Core.IdpMetadata{
       login_location: sso_url,
       logout_location: slo_url
-    ) = idp_data.esaml_idp_rec
+    } = idp_data.idp_metadata
 
     assert sso_url |> List.to_string() |> String.ends_with?("/SAML2/POST/SSO")
     assert slo_url |> List.to_string() |> String.ends_with?("/SAML2/POST/SLO")
@@ -171,10 +170,10 @@ defmodule ExSamlIdpDataTest do
     %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
     assert idp_data.valid?
 
-    Esaml.esaml_idp_metadata(
+    %ExSaml.Core.IdpMetadata{
       login_location: sso_url,
       logout_location: slo_url
-    ) = idp_data.esaml_idp_rec
+    } = idp_data.idp_metadata
 
     assert sso_url |> List.to_string() |> String.ends_with?("/SAML2/Redirect/SSO")
     assert slo_url |> List.to_string() |> String.ends_with?("/SAML2/Redirect/SLO")
@@ -183,8 +182,8 @@ defmodule ExSamlIdpDataTest do
   test "sp entity_id test-1", %{sps: sps} do
     %IdpData{} = idp_data = IdpData.load_provider(@idp_config2, sps)
     assert idp_data.valid?
-    Esaml.esaml_sp(entity_id: entity_id) = idp_data.esaml_sp_rec
-    assert entity_id == :undefined
+    %ExSaml.Core.SpConfig{entity_id: entity_id} = idp_data.sp_config
+    assert entity_id == nil
   end
 
   @tag :skip

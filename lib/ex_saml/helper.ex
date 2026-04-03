@@ -1,8 +1,8 @@
 defmodule ExSaml.Helper do
   @moduledoc false
 
-  require ExSaml.Esaml
-  alias ExSaml.{Assertion, Esaml, IdpData}
+  alias ExSaml.{Assertion, IdpData}
+  alias ExSaml.Core
 
   @spec get_idp(binary) :: nil | IdpData.t()
   def get_idp(idp_id) do
@@ -44,33 +44,33 @@ defmodule ExSaml.Helper do
   end
 
   def sp_metadata(sp) do
-    :xmerl.export([:esaml_sp.generate_metadata(sp)], :xmerl_xml)
+    :xmerl.export([Core.Sp.generate_metadata(sp)], :xmerl_xml)
   end
 
   def gen_idp_signin_req(sp, idp_metadata, nameid_format) do
-    idp_signin_url = Esaml.esaml_idp_metadata(idp_metadata, :login_location)
+    idp_signin_url = idp_metadata.login_location
 
-    xml_frag = :esaml_sp.generate_authn_request(idp_signin_url, sp, nameid_format)
+    xml_frag = Core.Sp.generate_authn_request(idp_signin_url, sp, nameid_format)
 
     {idp_signin_url, xml_frag}
   end
 
-  def gen_idp_signout_req(sp, idp_metadata, subject_rec, session_index) do
-    idp_signout_url = Esaml.esaml_idp_metadata(idp_metadata, :logout_location)
-    xml_frag = :esaml_sp.generate_logout_request(idp_signout_url, session_index, subject_rec, sp)
+  def gen_idp_signout_req(sp, idp_metadata, subject, session_index) do
+    idp_signout_url = idp_metadata.logout_location
+    xml_frag = Core.Sp.generate_logout_request(idp_signout_url, session_index, subject, sp)
     {idp_signout_url, xml_frag}
   end
 
   def gen_idp_signout_resp(sp, idp_metadata, signout_status) do
-    idp_signout_url = Esaml.esaml_idp_metadata(idp_metadata, :logout_location)
-    xml_frag = :esaml_sp.generate_logout_response(idp_signout_url, signout_status, sp)
+    idp_signout_url = idp_metadata.logout_location
+    xml_frag = Core.Sp.generate_logout_response(idp_signout_url, signout_status, sp)
     {idp_signout_url, xml_frag}
   end
 
   def decode_idp_auth_resp(sp, saml_encoding, saml_response) do
     with {:ok, xml_frag} <- decode_saml_payload(saml_encoding, saml_response),
-         {:ok, assertion_rec} <- :esaml_sp.validate_assertion(xml_frag, sp) do
-      {:ok, Assertion.from_rec(assertion_rec)}
+         {:ok, core_assertion} <- Core.Sp.validate_assertion(xml_frag, sp) do
+      {:ok, Assertion.from_core(core_assertion)}
     else
       {:error, reason} -> {:error, reason}
     end
@@ -86,7 +86,7 @@ defmodule ExSaml.Helper do
     with {:ok, xml_frag} <- decode_saml_payload(saml_encoding, saml_response),
          nodes when is_list(nodes) and length(nodes) == 1 <-
            :xmerl_xpath.string(~c"/samlp:LogoutResponse", xml_frag, [{:namespace, resp_ns}]) do
-      :esaml_sp.validate_logout_response(xml_frag, sp)
+      Core.Sp.validate_logout_response(xml_frag, sp)
     else
       _ -> {:error, :invalid_request}
     end
@@ -101,14 +101,14 @@ defmodule ExSaml.Helper do
     with {:ok, xml_frag} <- decode_saml_payload(saml_encoding, saml_request),
          nodes when is_list(nodes) and length(nodes) == 1 <-
            :xmerl_xpath.string(~c"/samlp:LogoutRequest", xml_frag, [{:namespace, req_ns}]) do
-      :esaml_sp.validate_logout_request(xml_frag, sp)
+      Core.Sp.validate_logout_request(xml_frag, sp)
     else
       _ -> {:error, :invalid_request}
     end
   end
 
   defp decode_saml_payload(saml_encoding, saml_payload) do
-    xml = :esaml_binding.decode_response(saml_encoding, saml_payload)
+    xml = Core.Binding.decode_response(saml_encoding, saml_payload)
     {:ok, xml}
   rescue
     error -> {:error, {:invalid_response, "#{inspect(error)}"}}

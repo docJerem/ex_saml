@@ -8,8 +8,8 @@ defmodule ExSaml.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      # Starts a worker by calling: ExSaml.Worker.start_link(arg)
-      # {ExSaml.Worker, arg}
+      # Core ETS tables must be started before Provider
+      {ExSaml.Core.TableOwner, []},
       {ExSaml.Provider, []},
       {ExSaml.BoostrapProvidersLoader, []}
     ]

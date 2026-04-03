@@ -23,7 +23,7 @@ defmodule ExSaml.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :xmerl, :crypto, :public_key, :inets],
       mod: {ExSaml.Application, []}
     ]
   end
@@ -33,7 +33,6 @@ defmodule ExSaml.MixProject do
     [
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
-      {:esaml, "~> 4.6"},
       {:elixir_uuid, "~> 1.2"},
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false},

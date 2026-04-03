@@ -52,6 +52,12 @@ defmodule ExSaml.State.Session do
   end
 
   defp validate_assertion_expiry(
+         %Assertion{subject: %{notonorafter: ""}} = assertion
+       ) do
+    assertion
+  end
+
+  defp validate_assertion_expiry(
          %Assertion{subject: %{notonorafter: not_on_or_after}} = assertion
        ) do
     now = DateTime.utc_now()

@@ -13,12 +13,9 @@ defmodule ExSaml.SPHandler do
 
   require Logger
   import Plug.Conn
-  # alias Plug.Conn
-  require ExSaml.Esaml
 
   alias ExSaml.{
     Assertion,
-    Esaml,
     Helper,
     IdpData,
     RelayStateCache,
@@ -33,8 +30,8 @@ defmodule ExSaml.SPHandler do
   # sobelow_skip ["XSS.SendResp"]
   def send_metadata(conn) do
     %IdpData{} = idp = conn.private[:ex_saml_idp]
-    %IdpData{esaml_idp_rec: _idp_rec, esaml_sp_rec: sp_rec} = idp
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    %IdpData{sp_config: sp_cfg} = idp
+    sp = ensure_sp_uris_set(sp_cfg, conn)
     metadata = Helper.sp_metadata(sp)
 
     conn
@@ -53,8 +50,8 @@ defmodule ExSaml.SPHandler do
   Returns `{:ok, %{assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
   on success, or `{:error, reason}` on failure.
   """
-  def consume_signin_response(conn, %IdpData{id: idp_id, esaml_sp_rec: sp_rec} = idp_data) do
-    sp = ensure_sp_uris_set(sp_rec, conn)
+  def consume_signin_response(conn, %IdpData{id: idp_id, sp_config: sp_cfg} = idp_data) do
+    sp = ensure_sp_uris_set(sp_cfg, conn)
 
     saml_encoding = conn.body_params["SAMLEncoding"]
     saml_response = conn.body_params["SAMLResponse"]
@@ -131,8 +128,8 @@ defmodule ExSaml.SPHandler do
   # sobelow_skip ["XSS.SendResp"]
   def handle_logout_response(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
-    %IdpData{esaml_idp_rec: _idp_rec, esaml_sp_rec: sp_rec} = idp
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    %IdpData{sp_config: sp_cfg} = idp
+    sp = ensure_sp_uris_set(sp_cfg, conn)
 
     saml_encoding = conn.body_params["SAMLEncoding"]
     # Handle both POST and Redirect
@@ -162,8 +159,8 @@ defmodule ExSaml.SPHandler do
   @doc "Handles an IdP-initiated logout request."
   def handle_logout_request(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
-    %IdpData{esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} = idp
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    %IdpData{idp_metadata: idp_meta, sp_config: sp_cfg} = idp
+    sp = ensure_sp_uris_set(sp_cfg, conn)
 
     saml_encoding = conn.body_params["SAMLEncoding"]
     saml_request = conn.body_params["SAMLRequest"]
@@ -171,8 +168,7 @@ defmodule ExSaml.SPHandler do
     relay_state = safe_decode_www_form(rls)
 
     case Helper.decode_idp_signout_req(sp, saml_encoding, saml_request) do
-      {:ok, payload} ->
-        Esaml.esaml_logoutreq(name: nameid, issuer: _issuer) = payload
+      {:ok, %ExSaml.Core.LogoutRequest{name: nameid}} ->
         assertion_key = {idp_id, nameid}
 
         {conn, return_status} =
@@ -185,7 +181,7 @@ defmodule ExSaml.SPHandler do
               {conn, :denied}
           end
 
-        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_rec, return_status)
+        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_meta, return_status)
 
         conn
         |> configure_session(drop: true)
@@ -198,7 +194,7 @@ defmodule ExSaml.SPHandler do
 
       error ->
         Logger.error("#{inspect(error)}")
-        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_rec, :denied)
+        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_meta, :denied)
 
         conn
         |> send_saml_request(

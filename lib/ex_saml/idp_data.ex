@@ -3,8 +3,8 @@ defmodule ExSaml.IdpData do
 
   import SweetXml
   require Logger
-  require ExSaml.Esaml
-  alias ExSaml.{Esaml, Helper, IdpData, SpData}
+  alias ExSaml.{Helper, IdpData, SpData}
+  alias ExSaml.Core
 
   @type nameid_format :: :unknown | charlist()
   @type certs :: [binary()]
@@ -33,8 +33,8 @@ defmodule ExSaml.IdpData do
             slo_post_url: nil,
             nameid_format: :unknown,
             fingerprints: [],
-            esaml_idp_rec: Esaml.esaml_idp_metadata(),
-            esaml_sp_rec: Esaml.esaml_sp(),
+            idp_metadata: %Core.IdpMetadata{},
+            sp_config: %Core.SpConfig{},
             valid?: false
 
   @type t :: %__MODULE__{
@@ -60,8 +60,8 @@ defmodule ExSaml.IdpData do
           slo_post_url: url(),
           nameid_format: nameid_format(),
           fingerprints: [binary()],
-          esaml_idp_rec: :esaml_idp_metadata,
-          esaml_sp_rec: :esaml_sp,
+          idp_metadata: Core.IdpMetadata.t(),
+          sp_config: Core.SpConfig.t(),
           valid?: boolean()
         }
 
@@ -105,7 +105,7 @@ defmodule ExSaml.IdpData do
     |> save_idp_config(idp_config)
     |> load_metadata()
     |> override_nameid_format(idp_config)
-    |> update_esaml_recs(service_providers, idp_config)
+    |> update_core_configs(service_providers, idp_config)
     |> verify_slo_url()
   end
 
@@ -161,12 +161,12 @@ defmodule ExSaml.IdpData do
     idp_data
   end
 
-  @spec update_esaml_recs(%IdpData{}, %{required(id()) => %SpData{}}, map()) :: %IdpData{}
-  defp update_esaml_recs(idp_data, service_providers, opts_map) do
+  @spec update_core_configs(%IdpData{}, %{required(id()) => %SpData{}}, map()) :: %IdpData{}
+  defp update_core_configs(idp_data, service_providers, opts_map) do
     case Map.get(service_providers, idp_data.sp_id) do
       %SpData{} = sp ->
-        idp_data = %IdpData{idp_data | esaml_idp_rec: to_esaml_idp_metadata(idp_data, opts_map)}
-        idp_data = %IdpData{idp_data | esaml_sp_rec: get_esaml_sp(sp, idp_data)}
+        idp_data = %IdpData{idp_data | idp_metadata: build_idp_metadata(idp_data, opts_map)}
+        idp_data = %IdpData{idp_data | sp_config: build_sp_config(sp, idp_data)}
         %IdpData{idp_data | valid?: cert_config_ok?(idp_data, sp)}
 
       _ ->
@@ -306,18 +306,17 @@ defmodule ExSaml.IdpData do
     }
   end
 
-  # @spec to_esaml_idp_metadata(%IdpData{}, map()) :: :esaml_idp_metadata
-  defp to_esaml_idp_metadata(%IdpData{} = idp_data, %{} = idp_config) do
+  defp build_idp_metadata(%IdpData{} = idp_data, %{} = idp_config) do
     {sso_url, slo_url} = get_sso_slo_urls(idp_data, idp_config)
     sso_url = if is_binary(sso_url), do: String.to_charlist(sso_url), else: []
-    slo_url = if is_binary(slo_url), do: String.to_charlist(slo_url), else: :undefined
+    slo_url = if is_binary(slo_url), do: String.to_charlist(slo_url), else: nil
 
-    Esaml.esaml_idp_metadata(
+    %Core.IdpMetadata{
       entity_id: String.to_charlist(idp_data.entity_id),
       login_location: sso_url,
       logout_location: slo_url,
       name_format: idp_data.nameid_format
-    )
+    }
   end
 
   defp get_sso_slo_urls(%IdpData{} = idp_data, %{use_redirect_for_req: true} = opts) do
@@ -354,36 +353,33 @@ defmodule ExSaml.IdpData do
     |> Enum.map(&Base.decode64!/1)
     |> Enum.map(&cert_fingerprint/1)
     |> Enum.map(&String.to_charlist/1)
-    |> :esaml_util.convert_fingerprints()
+    |> Core.Util.convert_fingerprints()
   end
 
   defp cert_fingerprint(dercert) do
     "sha256:" <> (:sha256 |> :crypto.hash(dercert) |> Base.encode64())
   end
 
-  # @spec get_esaml_sp(%SpData{}, %IdpData{}) :: :esaml_sp
-  defp get_esaml_sp(%SpData{} = sp_data, %IdpData{} = idp_data) do
+  defp build_sp_config(%SpData{} = sp_data, %IdpData{} = idp_data) do
     idp_id_from = Application.get_env(:ex_saml, :idp_id_from)
     path_segment_idp_id = if idp_id_from == :subdomain, do: nil, else: idp_data.id
 
     sp_entity_id =
       case sp_data.entity_id do
-        "" -> :undefined
+        "" -> nil
         id -> String.to_charlist(id)
       end
 
-    Esaml.esaml_sp(
-      org:
-        Esaml.esaml_org(
-          name: String.to_charlist(sp_data.org_name),
-          displayname: String.to_charlist(sp_data.org_displayname),
-          url: String.to_charlist(sp_data.org_url)
-        ),
-      tech:
-        Esaml.esaml_contact(
-          name: String.to_charlist(sp_data.contact_name),
-          email: String.to_charlist(sp_data.contact_email)
-        ),
+    %Core.SpConfig{
+      org: %Core.Org{
+        name: String.to_charlist(sp_data.org_name),
+        displayname: String.to_charlist(sp_data.org_displayname),
+        url: String.to_charlist(sp_data.org_url)
+      },
+      tech: %Core.Contact{
+        name: String.to_charlist(sp_data.contact_name),
+        email: String.to_charlist(sp_data.contact_email)
+      },
       key: sp_data.key,
       certificate: sp_data.cert,
       sp_sign_requests: idp_data.sign_requests,
@@ -395,7 +391,7 @@ defmodule ExSaml.IdpData do
       consume_uri: Helper.get_consume_uri(idp_data.base_url, path_segment_idp_id),
       logout_uri: Helper.get_logout_uri(idp_data.base_url, path_segment_idp_id),
       entity_id: sp_entity_id
-    )
+    }
   end
 
   @spec get_entity_id(SweetXml.xmlElement()) :: binary()
