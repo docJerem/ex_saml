@@ -75,10 +75,15 @@ defmodule ExSamlSpDataTest do
     assert log =~ "Failed load SP certfile"
   end
 
-  @tag :skip
   test "invalid-sp-config-5" do
     sp_config = %{@sp_config1 | keyfile: "test/data/test.crt"}
-    %SpData{} = sp_data = SpData.load_provider(sp_config)
-    refute sp_data.valid?
+
+    log =
+      capture_log(fn ->
+        %SpData{} = sp_data = SpData.load_provider(sp_config)
+        refute sp_data.valid?
+      end)
+
+    assert log =~ "Failed load SP keyfile"
   end
 end

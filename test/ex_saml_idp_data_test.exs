@@ -193,11 +193,16 @@ defmodule ExSamlIdpDataTest do
     assert entity_id == nil
   end
 
-  @tag :skip
   test "invalid-idp-config-1", %{sps: sps} do
     idp_config = %{@idp_config1 | id: ""}
-    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-    refute idp_data.valid?
+
+    log =
+      capture_log(fn ->
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        refute idp_data.valid?
+      end)
+
+    assert log =~ "Invalid IdP Config"
   end
 
   test "invalid-idp-config-2", %{sps: sps} do

@@ -112,6 +112,12 @@ defmodule ExSaml.IdpData do
   def oasis_redirect_flow_uri, do: @deflate_saml_encoding
 
   @spec save_idp_config(%IdpData{}, map()) :: %IdpData{}
+  defp save_idp_config(idp_data, %{id: id} = _opts_map)
+       when id == "" do
+    Logger.error("[ExSaml] Invalid IdP Config: id must not be empty")
+    idp_data
+  end
+
   defp save_idp_config(idp_data, %{id: id, sp_id: sp_id} = opts_map)
        when is_binary(id) and is_binary(sp_id) do
     %IdpData{
