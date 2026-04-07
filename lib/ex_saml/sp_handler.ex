@@ -39,10 +39,18 @@ defmodule ExSaml.SPHandler do
     |> put_resp_header("content-type", "text/xml")
     |> send_resp(200, metadata)
 
+    # NOTE: We should avoid this, as you can not decorate the
+    # behaviour.
     # rescue
     #   error ->
     #     Logger.error("#{inspect error}")
     #     conn |> send_resp(500, "request_failed")
+
+    # PROPOSAL:
+    # rescue
+    #   error ->
+    #     Logger.error("#{inspect error}")
+    #     {:error, saml: :request_metadata_failed}
   end
 
   @doc """
