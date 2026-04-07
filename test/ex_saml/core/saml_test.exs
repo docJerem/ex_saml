@@ -40,10 +40,11 @@ defmodule ExSaml.Core.SamlTest do
   describe "decode_response/1" do
     @tag :decode
     test "parses a basic SAML Response with Version, IssueInstant, and Destination" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z" ) <>
-            ~s(Destination="foo"></samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z" ) <>
+          ~s(Destination="foo"></samlp:Response>)
 
       doc = parse_xml(xml)
       assert {:ok, %Response{} = resp} = Saml.decode_response(doc)
@@ -54,9 +55,10 @@ defmodule ExSaml.Core.SamlTest do
 
     @tag :decode
     test "returns error when Version attribute is missing" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(IssueInstant="2013-01-01T01:01:01Z" Destination="foo"></samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(IssueInstant="2013-01-01T01:01:01Z" Destination="foo"></samlp:Response>)
 
       doc = parse_xml(xml)
       assert {:error, :bad_version} = Saml.decode_response(doc)
@@ -64,9 +66,10 @@ defmodule ExSaml.Core.SamlTest do
 
     @tag :decode
     test "returns error when IssueInstant attribute is missing" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" Destination="foo"></samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" Destination="foo"></samlp:Response>)
 
       doc = parse_xml(xml)
       assert {:error, :bad_response} = Saml.decode_response(doc)
@@ -74,9 +77,10 @@ defmodule ExSaml.Core.SamlTest do
 
     @tag :decode
     test "Destination is optional" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z"></samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z"></samlp:Response>)
 
       doc = parse_xml(xml)
       assert {:ok, %Response{} = resp} = Saml.decode_response(doc)
@@ -86,12 +90,13 @@ defmodule ExSaml.Core.SamlTest do
 
     @tag :decode
     test "parses status code and issuer" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
-            ~s(<saml:Issuer>foo</saml:Issuer>) <>
-            ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
-            ~s(</samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
+          ~s(<saml:Issuer>foo</saml:Issuer>) <>
+          ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
+          ~s(</samlp:Response>)
 
       doc = parse_xml(xml)
       assert {:ok, %Response{} = resp} = Saml.decode_response(doc)
@@ -108,21 +113,22 @@ defmodule ExSaml.Core.SamlTest do
   describe "decode_assertion/1" do
     @tag :decode
     test "parses full assertion with subject and recipient" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
-            ~s(<saml:Issuer>foo</saml:Issuer>) <>
-            ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
-            ~s(<saml:Assertion Version="2.0" IssueInstant="test">) <>
-            ~s(<saml:Issuer>foo</saml:Issuer>) <>
-            ~s(<saml:Subject>) <>
-            ~s(<saml:NameID>foobar</saml:NameID>) <>
-            ~s(<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">) <>
-            ~s(<saml:SubjectConfirmationData Recipient="foobar123" />) <>
-            ~s(</saml:SubjectConfirmation>) <>
-            ~s(</saml:Subject>) <>
-            ~s(</saml:Assertion>) <>
-            ~s(</samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
+          ~s(<saml:Issuer>foo</saml:Issuer>) <>
+          ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
+          ~s(<saml:Assertion Version="2.0" IssueInstant="test">) <>
+          ~s(<saml:Issuer>foo</saml:Issuer>) <>
+          ~s(<saml:Subject>) <>
+          ~s(<saml:NameID>foobar</saml:NameID>) <>
+          ~s(<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">) <>
+          ~s(<saml:SubjectConfirmationData Recipient="foobar123" />) <>
+          ~s(</saml:SubjectConfirmation>) <>
+          ~s(</saml:Subject>) <>
+          ~s(</saml:Assertion>) <>
+          ~s(</samlp:Response>)
 
       doc = parse_xml(xml)
       assert {:ok, %Response{} = resp} = Saml.decode_response(doc)
@@ -142,19 +148,20 @@ defmodule ExSaml.Core.SamlTest do
 
     @tag :decode
     test "returns error when assertion has no Recipient" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
-            ~s(<saml:Issuer>foo</saml:Issuer>) <>
-            ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
-            ~s(<saml:Assertion Version="2.0" IssueInstant="test">) <>
-            ~s(<saml:Issuer>foo</saml:Issuer>) <>
-            ~s(<saml:Subject>) <>
-            ~s(<saml:NameID>foobar</saml:NameID>) <>
-            ~s(<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer" />) <>
-            ~s(</saml:Subject>) <>
-            ~s(</saml:Assertion>) <>
-            ~s(</samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
+          ~s(<saml:Issuer>foo</saml:Issuer>) <>
+          ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
+          ~s(<saml:Assertion Version="2.0" IssueInstant="test">) <>
+          ~s(<saml:Issuer>foo</saml:Issuer>) <>
+          ~s(<saml:Subject>) <>
+          ~s(<saml:NameID>foobar</saml:NameID>) <>
+          ~s(<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer" />) <>
+          ~s(</saml:Subject>) <>
+          ~s(</saml:Assertion>) <>
+          ~s(</samlp:Response>)
 
       doc = parse_xml(xml)
       assert {:error, :bad_recipient} = Saml.decode_response(doc)
@@ -162,13 +169,14 @@ defmodule ExSaml.Core.SamlTest do
 
     @tag :decode
     test "returns error when embedded assertion has no Version" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
-            ~s(<saml:Issuer>foo</saml:Issuer>) <>
-            ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
-            ~s(<saml:Assertion></saml:Assertion>) <>
-            ~s(</samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
+          ~s(<saml:Issuer>foo</saml:Issuer>) <>
+          ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
+          ~s(<saml:Assertion></saml:Assertion>) <>
+          ~s(</samlp:Response>)
 
       doc = parse_xml(xml)
       assert {:error, :bad_version} = Saml.decode_response(doc)
@@ -182,29 +190,32 @@ defmodule ExSaml.Core.SamlTest do
   describe "decode_conditions" do
     @tag :decode
     test "parses NotBefore, NotOnOrAfter, and Audience from Conditions element" do
-      xml = ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
-            ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
-            ~s(<saml:Issuer>foo</saml:Issuer>) <>
-            ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
-            ~s(<saml:Assertion Version="2.0" IssueInstant="test">) <>
-            ~s(<saml:Issuer>foo</saml:Issuer>) <>
-            ~s(<saml:Subject>) <>
-            ~s(<saml:NameID>foobar</saml:NameID>) <>
-            ~s(<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">) <>
-            ~s(<saml:SubjectConfirmationData Recipient="foobar123" />) <>
-            ~s(</saml:SubjectConfirmation>) <>
-            ~s(</saml:Subject>) <>
-            ~s(<saml:Conditions NotBefore="before" NotOnOrAfter="notafter">) <>
-            ~s(<saml:AudienceRestriction>) <>
-            ~s(<saml:Audience>foobaraudience</saml:Audience>) <>
-            ~s(</saml:AudienceRestriction>) <>
-            ~s(</saml:Conditions>) <>
-            ~s(</saml:Assertion>) <>
-            ~s(</samlp:Response>)
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" IssueInstant="2013-01-01T01:01:01Z">) <>
+          ~s(<saml:Issuer>foo</saml:Issuer>) <>
+          ~s(<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success" /></samlp:Status>) <>
+          ~s(<saml:Assertion Version="2.0" IssueInstant="test">) <>
+          ~s(<saml:Issuer>foo</saml:Issuer>) <>
+          ~s(<saml:Subject>) <>
+          ~s(<saml:NameID>foobar</saml:NameID>) <>
+          ~s(<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">) <>
+          ~s(<saml:SubjectConfirmationData Recipient="foobar123" />) <>
+          ~s(</saml:SubjectConfirmation>) <>
+          ~s(</saml:Subject>) <>
+          ~s(<saml:Conditions NotBefore="before" NotOnOrAfter="notafter">) <>
+          ~s(<saml:AudienceRestriction>) <>
+          ~s(<saml:Audience>foobaraudience</saml:Audience>) <>
+          ~s(</saml:AudienceRestriction>) <>
+          ~s(</saml:Conditions>) <>
+          ~s(</saml:Assertion>) <>
+          ~s(</samlp:Response>)
 
       doc = parse_xml(xml)
-      assert {:ok, %Response{assertion: %Assertion{conditions: conds}}} = Saml.decode_response(doc)
+
+      assert {:ok, %Response{assertion: %Assertion{conditions: conds}}} =
+               Saml.decode_response(doc)
 
       sorted = Enum.sort(conds)
       assert {:audience, "foobaraudience"} in sorted
@@ -220,27 +231,28 @@ defmodule ExSaml.Core.SamlTest do
   describe "decode_attributes" do
     @tag :decode
     test "parses AttributeStatement with single-value and multi-value attributes" do
-      xml = ~s(<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
-            ~s(Version="2.0" IssueInstant="test">) <>
-            ~s(<saml:Subject>) <>
-            ~s(<saml:NameID>foobar</saml:NameID>) <>
-            ~s(<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">) <>
-            ~s(<saml:SubjectConfirmationData Recipient="foobar123" />) <>
-            ~s(</saml:SubjectConfirmation>) <>
-            ~s(</saml:Subject>) <>
-            ~s(<saml:AttributeStatement>) <>
-            ~s(<saml:Attribute Name="urn:oid:0.9.2342.19200300.100.1.3">) <>
-            ~s(<saml:AttributeValue>test@test.com</saml:AttributeValue>) <>
-            ~s(</saml:Attribute>) <>
-            ~s(<saml:Attribute Name="foo">) <>
-            ~s(<saml:AttributeValue>george</saml:AttributeValue>) <>
-            ~s(<saml:AttributeValue>bar</saml:AttributeValue>) <>
-            ~s(</saml:Attribute>) <>
-            ~s(<saml:Attribute Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress">) <>
-            ~s(<saml:AttributeValue>test@test.com</saml:AttributeValue>) <>
-            ~s(</saml:Attribute>) <>
-            ~s(</saml:AttributeStatement>) <>
-            ~s(</saml:Assertion>)
+      xml =
+        ~s(<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ) <>
+          ~s(Version="2.0" IssueInstant="test">) <>
+          ~s(<saml:Subject>) <>
+          ~s(<saml:NameID>foobar</saml:NameID>) <>
+          ~s(<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">) <>
+          ~s(<saml:SubjectConfirmationData Recipient="foobar123" />) <>
+          ~s(</saml:SubjectConfirmation>) <>
+          ~s(</saml:Subject>) <>
+          ~s(<saml:AttributeStatement>) <>
+          ~s(<saml:Attribute Name="urn:oid:0.9.2342.19200300.100.1.3">) <>
+          ~s(<saml:AttributeValue>test@test.com</saml:AttributeValue>) <>
+          ~s(</saml:Attribute>) <>
+          ~s(<saml:Attribute Name="foo">) <>
+          ~s(<saml:AttributeValue>george</saml:AttributeValue>) <>
+          ~s(<saml:AttributeValue>bar</saml:AttributeValue>) <>
+          ~s(</saml:Attribute>) <>
+          ~s(<saml:Attribute Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress">) <>
+          ~s(<saml:AttributeValue>test@test.com</saml:AttributeValue>) <>
+          ~s(</saml:Attribute>) <>
+          ~s(</saml:AttributeStatement>) <>
+          ~s(</saml:Assertion>)
 
       doc = parse_xml(xml)
       assert {:ok, %Assertion{attributes: attrs}} = Saml.decode_assertion(doc)
@@ -279,9 +291,7 @@ defmodule ExSaml.Core.SamlTest do
       death = Util.datetime_to_saml(:calendar.gregorian_seconds_to_datetime(death_secs))
 
       ns =
-        xmlNamespace(
-          nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}]
-        )
+        xmlNamespace(nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}])
 
       elem =
         Util.build_nsinfo(
@@ -347,9 +357,7 @@ defmodule ExSaml.Core.SamlTest do
       death = Util.datetime_to_saml(:calendar.gregorian_seconds_to_datetime(death_secs))
 
       ns =
-        xmlNamespace(
-          nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}]
-        )
+        xmlNamespace(nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}])
 
       elem =
         Util.build_nsinfo(
@@ -411,9 +419,7 @@ defmodule ExSaml.Core.SamlTest do
       death = Util.datetime_to_saml(:calendar.gregorian_seconds_to_datetime(death_secs))
 
       ns =
-        xmlNamespace(
-          nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}]
-        )
+        xmlNamespace(nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}])
 
       elem =
         Util.build_nsinfo(
@@ -471,9 +477,7 @@ defmodule ExSaml.Core.SamlTest do
     @tag :validate
     test "missing SubjectConfirmationData returns bad_recipient error" do
       ns =
-        xmlNamespace(
-          nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}]
-        )
+        xmlNamespace(nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}])
 
       elem =
         Util.build_nsinfo(
@@ -531,9 +535,7 @@ defmodule ExSaml.Core.SamlTest do
       old_stamp = Util.datetime_to_saml({{1990, 1, 1}, {1, 1, 1}})
 
       ns =
-        xmlNamespace(
-          nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}]
-        )
+        xmlNamespace(nodes: [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}])
 
       elem =
         Util.build_nsinfo(

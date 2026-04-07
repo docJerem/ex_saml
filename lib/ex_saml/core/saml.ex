@@ -11,9 +11,18 @@ defmodule ExSaml.Core.Saml do
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
-  Record.defrecord(:xmlAttribute, Record.extract(:xmlAttribute, from_lib: "xmerl/include/xmerl.hrl"))
+
+  Record.defrecord(
+    :xmlAttribute,
+    Record.extract(:xmlAttribute, from_lib: "xmerl/include/xmerl.hrl")
+  )
+
   Record.defrecord(:xmlText, Record.extract(:xmlText, from_lib: "xmerl/include/xmerl.hrl"))
-  Record.defrecord(:xmlNamespace, Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl"))
+
+  Record.defrecord(
+    :xmlNamespace,
+    Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl")
+  )
 
   alias ExSaml.Core.{
     Assertion,
@@ -57,7 +66,10 @@ defmodule ExSaml.Core.Saml do
   @spec nameid_map(String.t()) :: atom()
   defp nameid_map("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"), do: :email
   defp nameid_map("urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName"), do: :x509
-  defp nameid_map("urn:oasis:names:tc:SAML:1.1:nameid-format:WindowsDomainQualifiedName"), do: :windows
+
+  defp nameid_map("urn:oasis:names:tc:SAML:1.1:nameid-format:WindowsDomainQualifiedName"),
+    do: :windows
+
   defp nameid_map("urn:oasis:names:tc:SAML:2.0:nameid-format:kerberos"), do: :krb
   defp nameid_map("urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"), do: :persistent
   defp nameid_map("urn:oasis:names:tc:SAML:2.0:nameid-format:transient"), do: :transient
@@ -106,9 +118,15 @@ defmodule ExSaml.Core.Saml do
   defp rev_status_code_map(:success), do: "urn:oasis:names:tc:SAML:2.0:status:Success"
   defp rev_status_code_map(:bad_version), do: "urn:oasis:names:tc:SAML:2.0:status:VersionMismatch"
   defp rev_status_code_map(:authn_failed), do: "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"
-  defp rev_status_code_map(:bad_attr), do: "urn:oasis:names:tc:SAML:2.0:status:InvalidAttrNameOrValue"
+
+  defp rev_status_code_map(:bad_attr),
+    do: "urn:oasis:names:tc:SAML:2.0:status:InvalidAttrNameOrValue"
+
   defp rev_status_code_map(:denied), do: "urn:oasis:names:tc:SAML:2.0:status:RequestDenied"
-  defp rev_status_code_map(:bad_binding), do: "urn:oasis:names:tc:SAML:2.0:status:UnsupportedBinding"
+
+  defp rev_status_code_map(:bad_binding),
+    do: "urn:oasis:names:tc:SAML:2.0:status:UnsupportedBinding"
+
   defp rev_status_code_map(_), do: :erlang.error(:bad_status_code)
 
   @spec logout_reason_map(String.t()) :: atom()
@@ -352,20 +370,40 @@ defmodule ExSaml.Core.Saml do
         end
 
       subject =
-        decode_optional_sub(xml, "/saml:Assertion/saml:Subject", ns,
-          &decode_assertion_subject/1, %Subject{})
+        decode_optional_sub(
+          xml,
+          "/saml:Assertion/saml:Subject",
+          ns,
+          &decode_assertion_subject/1,
+          %Subject{}
+        )
 
       conditions =
-        decode_optional_sub(xml, "/saml:Assertion/saml:Conditions", ns,
-          &decode_assertion_conditions/1, [])
+        decode_optional_sub(
+          xml,
+          "/saml:Assertion/saml:Conditions",
+          ns,
+          &decode_assertion_conditions/1,
+          []
+        )
 
       attributes =
-        decode_optional_sub(xml, "/saml:Assertion/saml:AttributeStatement", ns,
-          &decode_assertion_attributes/1, [])
+        decode_optional_sub(
+          xml,
+          "/saml:Assertion/saml:AttributeStatement",
+          ns,
+          &decode_assertion_attributes/1,
+          []
+        )
 
       authn =
-        decode_optional_sub(xml, "/saml:Assertion/saml:AuthnStatement", ns,
-          &decode_assertion_authn/1, [])
+        decode_optional_sub(
+          xml,
+          "/saml:Assertion/saml:AuthnStatement",
+          ns,
+          &decode_assertion_authn/1,
+          []
+        )
 
       {:ok,
        %Assertion{

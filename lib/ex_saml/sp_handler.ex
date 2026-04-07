@@ -23,6 +23,7 @@ defmodule ExSaml.SPHandler do
     Subject
   }
 
+  import ExSaml.Helper, only: [get_idp: 1]
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
 
   @doc "Returns the SP metadata XML for the IdP in `conn.private[:ex_saml_idp]`."
@@ -50,6 +51,9 @@ defmodule ExSaml.SPHandler do
   Returns `{:ok, %{assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
   on success, or `{:error, reason}` on failure.
   """
+  def consume_signin_response(%{params: %{"idp_id" => idp_id}} = conn) when is_bitstring(idp_id),
+    do: consume_signin_response(conn, get_idp(idp_id))
+
   def consume_signin_response(conn, %IdpData{id: idp_id, sp_config: sp_cfg} = idp_data) do
     sp = ensure_sp_uris_set(sp_cfg, conn)
 
@@ -181,7 +185,8 @@ defmodule ExSaml.SPHandler do
               {conn, :denied}
           end
 
-        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_meta, return_status)
+        {idp_signout_url, resp_xml_frag} =
+          Helper.gen_idp_signout_resp(sp, idp_meta, return_status)
 
         conn
         |> configure_session(drop: true)

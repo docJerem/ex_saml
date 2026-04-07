@@ -11,12 +11,25 @@ defmodule ExSaml.Core.Xml.C14n do
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
-  Record.defrecord(:xmlAttribute, Record.extract(:xmlAttribute, from_lib: "xmerl/include/xmerl.hrl"))
+
+  Record.defrecord(
+    :xmlAttribute,
+    Record.extract(:xmlAttribute, from_lib: "xmerl/include/xmerl.hrl")
+  )
+
   Record.defrecord(:xmlText, Record.extract(:xmlText, from_lib: "xmerl/include/xmerl.hrl"))
   Record.defrecord(:xmlComment, Record.extract(:xmlComment, from_lib: "xmerl/include/xmerl.hrl"))
   Record.defrecord(:xmlPI, Record.extract(:xmlPI, from_lib: "xmerl/include/xmerl.hrl"))
-  Record.defrecord(:xmlDocument, Record.extract(:xmlDocument, from_lib: "xmerl/include/xmerl.hrl"))
-  Record.defrecord(:xmlNamespace, Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl"))
+
+  Record.defrecord(
+    :xmlDocument,
+    Record.extract(:xmlDocument, from_lib: "xmerl/include/xmerl.hrl")
+  )
+
+  Record.defrecord(
+    :xmlNamespace,
+    Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl")
+  )
 
   @type xml_thing ::
           record(:xmlDocument)

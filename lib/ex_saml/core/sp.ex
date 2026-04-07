@@ -569,10 +569,20 @@ defmodule ExSaml.Core.Sp do
   defp block_decrypt("http://www.w3.org/2009/xmlenc11#aes128-gcm", symmetric_key, cipher_value) do
     # IV: 12 bytes, Tag: 16 bytes
     encrypted_data_size = byte_size(cipher_value) - 12 - 16
-    <<iv::binary-12, encrypted_data::binary-size(encrypted_data_size), tag::binary-16>> = cipher_value
+
+    <<iv::binary-12, encrypted_data::binary-size(encrypted_data_size), tag::binary-16>> =
+      cipher_value
 
     decrypted =
-      :crypto.crypto_one_time_aead(:aes_128_gcm, symmetric_key, iv, encrypted_data, <<>>, tag, false)
+      :crypto.crypto_one_time_aead(
+        :aes_128_gcm,
+        symmetric_key,
+        iv,
+        encrypted_data,
+        <<>>,
+        tag,
+        false
+      )
 
     decrypted
   end

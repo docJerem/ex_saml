@@ -108,7 +108,11 @@ defmodule ExSaml.Core.Xml.Dsig do
               new_id = ExSaml.Core.Util.unique_id()
 
               attr =
-                xmlAttribute(name: :ID, value: String.to_charlist(new_id), namespace: xmlNamespace())
+                xmlAttribute(
+                  name: :ID,
+                  value: String.to_charlist(new_id),
+                  namespace: xmlNamespace()
+                )
 
               new_attrs = [attr | xmlElement(element_strip, :attributes)]
               {xmlElement(element_strip, attributes: new_attrs), String.to_charlist(new_id)}
@@ -144,7 +148,9 @@ defmodule ExSaml.Core.Xml.Dsig do
             ),
             xmlElement(
               name: :"ds:SignatureMethod",
-              attributes: [xmlAttribute(name: :Algorithm, value: String.to_charlist(sig_method_url))]
+              attributes: [
+                xmlAttribute(name: :Algorithm, value: String.to_charlist(sig_method_url))
+              ]
             ),
             xmlElement(
               name: :"ds:Reference",
@@ -160,8 +166,7 @@ defmodule ExSaml.Core.Xml.Dsig do
                       attributes: [
                         xmlAttribute(
                           name: :Algorithm,
-                          value:
-                            ~c"http://www.w3.org/2000/09/xmldsig#enveloped-signature"
+                          value: ~c"http://www.w3.org/2000/09/xmldsig#enveloped-signature"
                         )
                       ]
                     ),
@@ -178,7 +183,9 @@ defmodule ExSaml.Core.Xml.Dsig do
                 ),
                 xmlElement(
                   name: :"ds:DigestMethod",
-                  attributes: [xmlAttribute(name: :Algorithm, value: String.to_charlist(digest_method))]
+                  attributes: [
+                    xmlAttribute(name: :Algorithm, value: String.to_charlist(digest_method))
+                  ]
                 ),
                 xmlElement(
                   name: :"ds:DigestValue",
@@ -439,14 +446,14 @@ defmodule ExSaml.Core.Xml.Dsig do
   end
 
   @doc false
-  def signature_props("http://www.w3.org/2000/09/xmldsig#rsa-sha1"), do: signature_props(:rsa_sha1)
+  def signature_props("http://www.w3.org/2000/09/xmldsig#rsa-sha1"),
+    do: signature_props(:rsa_sha1)
 
   def signature_props(~c"http://www.w3.org/2000/09/xmldsig#rsa-sha1"),
     do: signature_props(:rsa_sha1)
 
   def signature_props(:rsa_sha1) do
-    {:sha, "http://www.w3.org/2000/09/xmldsig#sha1",
-     "http://www.w3.org/2000/09/xmldsig#rsa-sha1"}
+    {:sha, "http://www.w3.org/2000/09/xmldsig#sha1", "http://www.w3.org/2000/09/xmldsig#rsa-sha1"}
   end
 
   def signature_props("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"),

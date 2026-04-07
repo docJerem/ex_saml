@@ -5,8 +5,16 @@ defmodule ExSaml.Core.Xml.C14nTest do
 
   require Record
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
-  Record.defrecord(:xmlAttribute, Record.extract(:xmlAttribute, from_lib: "xmerl/include/xmerl.hrl"))
-  Record.defrecord(:xmlNamespace, Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl"))
+
+  Record.defrecord(
+    :xmlAttribute,
+    Record.extract(:xmlAttribute, from_lib: "xmerl/include/xmerl.hrl")
+  )
+
+  Record.defrecord(
+    :xmlNamespace,
+    Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl")
+  )
 
   defp parse(xml) do
     {doc, _} = :xmerl_scan.string(String.to_charlist(xml), namespace_conformant: true)
@@ -170,9 +178,14 @@ defmodule ExSaml.Core.Xml.C14nTest do
     end
 
     test "omit default namespace when prefixed" do
-      doc = parse(~s(<foo:a xmlns:foo="urn:foo"><bar:b xmlns="urn:bar" xmlns:bar="urn:bar"><bar:c /></bar:b></foo:a>))
+      doc =
+        parse(
+          ~s(<foo:a xmlns:foo="urn:foo"><bar:b xmlns="urn:bar" xmlns:bar="urn:bar"><bar:c /></bar:b></foo:a>)
+        )
 
-      target = ~s(<foo:a xmlns:foo="urn:foo"><bar:b xmlns:bar="urn:bar"><bar:c></bar:c></bar:b></foo:a>)
+      target =
+        ~s(<foo:a xmlns:foo="urn:foo"><bar:b xmlns:bar="urn:bar"><bar:c></bar:c></bar:b></foo:a>)
+
       assert C14n.c14n(doc, true) == target
     end
 

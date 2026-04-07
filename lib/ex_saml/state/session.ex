@@ -51,9 +51,7 @@ defmodule ExSaml.State.Session do
     Conn.delete_session(conn, key)
   end
 
-  defp validate_assertion_expiry(
-         %Assertion{subject: %{notonorafter: ""}} = assertion
-       ) do
+  defp validate_assertion_expiry(%Assertion{subject: %{notonorafter: ""}} = assertion) do
     assertion
   end
 
