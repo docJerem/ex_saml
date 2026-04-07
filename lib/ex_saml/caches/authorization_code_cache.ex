@@ -30,7 +30,7 @@ defmodule ExSaml.AuthorizationCodeCache do
   def put_new!(key, value, opts \\ []) do
     ttl = Keyword.get(opts, :ttl, @ttl)
 
-    ck =  cache_key(key)
+    ck = cache_key(key)
 
     cache().put_new!(ck, value, ttl: ttl)
   end

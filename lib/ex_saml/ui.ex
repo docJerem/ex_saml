@@ -1,3 +1,4 @@
+# TODO: Evaluate the deprecation
 defmodule ExSaml.UI do
   @moduledoc false
   def value(:entity_id, %{saml_service_provider_id: entity_id, sp_id: nil}),
@@ -107,5 +108,5 @@ defmodule ExSaml.UI do
   end
 
   defp saml_scope, do: "/api"
-  defp saml_host, do: Application.get_env(Cleeck.Umbrella, :saml_url)
+  defp saml_host, do: Application.get_env(ExSaml, :saml_url)
 end

@@ -13,6 +13,8 @@ defmodule ExSaml.Assertion do
 
   alias ExSaml.Subject
 
+  require Logger
+
   @type attr_name_t :: String.t()
   @type attr_value_t :: String.t() | [String.t()]
 
@@ -39,6 +41,20 @@ defmodule ExSaml.Assertion do
           computed: %{required(attr_name_t()) => attr_value_t()},
           idp_id: String.t()
         }
+
+  def get_from_code(code) do
+    case ExSaml.AuthorizationCodeCache.take(code) do
+      {idp_id, _} = key ->
+        case ExSaml.AssertionCache.get(key) do
+          %__MODULE__{attributes: assertion} -> {:ok, {idp_id, assertion}}
+          _ -> {:error, assertion: :not_found}
+        end
+
+      _ ->
+        Logger.info("Authorization code expired")
+        {:error, :unauthorized}
+    end
+  end
 
   @doc false
   def from_core(%ExSaml.Core.Assertion{} = core) do
