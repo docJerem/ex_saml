@@ -12,11 +12,11 @@ defmodule ExSaml.AuthRouter do
   plug(:check_target_url)
   plug(:dispatch)
 
-  post "/signin/*idp_id_seg" do
+  post "/signin/:idp_id" do
     conn |> ExSaml.AuthHandler.send_signin_req()
   end
 
-  post "/signout/*idp_id_seg" do
+  post "/signout/:idp_id" do
     conn |> ExSaml.AuthHandler.send_signout_req()
   end
 
