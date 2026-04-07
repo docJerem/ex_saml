@@ -27,15 +27,12 @@ defmodule ExSaml.AuthorizationCodeCache do
   def take(key), do: cache().take(cache_key(key))
 
   @doc "Stores only if the key doesn't already exist. Returns `:ok` or `{:error, :already_exists}`."
-  def put_new!(key, value) do
-    ck = cache_key(key)
+  def put_new!(key, value, opts \\ []) do
+    ttl = Keyword.get(opts, :ttl, @ttl)
 
-    if cache().get(ck) do
-      {:error, :already_exists}
-    else
-      cache().put(ck, value, ttl: @ttl)
-      :ok
-    end
+    ck =  cache_key(key)
+
+    cache().put_new!(ck, value, ttl: ttl)
   end
 
   defp cache, do: Application.get_env(:ex_saml, :cache)
