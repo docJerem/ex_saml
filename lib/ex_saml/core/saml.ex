@@ -239,7 +239,7 @@ defmodule ExSaml.Core.Saml do
                "/md:EntityDescriptor/md:IDPSSODescriptor/md:KeyDescriptor[@use='signing']/ds:KeyInfo/ds:X509Data/ds:X509Certificate/text()",
                ns
              ) do
-          {:ok, v} -> :base64.decode(:erlang.list_to_binary(v))
+          {:ok, v} -> :base64.decode(to_string(v))
           :not_found -> nil
         end
 
