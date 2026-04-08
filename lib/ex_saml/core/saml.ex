@@ -77,15 +77,15 @@ defmodule ExSaml.Core.Saml do
 
   @spec nameid_name_qualifier_map(String.t()) :: nil | String.t()
   defp nameid_name_qualifier_map(""), do: nil
-  defp nameid_name_qualifier_map(s) when is_list(s), do: s
+  defp nameid_name_qualifier_map(s) when is_binary(s), do: s
 
   @spec nameid_sp_name_qualifier_map(String.t()) :: nil | String.t()
   defp nameid_sp_name_qualifier_map(""), do: nil
-  defp nameid_sp_name_qualifier_map(s) when is_list(s), do: s
+  defp nameid_sp_name_qualifier_map(s) when is_binary(s), do: s
 
   @spec nameid_format_map(String.t()) :: nil | String.t()
   defp nameid_format_map(""), do: nil
-  defp nameid_format_map(s) when is_list(s), do: s
+  defp nameid_format_map(s) when is_binary(s), do: s
 
   @spec subject_method_map(String.t()) :: :bearer | :unknown
   defp subject_method_map("urn:oasis:names:tc:SAML:2.0:cm:bearer"), do: :bearer
@@ -852,14 +852,21 @@ defmodule ExSaml.Core.Saml do
   defp validate_version(%Assertion{version: "2.0"}), do: :ok
   defp validate_version(_), do: {:error, :bad_version}
 
-  defp validate_recipient(%Assertion{recipient: r}, recipient) when r == recipient, do: :ok
-  defp validate_recipient(_, _), do: {:error, :bad_recipient}
+  defp validate_recipient(%Assertion{recipient: r}, recipient) do
+    if to_string(r) == to_string(recipient) do
+      :ok
+    else
+      {:error, :bad_recipient}
+    end
+  end
 
   defp validate_audience(%Assertion{conditions: conds}, audience) do
     case Keyword.get(conds, :audience) do
-      nil -> :ok
-      ^audience -> :ok
-      _ -> {:error, :bad_audience}
+      nil ->
+        :ok
+
+      a ->
+        if to_string(a) == to_string(audience), do: :ok, else: {:error, :bad_audience}
     end
   end
 
