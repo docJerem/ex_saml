@@ -82,9 +82,18 @@ defmodule ExSaml.SPHandler do
 
       maybe_redirect_with_code(conn, target_url, assertion_key, nonce, true)
     else
-      {:halted, conn} -> conn
-      {:error, error} -> redirect_with_error(conn, relay_state, error)
-      _ -> conn |> send_resp(403, "access_denied")
+      {:halted, conn} ->
+        conn
+
+      {:error, error} ->
+        redirect_with_error(conn, relay_state, error)
+
+      # Defensive fallback: unreachable today (Dialyzer flags it as such), but
+      # kept so that any future change introducing a new return shape from the
+      # `with` chain fails closed with a 403 instead of crashing the request
+      # with a `WithClauseError`. Auth endpoints should fail closed.
+      _ ->
+        conn |> send_resp(403, "access_denied")
     end
   end
 

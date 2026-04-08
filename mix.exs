@@ -10,6 +10,7 @@ defmodule ExSaml.MixProject do
       app: :ex_saml,
       deps: deps(),
       description: description(),
+      dialyzer: [ignore_warnings: ".dialyzer_ignore.exs"],
       elixir: "~> 1.15",
       package: package(),
       preferred_cli_env: preferred_cli_env(),
