@@ -564,8 +564,8 @@ defmodule ExSaml.Core.Saml do
 
       name =
         case sur_name do
-          nil -> given_name
-          sn -> given_name ++ ~c" " ++ sn
+          nil -> to_string(given_name)
+          sn -> to_string(given_name) <> " " <> to_string(sn)
         end
 
       {:ok, %Contact{name: name, email: email}}
