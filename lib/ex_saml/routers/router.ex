@@ -18,6 +18,7 @@ defmodule ExSaml.Router do
 
   forward("/auth", to: ExSaml.AuthRouter)
   forward("/csp-report", to: ExSaml.CsprRouter)
+  forward("/sp", to: ExSaml.SPRouter)
 
   match _ do
     conn |> send_resp(404, "not_found")
