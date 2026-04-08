@@ -2,8 +2,8 @@ defmodule ExSaml.SpData do
   @moduledoc false
 
   require Logger
-  alias ExSaml.SpData
   alias ExSaml.Core
+  alias ExSaml.SpData
 
   defstruct id: "",
             entity_id: "",

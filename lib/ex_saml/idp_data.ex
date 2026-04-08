@@ -3,8 +3,7 @@ defmodule ExSaml.IdpData do
 
   import SweetXml
   require Logger
-  alias ExSaml.{Helper, IdpData, SpData}
-  alias ExSaml.Core
+  alias ExSaml.{Core, Helper, IdpData, SpData}
 
   @type nameid_format :: :unknown | charlist()
   @type certs :: [binary()]

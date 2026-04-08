@@ -3,8 +3,7 @@ defmodule ExSaml.RouterUtil do
 
   alias Plug.Conn
   require Logger
-  alias ExSaml.{Helper, IdpData}
-  alias ExSaml.Core
+  alias ExSaml.{Core, Helper, IdpData}
 
   @subdomain_re ~r/^(?<subdomain>([^.]+))?\./
 

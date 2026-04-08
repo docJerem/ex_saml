@@ -12,6 +12,8 @@ defmodule ExSaml.Core.Util do
   and `Enum.reduce_while/3` instead.
   """
 
+  alias ExSaml.Core.TableOwner
+
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
@@ -501,7 +503,7 @@ defmodule ExSaml.Core.Util do
   @spec start_ets() :: :ok
   def start_ets do
     # Tables are owned by ExSaml.Core.TableOwner — just verify they exist
-    for table <- ExSaml.Core.TableOwner.tables() do
+    for table <- TableOwner.tables() do
       case :ets.info(table) do
         :undefined ->
           raise "ETS table #{table} not found. Ensure ExSaml.Core.TableOwner is started."

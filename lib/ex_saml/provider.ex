@@ -17,6 +17,7 @@ defmodule ExSaml.Provider do
   use GenServer
   require Logger
 
+  alias ExSaml.Core.Util
   alias ExSaml.State
 
   @doc false
@@ -53,7 +54,7 @@ defmodule ExSaml.Provider do
     Application.put_env(:ex_saml, :idp_id_from, idp_id_from)
 
     # ETS tables are now managed by ExSaml.Core.TableOwner
-    ExSaml.Core.Util.start_ets()
+    Util.start_ets()
 
     refresh_providers()
   end

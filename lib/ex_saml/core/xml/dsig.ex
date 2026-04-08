@@ -8,6 +8,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   Currently supports RSA + SHA1|SHA256 signatures.
   """
 
+  alias ExSaml.Core.Util
   alias ExSaml.Core.Xml.C14n
 
   require Record
@@ -105,7 +106,7 @@ defmodule ExSaml.Core.Xml.Dsig do
               {element_strip, low_id}
 
             :error ->
-              new_id = ExSaml.Core.Util.unique_id()
+              new_id = Util.unique_id()
 
               attr =
                 xmlAttribute(
@@ -132,7 +133,7 @@ defmodule ExSaml.Core.Xml.Dsig do
     ns = xmlNamespace(nodes: [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}])
 
     sig_info =
-      ExSaml.Core.Util.build_nsinfo(
+      Util.build_nsinfo(
         ns,
         xmlElement(
           name: :"ds:SignedInfo",
@@ -206,7 +207,7 @@ defmodule ExSaml.Core.Xml.Dsig do
     cert64 = :base64.encode_to_string(cert_bin)
 
     sig_elem =
-      ExSaml.Core.Util.build_nsinfo(
+      Util.build_nsinfo(
         ns,
         xmlElement(
           name: :"ds:Signature",

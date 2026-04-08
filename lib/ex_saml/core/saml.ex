@@ -34,7 +34,8 @@ defmodule ExSaml.Core.Saml do
     Org,
     Response,
     SpMetadata,
-    Subject
+    Subject,
+    Util
   }
 
   # ---------------------------------------------------------------------------
@@ -789,7 +790,7 @@ defmodule ExSaml.Core.Saml do
         %Subject{notonorafter: restrict} ->
           secs =
             restrict
-            |> ExSaml.Core.Util.saml_to_datetime()
+            |> Util.saml_to_datetime()
             |> :calendar.datetime_to_gregorian_seconds()
 
           if t == :none or secs < t, do: secs, else: t
@@ -803,7 +804,7 @@ defmodule ExSaml.Core.Saml do
         restrict ->
           secs =
             restrict
-            |> ExSaml.Core.Util.saml_to_datetime()
+            |> Util.saml_to_datetime()
             |> :calendar.datetime_to_gregorian_seconds()
 
           if t == :none or secs < t, do: secs, else: t
@@ -813,7 +814,7 @@ defmodule ExSaml.Core.Saml do
       :none ->
         ii_secs =
           a.issue_instant
-          |> ExSaml.Core.Util.saml_to_datetime()
+          |> Util.saml_to_datetime()
           |> :calendar.datetime_to_gregorian_seconds()
 
         ii_secs + 5 * 60
@@ -948,7 +949,7 @@ defmodule ExSaml.Core.Saml do
           ] ++ name_id_policy
       )
 
-    ExSaml.Core.Util.build_nsinfo(ns, elem)
+    Util.build_nsinfo(ns, elem)
   end
 
   def to_xml(%LogoutRequest{
@@ -1004,7 +1005,7 @@ defmodule ExSaml.Core.Saml do
         ]
       )
 
-    ExSaml.Core.Util.build_nsinfo(ns, elem)
+    Util.build_nsinfo(ns, elem)
   end
 
   def to_xml(%LogoutResponse{
@@ -1049,7 +1050,7 @@ defmodule ExSaml.Core.Saml do
         ]
       )
 
-    ExSaml.Core.Util.build_nsinfo(ns, elem)
+    Util.build_nsinfo(ns, elem)
   end
 
   def to_xml(%SpMetadata{
@@ -1243,7 +1244,7 @@ defmodule ExSaml.Core.Saml do
         ]
       )
 
-    ExSaml.Core.Util.build_nsinfo(ns, elem)
+    Util.build_nsinfo(ns, elem)
   end
 
   def to_xml(_), do: :erlang.error("unknown record")
