@@ -861,12 +861,13 @@ defmodule ExSaml.Core.Saml do
   end
 
   defp validate_audience(%Assertion{conditions: conds}, audience) do
-    case Keyword.get(conds, :audience) do
-      nil ->
-        :ok
+    original_aud = conds |> Keyword.get(:audience) |> to_string()
+    challenged_aud = to_string(audience)
 
-      a ->
-        if to_string(a) == to_string(audience), do: :ok, else: {:error, :bad_audience}
+    case original_aud do
+      "" -> :ok
+      ^challenged_aud -> :ok
+      _ -> {:error, :bad_audience}
     end
   end
 
