@@ -16,6 +16,7 @@ defmodule ExSaml.SPHandler do
 
   alias ExSaml.{
     Assertion,
+    AuthorizationCodeCache,
     Helper,
     IdpData,
     RelayStateCache,
@@ -59,9 +60,37 @@ defmodule ExSaml.SPHandler do
   Returns `{:ok, %{assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
   on success, or `{:error, reason}` on failure.
   """
-  def consume_signin_response(%{params: %{"idp_id" => idp_id}} = conn) when is_bitstring(idp_id),
-    do: consume_signin_response(conn, get_idp(idp_id))
+  # Router-facing clause: matches when the SP router dispatched here with
+  # `idp_id` in path params. Performs the full SAML flow AND handles the
+  # connection: persists the assertion, generates an authorization code,
+  # and redirects to the target URL. Always returns a `%Plug.Conn{}`.
+  def consume_signin_response(%{params: %{"idp_id" => idp_id}} = conn)
+      when is_bitstring(idp_id) do
+    idp_data = get_idp(idp_id)
+    rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
+    relay_state = safe_decode_www_form(rls)
 
+    with :ok <- maybe_redirect_to_start_url(conn, rls),
+         {:ok, %{assertion: assertion, nonce: nonce}} <-
+           consume_signin_response(conn, idp_data) do
+      nameid = assertion.subject.name
+      assertion_key = {idp_data.id, maybe_idp_user_id(assertion) || nameid}
+      conn = State.put_assertion(conn, assertion_key, assertion)
+      target_url = auth_target_url(conn, assertion, relay_state)
+
+      RelayStateCache.delete(relay_state)
+
+      maybe_redirect_with_code(conn, target_url, assertion_key, nonce, true)
+    else
+      {:halted, conn} -> conn
+      {:error, error} -> redirect_with_error(conn, relay_state, error)
+      _ -> conn |> send_resp(403, "access_denied")
+    end
+  end
+
+  # Library-facing clause: pure decode+validate. Returns the assertion data
+  # as a tuple — caller is responsible for any conn handling. Useful when
+  # an app wants to drive the post-consume flow itself.
   def consume_signin_response(conn, %IdpData{id: idp_id, sp_config: sp_cfg} = idp_data) do
     sp = ensure_sp_uris_set(sp_cfg, conn)
 
@@ -73,8 +102,7 @@ defmodule ExSaml.SPHandler do
     user_token = RelayStateCache.get(relay_state)[:user_token]
     redirect_uri = RelayStateCache.get(relay_state)[:redirect_uri]
 
-    with :ok <- maybe_redirect_to_start_url(conn, rls),
-         {:ok, assertion} <- Helper.decode_idp_auth_resp(sp, saml_encoding, saml_response),
+    with {:ok, assertion} <- Helper.decode_idp_auth_resp(sp, saml_encoding, saml_response),
          {:ok, nonce} <- validate_authresp(conn, idp_data, assertion, relay_state) do
       {:ok,
        %{
@@ -89,12 +117,55 @@ defmodule ExSaml.SPHandler do
     end
   end
 
+  defp maybe_idp_user_id(%{attributes: %{"idp_user_id" => idp_user_id}}), do: idp_user_id
+  defp maybe_idp_user_id(_), do: nil
+
+  defp maybe_redirect_with_code(conn, target_url, assertion_key, nonce, code?) do
+    if code? do
+      code = State.gen_id()
+
+      AuthorizationCodeCache.put_new!(code, %{
+        ex_saml_assertion_key: assertion_key,
+        saml_nonce_candidate: nonce
+      })
+
+      redirect(conn, 302, "#{target_url}?code=#{code}")
+    else
+      conn
+      |> configure_session(renew: true)
+      |> put_session("ex_saml_assertion_key", assertion_key)
+      |> put_session("saml_nonce_candidate", nonce)
+      |> redirect(302, target_url)
+    end
+  end
+
+  defp maybe_redirect_to_start_url(_, nil), do: :ok
+
   defp maybe_redirect_to_start_url(conn, rls) do
     if String.contains?(rls, "https://start-from:") do
       {:halted, redirect(conn, 302, String.replace(rls, "start-from:", ""))}
     else
       :ok
     end
+  end
+
+  defp redirect_with_error(conn, _, :invalid_target_url) do
+    conn
+    |> put_session("ex_saml_error", {:error, :invalid_target_url})
+    |> redirect(302, target_url())
+  end
+
+  defp redirect_with_error(conn, relay_state, error) do
+    conn
+    |> put_session("ex_saml_error", {:error, error})
+    |> redirect(302, target_url(conn, relay_state))
+  end
+
+  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, ""), do: "/"
+  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, url), do: url
+
+  defp auth_target_url(conn, _assertion, relay_state) do
+    get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] || "/"
   end
 
   # IDP-initiated flow auth response
