@@ -34,6 +34,7 @@ defmodule ExSaml.AuthHandler do
     assertion_key = get_session(conn, "ex_saml_assertion_key")
     relay_state = State.gen_id()
     session_id = get_session(conn, :session_id)
+    target_url = conn.private[:ex_saml_target_url] || "/"
 
     RelayStateCache.put(
       relay_state,
@@ -44,8 +45,8 @@ defmodule ExSaml.AuthHandler do
           fetch_cookies(conn, encrypted: ~w(saml_nonce)).cookies["saml_nonce"] || UUID.uuid4(),
         idp_id: idp_id,
         user_token: get_session(conn, :user_token),
-        redirect_uri: get_session(conn, :redirect_uri)
-        # target_url: target_url
+        redirect_uri: get_session(conn, :redirect_uri),
+        target_url: target_url
       },
       ttl: @relay_state_cache_ttl
     )
@@ -60,8 +61,7 @@ defmodule ExSaml.AuthHandler do
     |> configure_session(renew: true)
     |> put_session("relay_state", relay_state)
     |> put_session("idp_id", idp_id)
-    # |> put_session("target_url", target_url)
-    #
+    |> put_session("target_url", target_url)
     |> send_saml_request(
       idp_signin_url,
       idp.use_redirect_for_req,
