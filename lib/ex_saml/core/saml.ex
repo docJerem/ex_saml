@@ -795,6 +795,11 @@ defmodule ExSaml.Core.Saml do
             |> Util.saml_to_datetime()
             |> :calendar.datetime_to_gregorian_seconds()
 
+          # Dialyzer flags this `if` as tautological because `t` is provably
+          # `:none` here (variable shadowing inside the `case` body). The
+          # structure is preserved verbatim from upstream arekinath/esaml's
+          # `stale_time/1` to keep behavioral parity and ease future backports.
+          # The corresponding warnings are suppressed in `.dialyzer_ignore.exs`.
           if t == :none or secs < t, do: secs, else: t
       end
 
