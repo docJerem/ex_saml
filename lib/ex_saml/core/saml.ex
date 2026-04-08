@@ -139,7 +139,9 @@ defmodule ExSaml.Core.Saml do
   defp rev_logout_reason_map(:user), do: "urn:oasis:names:tc:SAML:2.0:logout:user"
   defp rev_logout_reason_map(:admin), do: "urn:oasis:names:tc:SAML:2.0:logout:admin"
 
-  @spec common_attrib_map(String.t()) :: atom()
+  # We should provide @spec common_attrib_map(String.t()) :: atom()
+  # but for backward compatibility (from ex esaml library) we handle the list() input
+  @spec common_attrib_map(String.t() | list()) :: atom()
   defp common_attrib_map("urn:oid:2.16.840.1.113730.3.1.3"), do: :employeeNumber
   defp common_attrib_map("urn:oid:1.3.6.1.4.1.5923.1.1.1.6"), do: :eduPersonPrincipalName
   defp common_attrib_map("urn:oid:0.9.2342.19200300.100.1.3"), do: :mail
@@ -686,7 +688,7 @@ defmodule ExSaml.Core.Saml do
           do: xmlAttribute(attr, :value)
 
     case name_values do
-      [name] -> extract_attribute_values(to_string(name), attr_elem, acc, ns)
+      [name] -> extract_attribute_values(name, attr_elem, acc, ns)
       _ -> acc
     end
   end
