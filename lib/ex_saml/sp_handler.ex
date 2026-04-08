@@ -80,7 +80,7 @@ defmodule ExSaml.SPHandler do
 
       RelayStateCache.delete(relay_state)
 
-      maybe_redirect_with_code(conn, target_url, assertion_key, nonce, true)
+      redirect_with_authorization_code(conn, target_url, assertion_key, nonce)
     else
       {:halted, conn} ->
         conn
@@ -129,25 +129,6 @@ defmodule ExSaml.SPHandler do
   defp maybe_idp_user_id(%{attributes: %{"idp_user_id" => idp_user_id}}), do: idp_user_id
   defp maybe_idp_user_id(_), do: nil
 
-  defp maybe_redirect_with_code(conn, target_url, assertion_key, nonce, code?) do
-    if code? do
-      code = State.gen_id()
-
-      AuthorizationCodeCache.put_new!(code, %{
-        ex_saml_assertion_key: assertion_key,
-        saml_nonce_candidate: nonce
-      })
-
-      redirect(conn, 302, "#{target_url}?code=#{code}")
-    else
-      conn
-      |> configure_session(renew: true)
-      |> put_session("ex_saml_assertion_key", assertion_key)
-      |> put_session("saml_nonce_candidate", nonce)
-      |> redirect(302, target_url)
-    end
-  end
-
   defp maybe_redirect_to_start_url(_, nil), do: :ok
 
   defp maybe_redirect_to_start_url(conn, rls) do
@@ -156,6 +137,17 @@ defmodule ExSaml.SPHandler do
     else
       :ok
     end
+  end
+
+  defp redirect_with_authorization_code(conn, target_url, assertion_key, nonce) do
+    code = State.gen_id()
+
+    AuthorizationCodeCache.put_new!(code, %{
+      ex_saml_assertion_key: assertion_key,
+      saml_nonce_candidate: nonce
+    })
+
+    redirect(conn, 302, "#{target_url}?code=#{code}")
   end
 
   defp redirect_with_error(conn, _, :invalid_target_url) do
