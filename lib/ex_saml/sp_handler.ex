@@ -13,12 +13,10 @@ defmodule ExSaml.SPHandler do
 
   require Logger
   import Plug.Conn
-  # alias Plug.Conn
-  require ExSaml.Esaml
 
   alias ExSaml.{
     Assertion,
-    Esaml,
+    AuthorizationCodeCache,
     Helper,
     IdpData,
     RelayStateCache,
@@ -26,6 +24,7 @@ defmodule ExSaml.SPHandler do
     Subject
   }
 
+  import ExSaml.Helper, only: [get_idp: 1]
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
 
   @doc "Returns the SP metadata XML for the IdP in `conn.private[:ex_saml_idp]`."
@@ -33,18 +32,26 @@ defmodule ExSaml.SPHandler do
   # sobelow_skip ["XSS.SendResp"]
   def send_metadata(conn) do
     %IdpData{} = idp = conn.private[:ex_saml_idp]
-    %IdpData{esaml_idp_rec: _idp_rec, esaml_sp_rec: sp_rec} = idp
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    %IdpData{sp_config: sp_cfg} = idp
+    sp = ensure_sp_uris_set(sp_cfg, conn)
     metadata = Helper.sp_metadata(sp)
 
     conn
     |> put_resp_header("content-type", "text/xml")
     |> send_resp(200, metadata)
 
+    # NOTE: We should avoid this, as you can not decorate the
+    # behaviour.
     # rescue
     #   error ->
     #     Logger.error("#{inspect error}")
     #     conn |> send_resp(500, "request_failed")
+
+    # PROPOSAL:
+    # rescue
+    #   error ->
+    #     Logger.error("#{inspect error}")
+    #     {:error, saml: :request_metadata_failed}
   end
 
   @doc """
@@ -53,8 +60,48 @@ defmodule ExSaml.SPHandler do
   Returns `{:ok, %{assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
   on success, or `{:error, reason}` on failure.
   """
-  def consume_signin_response(conn, %IdpData{id: idp_id, esaml_sp_rec: sp_rec} = idp_data) do
-    sp = ensure_sp_uris_set(sp_rec, conn)
+  # Router-facing clause: matches when the SP router dispatched here with
+  # `idp_id` in path params. Performs the full SAML flow AND handles the
+  # connection: persists the assertion, generates an authorization code,
+  # and redirects to the target URL. Always returns a `%Plug.Conn{}`.
+  def consume_signin_response(%{params: %{"idp_id" => idp_id}} = conn)
+      when is_bitstring(idp_id) do
+    idp_data = get_idp(idp_id)
+    rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
+    relay_state = safe_decode_www_form(rls)
+
+    with :ok <- maybe_redirect_to_start_url(conn, rls),
+         {:ok, %{assertion: assertion, nonce: nonce}} <-
+           consume_signin_response(conn, idp_data) do
+      nameid = assertion.subject.name
+      assertion_key = {idp_data.id, maybe_idp_user_id(assertion) || nameid}
+      conn = State.put_assertion(conn, assertion_key, assertion)
+      target_url = auth_target_url(conn, assertion, relay_state)
+
+      RelayStateCache.delete(relay_state)
+
+      redirect_with_authorization_code(conn, target_url, assertion_key, nonce)
+    else
+      {:halted, conn} ->
+        conn
+
+      {:error, error} ->
+        redirect_with_error(conn, relay_state, error)
+
+      # Defensive fallback: unreachable today (Dialyzer flags it as such), but
+      # kept so that any future change introducing a new return shape from the
+      # `with` chain fails closed with a 403 instead of crashing the request
+      # with a `WithClauseError`. Auth endpoints should fail closed.
+      _ ->
+        conn |> send_resp(403, "access_denied")
+    end
+  end
+
+  # Library-facing clause: pure decode+validate. Returns the assertion data
+  # as a tuple — caller is responsible for any conn handling. Useful when
+  # an app wants to drive the post-consume flow itself.
+  def consume_signin_response(conn, %IdpData{id: idp_id, sp_config: sp_cfg} = idp_data) do
+    sp = ensure_sp_uris_set(sp_cfg, conn)
 
     saml_encoding = conn.body_params["SAMLEncoding"]
     saml_response = conn.body_params["SAMLResponse"]
@@ -64,8 +111,7 @@ defmodule ExSaml.SPHandler do
     user_token = RelayStateCache.get(relay_state)[:user_token]
     redirect_uri = RelayStateCache.get(relay_state)[:redirect_uri]
 
-    with :ok <- maybe_redirect_to_start_url(conn, rls),
-         {:ok, assertion} <- Helper.decode_idp_auth_resp(sp, saml_encoding, saml_response),
+    with {:ok, assertion} <- Helper.decode_idp_auth_resp(sp, saml_encoding, saml_response),
          {:ok, nonce} <- validate_authresp(conn, idp_data, assertion, relay_state) do
       {:ok,
        %{
@@ -80,12 +126,47 @@ defmodule ExSaml.SPHandler do
     end
   end
 
+  defp maybe_idp_user_id(%{attributes: %{"idp_user_id" => idp_user_id}}), do: idp_user_id
+  defp maybe_idp_user_id(_), do: nil
+
+  defp maybe_redirect_to_start_url(_, nil), do: :ok
+
   defp maybe_redirect_to_start_url(conn, rls) do
     if String.contains?(rls, "https://start-from:") do
       {:halted, redirect(conn, 302, String.replace(rls, "start-from:", ""))}
     else
       :ok
     end
+  end
+
+  defp redirect_with_authorization_code(conn, target_url, assertion_key, nonce) do
+    code = State.gen_id()
+
+    AuthorizationCodeCache.put_new!(code, %{
+      ex_saml_assertion_key: assertion_key,
+      saml_nonce_candidate: nonce
+    })
+
+    redirect(conn, 302, "#{target_url}?code=#{code}")
+  end
+
+  defp redirect_with_error(conn, _, :invalid_target_url) do
+    conn
+    |> put_session("ex_saml_error", {:error, :invalid_target_url})
+    |> redirect(302, target_url())
+  end
+
+  defp redirect_with_error(conn, relay_state, error) do
+    conn
+    |> put_session("ex_saml_error", {:error, error})
+    |> redirect(302, target_url(conn, relay_state))
+  end
+
+  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, ""), do: "/"
+  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, url), do: url
+
+  defp auth_target_url(conn, _assertion, relay_state) do
+    get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] || "/"
   end
 
   # IDP-initiated flow auth response
@@ -131,8 +212,8 @@ defmodule ExSaml.SPHandler do
   # sobelow_skip ["XSS.SendResp"]
   def handle_logout_response(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
-    %IdpData{esaml_idp_rec: _idp_rec, esaml_sp_rec: sp_rec} = idp
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    %IdpData{sp_config: sp_cfg} = idp
+    sp = ensure_sp_uris_set(sp_cfg, conn)
 
     saml_encoding = conn.body_params["SAMLEncoding"]
     # Handle both POST and Redirect
@@ -162,8 +243,8 @@ defmodule ExSaml.SPHandler do
   @doc "Handles an IdP-initiated logout request."
   def handle_logout_request(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
-    %IdpData{esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} = idp
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    %IdpData{idp_metadata: idp_meta, sp_config: sp_cfg} = idp
+    sp = ensure_sp_uris_set(sp_cfg, conn)
 
     saml_encoding = conn.body_params["SAMLEncoding"]
     saml_request = conn.body_params["SAMLRequest"]
@@ -171,8 +252,7 @@ defmodule ExSaml.SPHandler do
     relay_state = safe_decode_www_form(rls)
 
     case Helper.decode_idp_signout_req(sp, saml_encoding, saml_request) do
-      {:ok, payload} ->
-        Esaml.esaml_logoutreq(name: nameid, issuer: _issuer) = payload
+      {:ok, %ExSaml.Core.LogoutRequest{name: nameid}} ->
         assertion_key = {idp_id, nameid}
 
         {conn, return_status} =
@@ -185,7 +265,8 @@ defmodule ExSaml.SPHandler do
               {conn, :denied}
           end
 
-        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_rec, return_status)
+        {idp_signout_url, resp_xml_frag} =
+          Helper.gen_idp_signout_resp(sp, idp_meta, return_status)
 
         conn
         |> configure_session(drop: true)
@@ -198,7 +279,7 @@ defmodule ExSaml.SPHandler do
 
       error ->
         Logger.error("#{inspect(error)}")
-        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_rec, :denied)
+        {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_meta, :denied)
 
         conn
         |> send_saml_request(

@@ -15,9 +15,6 @@ defmodule ExSaml.Subject do
   will be an empty string in that case.
   """
 
-  require ExSaml.Esaml
-  alias ExSaml.Esaml
-
   defstruct name: "",
             name_qualifier: :undefined,
             sp_name_qualifier: :undefined,
@@ -37,44 +34,39 @@ defmodule ExSaml.Subject do
         }
 
   @doc false
-  def from_rec(subject_rec) do
-    Esaml.esaml_subject(
-      name: name,
-      name_qualifier: name_qualifier,
-      sp_name_qualifier: sp_name_qualifier,
-      name_format: name_format,
-      confirmation_method: confirmation_method,
-      notonorafter: notonorafter,
-      in_response_to: in_response_to
-    ) = subject_rec
-
+  def from_core(%ExSaml.Core.Subject{} = core) do
     %__MODULE__{
-      name: name |> List.to_string(),
-      name_qualifier: to_string_or_undefined(name_qualifier),
-      sp_name_qualifier: to_string_or_undefined(sp_name_qualifier),
-      name_format: to_string_or_undefined(name_format),
-      confirmation_method: confirmation_method,
-      notonorafter: notonorafter |> List.to_string(),
-      in_response_to: in_response_to |> List.to_string()
+      name: to_string_safe(core.name),
+      name_qualifier: nil_to_undefined(core.name_qualifier),
+      sp_name_qualifier: nil_to_undefined(core.sp_name_qualifier),
+      name_format: nil_to_undefined(core.name_format),
+      confirmation_method: core.confirmation_method,
+      notonorafter: to_string_safe(core.notonorafter),
+      in_response_to: to_string_safe(core.in_response_to)
     }
   end
 
   @doc false
-  def to_rec(subject) do
-    Esaml.esaml_subject(
-      name: String.to_charlist(subject.name),
-      name_qualifier: from_string_or_undefined(subject.name_qualifier),
-      sp_name_qualifier: from_string_or_undefined(subject.sp_name_qualifier),
-      name_format: from_string_or_undefined(subject.name_format),
+  def to_core(subject) do
+    %ExSaml.Core.Subject{
+      name: subject.name,
+      name_qualifier: undefined_to_nil(subject.name_qualifier),
+      sp_name_qualifier: undefined_to_nil(subject.sp_name_qualifier),
+      name_format: undefined_to_nil(subject.name_format),
       confirmation_method: subject.confirmation_method,
-      notonorafter: String.to_charlist(subject.notonorafter),
-      in_response_to: String.to_charlist(subject.in_response_to)
-    )
+      notonorafter: subject.notonorafter,
+      in_response_to: subject.in_response_to
+    }
   end
 
-  defp to_string_or_undefined(:undefined), do: :undefined
-  defp to_string_or_undefined(s) when is_list(s), do: List.to_string(s)
+  defp to_string_safe(val) when is_list(val), do: List.to_string(val)
+  defp to_string_safe(val) when is_binary(val), do: val
+  defp to_string_safe(_), do: ""
 
-  defp from_string_or_undefined(:undefined), do: :undefined
-  defp from_string_or_undefined(s) when is_binary(s), do: String.to_charlist(s)
+  defp nil_to_undefined(nil), do: :undefined
+  defp nil_to_undefined(val) when is_list(val), do: List.to_string(val)
+  defp nil_to_undefined(val), do: val
+
+  defp undefined_to_nil(:undefined), do: nil
+  defp undefined_to_nil(val), do: val
 end

@@ -2,7 +2,7 @@ defmodule ExSaml.SpData do
   @moduledoc false
 
   require Logger
-  require ExSaml.Esaml
+  alias ExSaml.Core
   alias ExSaml.SpData
 
   defstruct id: "",
@@ -93,9 +93,14 @@ defmodule ExSaml.SpData do
 
   defp load_cert(%SpData{certfile: certfile} = sp_data, %{} = opts_map) do
     cert =
-      if sp_data.cert !== :undefined,
-        do: sp_data.cert,
-        else: :esaml_util.load_certificate(certfile)
+      if sp_data.cert !== :undefined do
+        sp_data.cert
+      else
+        case Core.Util.load_certificate(certfile) do
+          {:ok, cert_bin} -> cert_bin
+          {:error, reason} -> raise "Failed to load certificate: #{inspect(reason)}"
+        end
+      end
 
     %SpData{sp_data | cert: cert}
   rescue
@@ -117,7 +122,12 @@ defmodule ExSaml.SpData do
   end
 
   defp load_key(%SpData{keyfile: keyfile} = sp_data, %{} = opts_map) do
-    key = :esaml_util.load_private_key(keyfile)
+    key =
+      case Core.Util.load_private_key(keyfile) do
+        {:ok, key} -> key
+        {:error, reason} -> raise "Failed to load private key: #{inspect(reason)}"
+      end
+
     %SpData{sp_data | key: key}
   rescue
     _error ->

@@ -107,5 +107,5 @@ defmodule ExSaml.UI do
   end
 
   defp saml_scope, do: "/api"
-  defp saml_host, do: Application.get_env(Cleeck.Umbrella, :saml_url)
+  defp saml_host, do: Application.get_env(ExSaml, :saml_url)
 end

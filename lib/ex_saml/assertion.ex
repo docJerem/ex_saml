@@ -11,8 +11,9 @@ defmodule ExSaml.Assertion do
   it will check in `attributes` next.
   """
 
-  require ExSaml.Esaml
-  alias ExSaml.{Esaml, Subject}
+  alias ExSaml.Subject
+
+  require Logger
 
   @type attr_name_t :: String.t()
   @type attr_value_t :: String.t() | [String.t()]
@@ -41,30 +42,37 @@ defmodule ExSaml.Assertion do
           idp_id: String.t()
         }
 
-  @doc false
-  def from_rec(assertion_rec) do
-    Esaml.esaml_assertion(
-      version: version,
-      issue_instant: issue_instant,
-      recipient: recipient,
-      issuer: issuer,
-      subject: subject_rec,
-      conditions: conditions,
-      attributes: attributes,
-      authn: authn
-    ) = assertion_rec
+  def get_from_code(code) do
+    case ExSaml.AuthorizationCodeCache.take(code) do
+      {idp_id, _} = key ->
+        case ExSaml.AssertionCache.get(key) do
+          %__MODULE__{attributes: assertion} -> {:ok, {idp_id, assertion}}
+          _ -> {:error, assertion: :not_found}
+        end
 
+      _ ->
+        Logger.info("Authorization code expired")
+        {:error, :unauthorized}
+    end
+  end
+
+  @doc false
+  def from_core(%ExSaml.Core.Assertion{} = core) do
     %__MODULE__{
-      version: List.to_string(version),
-      issue_instant: List.to_string(issue_instant),
-      recipient: List.to_string(recipient),
-      issuer: List.to_string(issuer),
-      subject: Subject.from_rec(subject_rec),
-      conditions: conditions |> stringize(),
-      attributes: attributes |> stringize(),
-      authn: authn |> stringize()
+      version: to_string_safe(core.version),
+      issue_instant: to_string_safe(core.issue_instant),
+      recipient: to_string_safe(core.recipient),
+      issuer: to_string_safe(core.issuer),
+      subject: Subject.from_core(core.subject),
+      conditions: core.conditions |> stringize(),
+      attributes: core.attributes |> stringize(),
+      authn: core.authn |> stringize()
     }
   end
+
+  defp to_string_safe(val) when is_list(val), do: List.to_string(val)
+  defp to_string_safe(val) when is_binary(val), do: val
+  defp to_string_safe(_), do: ""
 
   defp stringize(proplist) do
     proplist
@@ -77,6 +85,9 @@ defmodule ExSaml.Assertion do
 
       {k, v} when is_list(v) ->
         {to_string(k), List.to_string(v)}
+
+      {k, v} ->
+        {to_string(k), to_string(v)}
     end)
     |> Enum.into(%{})
   end

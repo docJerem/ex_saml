@@ -27,13 +27,14 @@ defmodule ExSaml.AuthHandler do
   def request_idp(conn, idp_id) do
     conn = put_private(conn, :ex_saml_idp, ExSaml.Helper.get_idp(idp_id))
 
-    %IdpData{id: ^idp_id, esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} =
+    %IdpData{id: ^idp_id, idp_metadata: idp_meta, sp_config: sp_cfg} =
       idp = conn.private[:ex_saml_idp]
 
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    sp = ensure_sp_uris_set(sp_cfg, conn)
     assertion_key = get_session(conn, "ex_saml_assertion_key")
     relay_state = State.gen_id()
     session_id = get_session(conn, :session_id)
+    target_url = conn.private[:ex_saml_target_url] || "/"
 
     RelayStateCache.put(
       relay_state,
@@ -44,14 +45,14 @@ defmodule ExSaml.AuthHandler do
           fetch_cookies(conn, encrypted: ~w(saml_nonce)).cookies["saml_nonce"] || UUID.uuid4(),
         idp_id: idp_id,
         user_token: get_session(conn, :user_token),
-        redirect_uri: get_session(conn, :redirect_uri)
-        # target_url: target_url
+        redirect_uri: get_session(conn, :redirect_uri),
+        target_url: target_url
       },
       ttl: @relay_state_cache_ttl
     )
 
     {idp_signin_url, req_xml_frag} =
-      Helper.gen_idp_signin_req(sp, idp_rec, Map.get(idp, :nameid_format))
+      Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
 
     conn
     |> State.delete_assertion(assertion_key)
@@ -60,8 +61,7 @@ defmodule ExSaml.AuthHandler do
     |> configure_session(renew: true)
     |> put_session("relay_state", relay_state)
     |> put_session("idp_id", idp_id)
-    # |> put_session("target_url", target_url)
-    #
+    |> put_session("target_url", target_url)
     |> send_saml_request(
       idp_signin_url,
       idp.use_redirect_for_req,
@@ -79,8 +79,8 @@ defmodule ExSaml.AuthHandler do
   """
   def send_signin_req(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
-    %IdpData{esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} = idp
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    %IdpData{idp_metadata: idp_meta, sp_config: sp_cfg} = idp
+    sp = ensure_sp_uris_set(sp_cfg, conn)
 
     target_url = conn.private[:ex_saml_target_url] || "/"
     assertion_key = get_session(conn, "ex_saml_assertion_key")
@@ -110,7 +110,7 @@ defmodule ExSaml.AuthHandler do
         )
 
         {idp_signin_url, req_xml_frag} =
-          Helper.gen_idp_signin_req(sp, idp_rec, Map.get(idp, :nameid_format))
+          Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
 
         conn
         |> State.delete_assertion(assertion_key)
@@ -141,8 +141,8 @@ defmodule ExSaml.AuthHandler do
   """
   def send_signout_req(conn) do
     %IdpData{id: idp_id} = idp = conn.private[:ex_saml_idp]
-    %IdpData{esaml_idp_rec: idp_rec, esaml_sp_rec: sp_rec} = idp
-    sp = ensure_sp_uris_set(sp_rec, conn)
+    %IdpData{idp_metadata: idp_meta, sp_config: sp_cfg} = idp
+    sp = ensure_sp_uris_set(sp_cfg, conn)
 
     target_url = conn.private[:ex_saml_target_url] || "/"
     assertion_key = get_session(conn, "ex_saml_assertion_key")
@@ -150,10 +150,10 @@ defmodule ExSaml.AuthHandler do
     case State.get_assertion(conn, assertion_key) do
       %Assertion{idp_id: ^idp_id, authn: authn, subject: subject} ->
         session_index = Map.get(authn, "session_index", "")
-        subject_rec = Subject.to_rec(subject)
+        core_subject = Subject.to_core(subject)
 
         {idp_signout_url, req_xml_frag} =
-          Helper.gen_idp_signout_req(sp, idp_rec, subject_rec, session_index)
+          Helper.gen_idp_signout_req(sp, idp_meta, core_subject, session_index)
 
         conn = State.delete_assertion(conn, assertion_key)
         relay_state = State.gen_id()
