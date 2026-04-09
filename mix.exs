@@ -2,7 +2,7 @@ defmodule ExSaml.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/docJerem/ex_saml"
-  @version "1.0.0"
+  @version "1.0.1"
 
   def project do
     [
