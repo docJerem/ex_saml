@@ -66,6 +66,8 @@ jobs:
   quality:
     name: Code quality
     runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
 
     steps:
       - uses: actions/checkout@v4
