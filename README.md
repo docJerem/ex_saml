@@ -208,6 +208,17 @@ ExSaml.SPHandler (metadata, ACS, SLO)
 ExSaml.State (assertion storage: ETS | Session | Cache)
 ```
 
+## Security
+
+ExSaml includes hardened defaults for SAML processing:
+
+- **XXE protection** — All XML parsing uses `allow_entities: false` ([CVE-2026-28809](https://cna.erlef.org/cves/CVE-2026-28809.html))
+- **NotBefore validation** — Assertions are rejected if issued in the future (with 5s clock skew tolerance)
+- **Algorithm whitelist** — Unknown signature algorithms return a clean error instead of crashing; RSA-SHA1 is rejected
+- **Namespace-conformant parsing** — All `xmerl_scan` calls enforce `namespace_conformant: true`
+
+To report a security issue, email security@cryptr.co.
+
 ## Migrating from Samly
 
 If you're coming from [Samly](https://hex.pm/packages/samly) or the [Dropbox fork](https://github.com/dropbox/samly), see the [Migration Guide](guides/migrating_from_samly.md) for a step-by-step walkthrough covering module renaming, config changes, removed features, and a migration checklist.
