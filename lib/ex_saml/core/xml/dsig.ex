@@ -304,7 +304,8 @@ defmodule ExSaml.Core.Xml.Dsig do
              | :cert_not_accepted
              | :no_signature
              | :multiple_signatures
-             | :insecure_algorithm}
+             | :insecure_algorithm
+             | :unsupported_algorithm}
   def verify(element, fingerprints) do
     ds_ns = [
       {~c"ds", :"http://www.w3.org/2000/09/xmldsig#"},
@@ -335,6 +336,11 @@ defmodule ExSaml.Core.Xml.Dsig do
 
           {hash_function, _, _} ->
             do_verify(element, fingerprints, hash_function, ds_ns)
+
+          :unsupported_algorithm ->
+            require Logger
+            Logger.error("[ExSaml.Core] Unsupported signature algorithm: #{algo}")
+            {:error, :unsupported_algorithm}
         end
 
       _ ->
@@ -467,4 +473,6 @@ defmodule ExSaml.Core.Xml.Dsig do
     {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
      "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"}
   end
+
+  def signature_props(_unknown), do: :unsupported_algorithm
 end

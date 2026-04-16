@@ -851,6 +851,7 @@ defmodule ExSaml.Core.Saml do
         with :ok <- validate_version(assertion),
              :ok <- validate_recipient(assertion, recipient),
              :ok <- validate_audience(assertion, audience),
+             :ok <- check_not_before(assertion),
              :ok <- check_stale(assertion) do
           {:ok, assertion}
         end
@@ -876,6 +877,32 @@ defmodule ExSaml.Core.Saml do
       "" -> :ok
       ^challenged_aud -> :ok
       _ -> {:error, :bad_audience}
+    end
+  end
+
+  # 5-second clock skew tolerance for NotBefore validation
+  @not_before_skew_secs 5
+
+  @doc false
+  defp check_not_before(%Assertion{conditions: conditions}) do
+    case Keyword.get(conditions, :not_before) do
+      nil ->
+        :ok
+
+      not_before ->
+        now = :erlang.localtime() |> :erlang.localtime_to_universaltime()
+        now_secs = :calendar.datetime_to_gregorian_seconds(now)
+
+        nb_secs =
+          not_before
+          |> Util.saml_to_datetime()
+          |> :calendar.datetime_to_gregorian_seconds()
+
+        if now_secs >= nb_secs - @not_before_skew_secs do
+          :ok
+        else
+          {:error, :too_early}
+        end
     end
   end
 
