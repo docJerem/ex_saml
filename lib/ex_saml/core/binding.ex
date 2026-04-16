@@ -41,7 +41,7 @@ defmodule ExSaml.Core.Binding do
       |> :zlib.unzip()
       |> to_charlist()
 
-    {xml, _} = :xmerl_scan.string(xml_data, namespace_conformant: true)
+    {xml, _} = :xmerl_scan.string(xml_data, namespace_conformant: true, allow_entities: false)
     xml
   end
 
@@ -57,7 +57,7 @@ defmodule ExSaml.Core.Binding do
         _kind, _reason -> to_charlist(data)
       end
 
-    {xml, _} = :xmerl_scan.string(xml_data, namespace_conformant: true)
+    {xml, _} = :xmerl_scan.string(xml_data, namespace_conformant: true, allow_entities: false)
     xml
   end
 
