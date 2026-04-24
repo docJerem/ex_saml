@@ -579,4 +579,59 @@ defmodule ExSaml.Core.SamlTest do
                Saml.validate_assertion(elem, "foobar", "foo")
     end
   end
+
+  describe "to_xml/1 for SpMetadata" do
+    alias ExSaml.Core.{Contact, Org, SpMetadata}
+
+    defp render_sp_metadata(overrides \\ []) do
+      defaults = [
+        entity_id: ~c"https://sp.example.com/saml",
+        consumer_location: ~c"https://sp.example.com/saml/acs",
+        logout_location: ~c"https://sp.example.com/saml/slo",
+        org: %Org{name: ~c"Example", displayname: ~c"Example Org", url: ~c"https://example.com"},
+        tech: %Contact{name: ~c"Admin", email: ~c"admin@example.com"}
+      ]
+
+      metadata = struct!(SpMetadata, Keyword.merge(defaults, overrides))
+
+      metadata
+      |> Saml.to_xml()
+      |> then(&:xmerl.export([&1], :xmerl_xml))
+      |> IO.iodata_to_binary()
+    end
+
+    test "emits a single AssertionConsumerService using HTTP-POST" do
+      xml = render_sp_metadata()
+
+      acs_lines =
+        xml
+        |> String.split(~r/>\s*</)
+        |> Enum.filter(&String.contains?(&1, "AssertionConsumerService"))
+
+      assert length(acs_lines) == 1
+
+      acs = hd(acs_lines)
+      assert acs =~ "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+      assert acs =~ ~s(isDefault="true")
+      assert acs =~ ~s(index="0")
+    end
+
+    test "never emits an HTTP-Redirect binding inside an AssertionConsumerService" do
+      xml = render_sp_metadata()
+
+      # Extract just the SPSSODescriptor payload to avoid matching the SLO's HTTP-Redirect binding.
+      refute xml =~
+               ~r/AssertionConsumerService[^>]*urn:oasis:names:tc:SAML:2\.0:bindings:HTTP-Redirect/
+
+      refute xml =~
+               ~r/urn:oasis:names:tc:SAML:2\.0:bindings:HTTP-Redirect[^>]*AssertionConsumerService/
+    end
+
+    test "generated metadata passes ExSaml.Metadata.validate/1" do
+      xml = render_sp_metadata()
+
+      assert {:ok, %ExSaml.Metadata.ValidationResult{errors: [], warnings: []}} =
+               ExSaml.Metadata.validate(xml)
+    end
+  end
 end

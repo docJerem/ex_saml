@@ -1197,17 +1197,6 @@ defmodule ExSaml.Core.Saml do
           ),
           xmlAttribute(name: :Location, value: consumer_loc)
         ]
-      ),
-      xmlElement(
-        name: :"md:AssertionConsumerService",
-        attributes: [
-          xmlAttribute(name: :index, value: ~c"1"),
-          xmlAttribute(
-            name: :Binding,
-            value: ~c"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
-          ),
-          xmlAttribute(name: :Location, value: consumer_loc)
-        ]
       )
     ]
 
