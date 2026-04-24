@@ -1185,6 +1185,11 @@ defmodule ExSaml.Core.Saml do
           ]
       end
 
+    # HTTP-POST is the only binding advertised here, even when the provider
+    # uses `use_redirect_for_req: true`. Per SAML 2.0 Bindings §3.4.3 and
+    # Profiles §4.1.3.5, HTTP-Redirect is forbidden for AssertionConsumerService.
+    # See `ExSaml.Core.Binding` moduledoc for the asymmetric request/response
+    # binding model.
     assertion_consumer_elems = [
       xmlElement(
         name: :"md:AssertionConsumerService",
