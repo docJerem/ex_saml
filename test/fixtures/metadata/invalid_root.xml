@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration xmlns="http://example.com/cfg">
+  <entry name="foo" value="bar"/>
+</configuration>

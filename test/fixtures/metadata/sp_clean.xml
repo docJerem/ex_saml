@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                     entityID="https://sp.example.com/saml">
+  <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                            Location="https://sp.example.com/saml/slo"/>
+    <md:AssertionConsumerService index="0"
+                                 isDefault="true"
+                                 Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                                 Location="https://sp.example.com/saml/acs"/>
+  </md:SPSSODescriptor>
+</md:EntityDescriptor>
