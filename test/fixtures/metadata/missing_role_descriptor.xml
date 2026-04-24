@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                     entityID="https://sp.example.com/saml">
+  <md:Organization>
+    <md:OrganizationName xml:lang="en">Example</md:OrganizationName>
+    <md:OrganizationDisplayName xml:lang="en">Example</md:OrganizationDisplayName>
+    <md:OrganizationURL xml:lang="en">https://example.com</md:OrganizationURL>
+  </md:Organization>
+</md:EntityDescriptor>
