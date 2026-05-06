@@ -497,7 +497,7 @@ defmodule ExSaml.Core.Util do
   @doc """
   No-op kept for backwards compatibility.
 
-  ETS tables are managed by `ExSaml.Core.TableOwner`. This function verifies
+  ETS tables are managed by an internal supervisor. This function verifies
   that the expected tables exist and returns `:ok`.
   """
   @spec start_ets() :: :ok
