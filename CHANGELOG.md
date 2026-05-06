@@ -7,13 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-06
+
 ### Added
 
 - `ExSaml.Metadata.validate/1,2` and `ExSaml.Metadata.ValidationResult` for structural / SAML 2.0 spec-conformance validation of SP and IdP metadata (#20)
 
 ### Fixed
 
+- SAMLResponse parsing no longer crashes with `{:wfc_Legal_Character, {:bad_character, _}}` on assertions containing non-ASCII characters (e.g. accented names). `xmerl_scan` was being fed pre-decoded Unicode codepoints via `to_charlist/1`; it now receives raw UTF-8 bytes via `:binary.bin_to_list/1` (#22)
 - SP metadata generator no longer emits an `AssertionConsumerService` with the `HTTP-Redirect` binding, which violated SAML 2.0 Bindings §3.4.3 and Profiles §4.1.3.5 (#19)
+
+### Documentation
+
+- Drop ExDoc autolink to the hidden `ExSaml.Core.TableOwner` module in `start_ets/0`'s docstring (#23)
 
 ## [1.0.2] - 2026-04-16
 
@@ -56,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unused routes and pre-session create pipeline from Samly
 - Hardcoded Nebulex cache — replaced with delegate pattern
 
+[1.1.0]: https://github.com/docJerem/ex_saml/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/docJerem/ex_saml/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/docJerem/ex_saml/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/docJerem/ex_saml/releases/tag/v1.0.0
