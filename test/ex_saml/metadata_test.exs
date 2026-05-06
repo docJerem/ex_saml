@@ -38,6 +38,42 @@ defmodule ExSaml.MetadataTest do
       assert {:error, %ValidationResult{errors: [%{code: :invalid_xml}]}} =
                Metadata.validate("")
     end
+
+    # Regression: parse/1 used to call String.to_charlist on the raw UTF-8
+    # binary, producing a list of codepoints. xmerl_scan expects raw UTF-8
+    # bytes and crashed with {:wfc_Legal_Character, {:bad_character, _}} on
+    # any non-ASCII character (e.g. an Organization name with an accent).
+    for {label, sample} <- [
+          {"latin-1 supplement (é)", "Société Élysée SAS"},
+          {"german umlaut (ü/ß)", "Müller Straße GmbH"},
+          {"polish (Ł)", "Łukasz Sp. z o.o."},
+          {"euro sign (€)", "10€ Org"},
+          {"greek (Ω)", "ΩΑΘ Foundation"},
+          {"cyrillic", "Иван Lab"},
+          {"chinese", "中文公司"},
+          {"emoji (🎉)", "Party 🎉 Inc."}
+        ] do
+      test "parses metadata containing #{label} without crashing" do
+        xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                             entityID="https://sp.example.com/saml">
+          <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+            <md:AssertionConsumerService index="0" isDefault="true"
+                                         Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                                         Location="https://sp.example.com/saml/acs"/>
+          </md:SPSSODescriptor>
+          <md:Organization>
+            <md:OrganizationName xml:lang="fr">#{unquote(sample)}</md:OrganizationName>
+            <md:OrganizationDisplayName xml:lang="fr">#{unquote(sample)}</md:OrganizationDisplayName>
+            <md:OrganizationURL xml:lang="fr">https://example.com</md:OrganizationURL>
+          </md:Organization>
+        </md:EntityDescriptor>
+        """
+
+        assert {:ok, %ValidationResult{}} = Metadata.validate(xml)
+      end
+    end
   end
 
   describe "root element" do

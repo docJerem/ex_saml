@@ -14,9 +14,39 @@ defmodule ExSaml.Core.BindingTest do
 
   Record.defrecord(:xmlText, Record.extract(:xmlText, from_lib: "xmerl/include/xmerl.hrl"))
 
+  Record.defrecord(
+    :xmlAttribute,
+    Record.extract(:xmlAttribute, from_lib: "xmerl/include/xmerl.hrl")
+  )
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
+
+  # Concatenates the text content of every direct xmlText child of `elem`
+  # (xmerl returns text as charlists of codepoints).
+  defp text_value(elem) do
+    elem
+    |> xmlElement(:content)
+    |> Enum.flat_map(fn
+      child when Record.is_record(child, :xmlElement) ->
+        child |> xmlElement(:content) |> Enum.flat_map(&extract_text/1)
+
+      other ->
+        extract_text(other)
+    end)
+  end
+
+  defp extract_text(node) when Record.is_record(node, :xmlText), do: xmlText(node, :value)
+  defp extract_text(_), do: []
+
+  defp attribute_value(elem, name) do
+    elem
+    |> xmlElement(:attributes)
+    |> Enum.find_value(fn attr ->
+      if xmlAttribute(attr, :name) == name, do: xmlAttribute(attr, :value)
+    end)
+  end
 
   defp simple_request_element do
     # Build a minimal <AuthnRequest/> xmerl element
@@ -158,6 +188,105 @@ defmodule ExSaml.Core.BindingTest do
 
       assert Record.is_record(decoded, :xmlElement)
       assert xmlElement(decoded, :name) == :Response
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # decode_response/2 — UTF-8 character regression
+  #
+  # Reproduces a production crash where xmerl_scan rejected character 233 (é)
+  # because the XML byte stream had been pre-decoded into Unicode codepoints
+  # via `to_charlist/1` before being handed to xmerl. xmerl expects a list of
+  # raw UTF-8 bytes and does its own decoding. The fix passes the bytes via
+  # `:binary.bin_to_list/1`. These tests guard the regression across the full
+  # UTF-8 range (2-byte, 3-byte, 4-byte sequences) and across both decode
+  # paths (DEFLATE and plain base64), in text content and in attribute values.
+  # ---------------------------------------------------------------------------
+
+  describe "decode_response/2 — non-ASCII (UTF-8) regression" do
+    # {label, sample, expected_codepoints}
+    @utf8_samples [
+      # 2-byte UTF-8 — Latin-1 Supplement
+      {"french é (the prod case)", "Hélène", [?H, 233, ?l, 232, ?n, ?e]},
+      {"french é + space", "Émilie Côté", [?É, ?m, ?i, ?l, ?i, ?e, ?\s, ?C, ?ô, ?t, ?é]},
+      {"spanish ñ", "Núñez", [?N, ?ú, ?ñ, ?e, ?z]},
+      {"german ß", "Straße", [?S, ?t, ?r, ?a, ?ß, ?e]},
+      {"german umlaut ü", "Müller", [?M, ?ü, ?l, ?l, ?e, ?r]},
+      {"nordic ø", "Bjørn", [?B, ?j, ?ø, ?r, ?n]},
+      # 2-byte UTF-8 — Latin Extended
+      {"polish ł", "Łukasz", [?Ł, ?u, ?k, ?a, ?s, ?z]},
+      {"czech č", "Černý", [?Č, ?e, ?r, ?n, ?ý]},
+      # 3-byte UTF-8 — BMP
+      {"euro sign €", "10€", [?1, ?0, ?€]},
+      {"greek Ω", "ΩΑΘ", [?Ω, ?Α, ?Θ]},
+      {"cyrillic", "Иван", [?И, ?в, ?а, ?н]},
+      {"chinese", "中文", [?中, ?文]},
+      {"japanese", "日本語", [?日, ?本, ?語]},
+      # 4-byte UTF-8 — supplementary planes (emoji)
+      {"emoji 🎉", "party 🎉", [?p, ?a, ?r, ?t, ?y, ?\s, 0x1F389]}
+    ]
+
+    for {label, sample, expected} <- @utf8_samples do
+      test "decodes #{label} in element text (non-deflate)" do
+        sample = unquote(sample)
+        expected = unquote(expected)
+
+        xml = "<Response><Name>" <> sample <> "</Name></Response>"
+        b64 = Base.encode64(xml)
+
+        decoded = Binding.decode_response("", b64)
+
+        assert Record.is_record(decoded, :xmlElement)
+        assert xmlElement(decoded, :name) == :Response
+        assert text_value(decoded) == expected
+      end
+
+      test "decodes #{label} in attribute value (non-deflate)" do
+        sample = unquote(sample)
+        # We escape only the chars that need escaping in attribute values.
+        attr = sample |> String.replace("\"", "&quot;") |> String.replace("&", "&amp;")
+        xml = "<Response label=\"" <> attr <> "\"><Name>x</Name></Response>"
+        b64 = Base.encode64(xml)
+
+        decoded = Binding.decode_response("", b64)
+
+        assert Record.is_record(decoded, :xmlElement)
+        assert attribute_value(decoded, :label) == unquote(expected)
+      end
+
+      test "decodes #{label} in element text (DEFLATE)" do
+        sample = unquote(sample)
+        expected = unquote(expected)
+
+        xml = "<Response><Name>" <> sample <> "</Name></Response>"
+        b64 = xml |> :zlib.zip() |> Base.encode64()
+
+        decoded =
+          Binding.decode_response(
+            "urn:oasis:names:tc:SAML:2.0:bindings:URL-Encoding:DEFLATE",
+            b64
+          )
+
+        assert Record.is_record(decoded, :xmlElement)
+        assert text_value(decoded) == expected
+      end
+    end
+
+    test "decodes a realistic SAMLResponse with multiple accented AttributeValues" do
+      xml =
+        ~s(<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ) <>
+          ~s(xmlns="urn:oasis:names:tc:SAML:2.0:assertion">) <>
+          "<Assertion><AttributeStatement>" <>
+          ~s(<Attribute Name="given_name"><AttributeValue>Anaïs</AttributeValue></Attribute>) <>
+          ~s(<Attribute Name="family_name"><AttributeValue>Lefèvre-Béchamp</AttributeValue></Attribute>) <>
+          ~s(<Attribute Name="display"><AttributeValue>Müller — €10 🎉</AttributeValue></Attribute>) <>
+          "</AttributeStatement></Assertion></samlp:Response>"
+
+      b64 = Base.encode64(xml)
+      decoded = Binding.decode_response("", b64)
+
+      assert Record.is_record(decoded, :xmlElement)
+      assert xmlElement(decoded, :name) == :"samlp:Response"
     end
   end
 
