@@ -517,7 +517,7 @@ defmodule ExSaml.Core.Sp do
     assertion_xml = block_decrypt(to_string(algorithm), symmetric_key, cipher_value)
 
     {assertion, _} =
-      :xmerl_scan.string(to_charlist(assertion_xml),
+      :xmerl_scan.string(:binary.bin_to_list(assertion_xml),
         namespace_conformant: true,
         allow_entities: false
       )

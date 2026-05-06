@@ -66,7 +66,7 @@ defmodule ExSaml.Core.Binding do
       saml_response
       |> :base64.decode()
       |> :zlib.unzip()
-      |> to_charlist()
+      |> :binary.bin_to_list()
 
     {xml, _} = :xmerl_scan.string(xml_data, namespace_conformant: true, allow_entities: false)
     xml
@@ -77,11 +77,11 @@ defmodule ExSaml.Core.Binding do
 
     xml_data =
       try do
-        :zlib.unzip(data) |> to_charlist()
+        :zlib.unzip(data) |> :binary.bin_to_list()
       rescue
-        _e -> to_charlist(data)
+        _e -> :binary.bin_to_list(data)
       catch
-        _kind, _reason -> to_charlist(data)
+        _kind, _reason -> :binary.bin_to_list(data)
       end
 
     {xml, _} = :xmerl_scan.string(xml_data, namespace_conformant: true, allow_entities: false)

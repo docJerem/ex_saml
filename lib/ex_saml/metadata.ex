@@ -100,7 +100,7 @@ defmodule ExSaml.Metadata do
   # ---------------------------------------------------------------------------
 
   defp parse(xml) do
-    charlist = String.to_charlist(xml)
+    charlist = :binary.bin_to_list(xml)
 
     try do
       {root, _rest} =
