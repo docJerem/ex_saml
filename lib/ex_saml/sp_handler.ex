@@ -296,9 +296,15 @@ defmodule ExSaml.SPHandler do
     #     conn |> send_resp(500, "request_failed")
   end
 
-  @doc "Returns the target URL from session or relay state cache."
+  @doc """
+  Returns the target URL from session or relay state cache, falling back
+  to `target_url/0` (`Application.get_env(:ex_saml, :fallback_target_url, "/")`)
+  when neither is set. Never returns `nil` — callers can safely pass the
+  result to `Plug.Conn.put_resp_header/3`.
+  """
   def target_url(conn, relay_state) do
-    get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url]
+    get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] ||
+      target_url()
   end
 
   @doc "Returns the fallback target URL from application config (defaults to `\"/\"`)."
