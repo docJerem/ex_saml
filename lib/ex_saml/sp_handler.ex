@@ -57,8 +57,21 @@ defmodule ExSaml.SPHandler do
   @doc """
   Processes the IdP sign-in response and extracts the SAML assertion.
 
-  Returns `{:ok, %{assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
-  on success, or `{:error, reason}` on failure.
+  On success returns
+  `{:ok, %{flow: flow, assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
+  where:
+
+    * `flow` is `:idp_initiated` or `:sp_initiated` and reflects which SAML flow
+      produced the response (deduced from the assertion's `SubjectConfirmationData`
+      `InResponseTo` — empty means IdP-initiated).
+    * `nonce` is the AuthnRequest-bound SAML nonce for SP-initiated flows, and
+      `nil` for IdP-initiated flows (no AuthnRequest exists in that case, so no
+      nonce is generated; downstream consumers must accept `nil` for the
+      IdP-initiated case).
+
+  On failure returns `{:error, reason}`. Possible reasons include
+  `:idp_initiated_not_allowed`, `:invalid_target_url`, `:invalid_relay_state`,
+  `:invalid_idp_id`, and `:access_denied`.
   """
   # Router-facing clause: matches when the SP router dispatched here with
   # `idp_id` in path params. Performs the full SAML flow AND handles the
@@ -112,9 +125,10 @@ defmodule ExSaml.SPHandler do
     redirect_uri = RelayStateCache.get(relay_state)[:redirect_uri]
 
     with {:ok, assertion} <- Helper.decode_idp_auth_resp(sp, saml_encoding, saml_response),
-         {:ok, nonce} <- validate_authresp(conn, idp_data, assertion, relay_state) do
+         {:ok, flow, nonce} <- validate_authresp(conn, idp_data, assertion, relay_state) do
       {:ok,
        %{
+         flow: flow,
          assertion: %Assertion{assertion | idp_id: idp_id},
          nonce: nonce,
          user_token: user_token,
@@ -122,7 +136,6 @@ defmodule ExSaml.SPHandler do
        }}
     else
       {:error, error} -> {:error, error}
-      _ -> {:error, :access_denied}
     end
   end
 
@@ -169,22 +182,24 @@ defmodule ExSaml.SPHandler do
     get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] || "/"
   end
 
-  # IDP-initiated flow auth response
-  defp validate_authresp(_conn, idp_data, %{subject: %{in_response_to: ""}}, relay_state) do
+  # IdP-initiated flow auth response. Tagged as `:idp_initiated` with a `nil`
+  # nonce since there is no AuthnRequest to bind a nonce to in this flow.
+  @doc false
+  def validate_authresp(_conn, idp_data, %{subject: %{in_response_to: ""}}, relay_state) do
     cond do
       !idp_data.allow_idp_initiated_flow ->
-        {:error, :idp_first_flow_not_allowed}
+        {:error, :idp_initiated_not_allowed}
 
       idp_data.allowed_target_urls && relay_state not in idp_data.allowed_target_urls ->
         {:error, :invalid_target_url}
 
       true ->
-        :ok
+        {:ok, :idp_initiated, nil}
     end
   end
 
-  # SP-initiated flow auth response
-  defp validate_authresp(conn, %IdpData{id: idp_id}, _assertion, relay_state) do
+  # SP-initiated flow auth response.
+  def validate_authresp(conn, %IdpData{id: idp_id}, _assertion, relay_state) do
     rs_in_session =
       get_session(conn, "relay_state") || RelayStateCache.get(relay_state)[:relay_state]
 
@@ -192,8 +207,6 @@ defmodule ExSaml.SPHandler do
 
     saml_nonce_in_session =
       get_session(conn, "saml_nonce") || RelayStateCache.get(relay_state)[:saml_nonce]
-
-    # RelayStateCache.delete(relay_state)
 
     cond do
       rs_in_session == nil || rs_in_session != relay_state ->
@@ -203,7 +216,7 @@ defmodule ExSaml.SPHandler do
         {:error, :invalid_idp_id}
 
       true ->
-        {:ok, saml_nonce_in_session}
+        {:ok, :sp_initiated, saml_nonce_in_session}
     end
   end
 

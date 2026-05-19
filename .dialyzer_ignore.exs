@@ -3,5 +3,5 @@
   # Provably unreachable today, kept intentionally so the auth endpoint fails
   # closed (HTTP 403) if a future change introduces a new return shape.
   # See lib/ex_saml/sp_handler.ex for the inline rationale.
-  ~r/lib\/ex_saml\/sp_handler\.ex:95:.*pattern_match_cov/
+  ~r/lib\/ex_saml\/sp_handler\.ex:108:.*pattern_match_cov/
 ]
