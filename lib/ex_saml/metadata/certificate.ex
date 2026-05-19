@@ -1,23 +1,23 @@
 defmodule ExSaml.Metadata.Certificate do
-  @moduledoc false
+  @moduledoc """
+  Certificate-level metadata validation rules.
 
-  # Certificate-level metadata validation rules.
-  #
-  # Iterates every `<md:KeyDescriptor>` declared under an `<md:SPSSODescriptor>`
-  # or `<md:IDPSSODescriptor>` and emits violations for the structural and
-  # validity expectations of PR 2:
-  #
-  #   * `:missing_x509_certificate` — KeyDescriptor without a non-empty
-  #     `<ds:X509Certificate>` text node.
-  #   * `:invalid_x509_certificate` — text that does not decode as base64 DER
-  #     or whose ASN.1 structure cannot be parsed by `:public_key`.
-  #   * `:certificate_expired` — parseable certificate whose `notAfter` is in
-  #     the past relative to `DateTime.utc_now/0`. Silence-able via
-  #     `ExSaml.Metadata.validate/2`'s `:ignore` option.
-  #
-  # Best-practice rules that depend on certificate inspection (CA detection,
-  # KeyUsage linting, shared signing/encryption certificate) live in the next
-  # batch of rules alongside strict-mode plumbing — see issue #17 PR 3.
+  Iterates every `<md:KeyDescriptor>` declared under an `<md:SPSSODescriptor>`
+  or `<md:IDPSSODescriptor>` and emits violations for the structural and
+  validity expectations of PR 2:
+
+    * `:missing_x509_certificate` — KeyDescriptor without a non-empty
+      `<ds:X509Certificate>` text node.
+    * `:invalid_x509_certificate` — text that does not decode as base64 DER
+      or whose ASN.1 structure cannot be parsed by `:public_key`.
+    * `:certificate_expired` — parseable certificate whose `notAfter` is in
+      the past relative to `DateTime.utc_now/0`. Silence-able via
+      `ExSaml.Metadata.validate/2`'s `:ignore` option.
+
+  Best-practice rules that depend on certificate inspection (CA detection,
+  KeyUsage linting, shared signing/encryption certificate) live in the next
+  batch of rules alongside strict-mode plumbing — see issue #17 PR 3.
+  """
 
   alias ExSaml.Metadata.ValidationResult
 

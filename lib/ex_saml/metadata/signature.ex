@@ -1,22 +1,22 @@
 defmodule ExSaml.Metadata.Signature do
-  @moduledoc false
+  @moduledoc """
+  Structural validation of `<ds:Signature>` elements declared inside SAML
+  metadata. Emits three always-error violations:
 
-  # Structural validation of `<ds:Signature>` elements declared inside SAML
-  # metadata. Emits three always-error violations:
-  #
-  #   * `:invalid_signature_structure` — a `<ds:Signature>` is present but
-  #     missing one of the mandatory XML-DSig children (`SignedInfo`,
-  #     `SignatureValue`, `SignedInfo/SignatureMethod`, `SignedInfo/Reference`,
-  #     `Reference/DigestMethod`, `Reference/DigestValue`).
-  #   * `:unknown_signature_algorithm` — `<ds:SignatureMethod Algorithm>` is
-  #     not in the XML-DSig / xmldsig-more spec-defined set. Deprecated but
-  #     spec-defined values (RSA-SHA1, etc.) are still recognized here; the
-  #     dedicated `:deprecated_signature_algorithm` rule ships with PR 3 and
-  #     its strict-mode promotion.
-  #   * `:unknown_digest_algorithm` — same idea for `<ds:DigestMethod>`.
-  #
-  # Cryptographic verification of the signature against a trust anchor is
-  # out of scope (see issue #17 "Non-goals").
+    * `:invalid_signature_structure` — a `<ds:Signature>` is present but
+      missing one of the mandatory XML-DSig children (`SignedInfo`,
+      `SignatureValue`, `SignedInfo/SignatureMethod`, `SignedInfo/Reference`,
+      `Reference/DigestMethod`, `Reference/DigestValue`).
+    * `:unknown_signature_algorithm` — `<ds:SignatureMethod Algorithm>` is
+      not in the XML-DSig / xmldsig-more spec-defined set. Deprecated but
+      spec-defined values (RSA-SHA1, etc.) are still recognized here; the
+      dedicated `:deprecated_signature_algorithm` rule ships with PR 3 and
+      its strict-mode promotion.
+    * `:unknown_digest_algorithm` — same idea for `<ds:DigestMethod>`.
+
+  Cryptographic verification of the signature against a trust anchor is
+  out of scope (see issue #17 "Non-goals").
+  """
 
   alias ExSaml.Metadata.ValidationResult
 
