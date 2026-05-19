@@ -33,6 +33,8 @@ defmodule ExSaml.Core.Binding do
   configured with `use_redirect_for_req: true`.
   """
 
+  alias ExSaml.Core.Xml.SafeXml
+
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
@@ -62,14 +64,10 @@ defmodule ExSaml.Core.Binding do
   """
   @spec decode_response(binary(), binary()) :: xml()
   def decode_response(@deflate, saml_response) do
-    xml_data =
-      saml_response
-      |> :base64.decode()
-      |> :zlib.unzip()
-      |> :binary.bin_to_list()
-
-    {xml, _} = :xmerl_scan.string(xml_data, namespace_conformant: true, allow_entities: false)
-    xml
+    saml_response
+    |> :base64.decode()
+    |> :zlib.unzip()
+    |> SafeXml.scan!()
   end
 
   def decode_response(_encoding, saml_response) do
@@ -77,15 +75,14 @@ defmodule ExSaml.Core.Binding do
 
     xml_data =
       try do
-        :zlib.unzip(data) |> :binary.bin_to_list()
+        :zlib.unzip(data)
       rescue
-        _e -> :binary.bin_to_list(data)
+        _e -> data
       catch
-        _kind, _reason -> :binary.bin_to_list(data)
+        _kind, _reason -> data
       end
 
-    {xml, _} = :xmerl_scan.string(xml_data, namespace_conformant: true, allow_entities: false)
-    xml
+    SafeXml.scan!(xml_data)
   end
 
   @doc """
