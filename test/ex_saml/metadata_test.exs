@@ -326,4 +326,168 @@ defmodule ExSaml.MetadataTest do
                Metadata.validate(read_fixture("idp_clean.xml"))
     end
   end
+
+  describe "ds:Signature structural rules" do
+    @valid_sig """
+    <ds:Signature>
+      <ds:SignedInfo>
+        <ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+        <ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+        <ds:Reference URI="">
+          <ds:Transforms>
+            <ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>
+          </ds:Transforms>
+          <ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+          <ds:DigestValue>YWJjZGVm</ds:DigestValue>
+        </ds:Reference>
+      </ds:SignedInfo>
+      <ds:SignatureValue>YmFzZTY0c2lnbmF0dXJl</ds:SignatureValue>
+    </ds:Signature>
+    """
+
+    defp sp_metadata_with_signature(signature_xml) do
+      """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                           xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
+                           entityID="https://sp.example.com/saml">
+        #{signature_xml}
+        <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+          <md:AssertionConsumerService index="0" isDefault="true"
+                                       Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                                       Location="https://sp.example.com/saml/acs"/>
+        </md:SPSSODescriptor>
+      </md:EntityDescriptor>
+      """
+    end
+
+    test "accepts metadata with a structurally valid <ds:Signature>" do
+      xml = sp_metadata_with_signature(@valid_sig)
+
+      assert {:ok, %ValidationResult{errors: [], warnings: []}} = Metadata.validate(xml)
+    end
+
+    test "flags <ds:Signature> without <ds:SignedInfo>" do
+      xml = read_fixture("signature_missing_signed_info.xml")
+
+      assert {:error, %ValidationResult{errors: errors}} = Metadata.validate(xml)
+      assert :invalid_signature_structure in codes(errors)
+
+      err = Enum.find(errors, &(&1.code == :invalid_signature_structure))
+      assert err.path =~ "SignedInfo"
+    end
+
+    test "flags <ds:Signature> without <ds:SignatureValue>" do
+      sig = """
+      <ds:Signature>
+        <ds:SignedInfo>
+          <ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+          <ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+          <ds:Reference URI="">
+            <ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+            <ds:DigestValue>YWJjZGVm</ds:DigestValue>
+          </ds:Reference>
+        </ds:SignedInfo>
+      </ds:Signature>
+      """
+
+      xml = sp_metadata_with_signature(sig)
+
+      assert {:error, %ValidationResult{errors: errors}} = Metadata.validate(xml)
+      assert :invalid_signature_structure in codes(errors)
+      assert Enum.any?(errors, &(&1.path =~ "SignatureValue"))
+    end
+
+    test "flags a <ds:Reference> missing <ds:DigestValue>" do
+      sig = """
+      <ds:Signature>
+        <ds:SignedInfo>
+          <ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+          <ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+          <ds:Reference URI="">
+            <ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+          </ds:Reference>
+        </ds:SignedInfo>
+        <ds:SignatureValue>YmFzZTY0</ds:SignatureValue>
+      </ds:Signature>
+      """
+
+      xml = sp_metadata_with_signature(sig)
+
+      assert {:error, %ValidationResult{errors: errors}} = Metadata.validate(xml)
+
+      err =
+        Enum.find(errors, fn e ->
+          e.code == :invalid_signature_structure and e.path =~ "Reference[1]/DigestValue"
+        end)
+
+      assert err
+    end
+
+    test "flags an unknown SignatureMethod algorithm" do
+      xml = read_fixture("signature_unknown_algorithm.xml")
+
+      assert {:error, %ValidationResult{errors: errors}} = Metadata.validate(xml)
+      assert :unknown_signature_algorithm in codes(errors)
+
+      err = Enum.find(errors, &(&1.code == :unknown_signature_algorithm))
+      assert err.path =~ "SignatureMethod/@Algorithm"
+    end
+
+    test "flags an unknown DigestMethod algorithm" do
+      xml = read_fixture("signature_unknown_digest.xml")
+
+      assert {:error, %ValidationResult{errors: errors}} = Metadata.validate(xml)
+      assert :unknown_digest_algorithm in codes(errors)
+
+      err = Enum.find(errors, &(&1.code == :unknown_digest_algorithm))
+      assert err.path =~ "Reference[1]/DigestMethod/@Algorithm"
+    end
+
+    test "recognises RSA-SHA1 as a known (legacy) signature algorithm" do
+      sig =
+        String.replace(
+          @valid_sig,
+          "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+          "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
+        )
+
+      xml = sp_metadata_with_signature(sig)
+
+      # PR 2 only checks "known" — RSA-SHA1 stays valid here.
+      # PR 3 introduces :deprecated_signature_algorithm to flag it.
+      assert {:ok, %ValidationResult{errors: [], warnings: []}} = Metadata.validate(xml)
+    end
+
+    test ":ignore silences :unknown_signature_algorithm" do
+      xml = read_fixture("signature_unknown_algorithm.xml")
+
+      assert {:ok, %ValidationResult{errors: [], warnings: []}} =
+               Metadata.validate(xml, ignore: [:unknown_signature_algorithm])
+    end
+
+    test "detects a <ds:Signature> nested inside a descriptor" do
+      xml = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                           xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
+                           entityID="https://sp.example.com/saml">
+        <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+          <ds:Signature>
+            <ds:SignatureValue>YmFzZTY0</ds:SignatureValue>
+          </ds:Signature>
+          <md:AssertionConsumerService index="0" isDefault="true"
+                                       Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                                       Location="https://sp.example.com/saml/acs"/>
+        </md:SPSSODescriptor>
+      </md:EntityDescriptor>
+      """
+
+      assert {:error, %ValidationResult{errors: errors}} = Metadata.validate(xml)
+
+      err = Enum.find(errors, &(&1.code == :invalid_signature_structure))
+      assert err
+      assert err.path =~ "SPSSODescriptor/Signature/SignedInfo"
+    end
+  end
 end
