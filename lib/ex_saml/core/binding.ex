@@ -62,12 +62,12 @@ defmodule ExSaml.Core.Binding do
   unzip is attempted, falling back to the raw decoded data if decompression
   fails. The resulting XML string is then parsed with `:xmerl_scan`.
   """
-  @spec decode_response(binary(), binary()) :: xml()
+  @spec decode_response(binary(), binary()) :: {:ok, xml()} | {:error, :invalid_xml}
   def decode_response(@deflate, saml_response) do
     saml_response
     |> :base64.decode()
     |> :zlib.unzip()
-    |> SafeXml.scan!()
+    |> SafeXml.scan()
   end
 
   def decode_response(_encoding, saml_response) do
@@ -82,7 +82,7 @@ defmodule ExSaml.Core.Binding do
         _kind, _reason -> data
       end
 
-    SafeXml.scan!(xml_data)
+    SafeXml.scan(xml_data)
   end
 
   @doc """
