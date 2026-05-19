@@ -780,55 +780,30 @@ defmodule ExSaml.Core.Saml do
   and falls back to issue_instant + 5 minutes.
   """
   @spec stale_time(Assertion.t()) :: integer()
-  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   def stale_time(%Assertion{} = a) do
-    t = :none
-
-    t =
-      case a.subject do
-        %Subject{notonorafter: ""} ->
-          t
-
-        %Subject{notonorafter: restrict} ->
-          secs =
-            restrict
-            |> Util.saml_to_datetime()
-            |> :calendar.datetime_to_gregorian_seconds()
-
-          # Dialyzer flags this `if` as tautological because `t` is provably
-          # `:none` here (variable shadowing inside the `case` body). The
-          # structure is preserved verbatim from upstream arekinath/esaml's
-          # `stale_time/1` to keep behavioral parity and ease future backports.
-          # The corresponding warnings are suppressed in `.dialyzer_ignore.exs`.
-          if t == :none or secs < t, do: secs, else: t
-      end
-
-    t =
-      case Keyword.get(a.conditions, :not_on_or_after) do
-        nil ->
-          t
-
-        restrict ->
-          secs =
-            restrict
-            |> Util.saml_to_datetime()
-            |> :calendar.datetime_to_gregorian_seconds()
-
-          if t == :none or secs < t, do: secs, else: t
-      end
-
-    case t do
-      :none ->
-        ii_secs =
-          a.issue_instant
-          |> Util.saml_to_datetime()
-          |> :calendar.datetime_to_gregorian_seconds()
-
-        ii_secs + 5 * 60
-
-      _ ->
-        t
+    case Enum.reject([subject_expiry(a), conditions_expiry(a)], &is_nil/1) do
+      [] -> issue_instant_secs(a) + 5 * 60
+      candidates -> Enum.min(candidates)
     end
+  end
+
+  defp subject_expiry(%Assertion{subject: %Subject{notonorafter: ""}}), do: nil
+  defp subject_expiry(%Assertion{subject: %Subject{notonorafter: stamp}}), do: to_secs(stamp)
+  defp subject_expiry(_), do: nil
+
+  defp conditions_expiry(%Assertion{conditions: conditions}) do
+    case Keyword.get(conditions, :not_on_or_after) do
+      nil -> nil
+      stamp -> to_secs(stamp)
+    end
+  end
+
+  defp issue_instant_secs(%Assertion{issue_instant: stamp}), do: to_secs(stamp)
+
+  defp to_secs(stamp) do
+    stamp
+    |> Util.saml_to_datetime()
+    |> :calendar.datetime_to_gregorian_seconds()
   end
 
   @doc """
