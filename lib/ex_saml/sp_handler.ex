@@ -136,6 +136,11 @@ defmodule ExSaml.SPHandler do
        }}
     else
       {:error, error} -> {:error, error}
+      # Defensive fallback: unreachable today (Dialyzer flags it as such), but
+      # kept so that any future change introducing a new return shape from the
+      # `with` chain — e.g. a new validator step that forgets the
+      # `{:ok, _, _}` shape — fails closed with `{:error, :access_denied}`
+      # rather than crashing the caller with a `WithClauseError`.
       _ -> {:error, :access_denied}
     end
   end
