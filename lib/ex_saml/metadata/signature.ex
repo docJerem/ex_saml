@@ -156,6 +156,7 @@ defmodule ExSaml.Metadata.Signature do
         |> Enum.with_index(1)
         |> Enum.flat_map(fn {ref, idx} ->
           ref_path = "#{sig_path}/SignedInfo/Reference[#{idx}]"
+
           digest_method_violations(ref, ref_path, namespaces) ++
             digest_value_violations(ref, ref_path, namespaces)
         end)

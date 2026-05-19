@@ -14,6 +14,11 @@ defmodule ExSaml.Test.CertFactory do
     * `:b64`  — base64 DER, suitable for embedding in `<ds:X509Certificate>`
   """
 
+  alias X509.Certificate
+  alias X509.Certificate.Extension
+  alias X509.Certificate.Validity
+  alias X509.PrivateKey
+
   @type cert :: %{der: binary(), pem: binary(), b64: binary()}
 
   @default_subject "/CN=ex_saml-test"
@@ -28,18 +33,18 @@ defmodule ExSaml.Test.CertFactory do
     extensions = Keyword.get(opts, :extensions, [])
     validity = validity_from(opts)
 
-    key = X509.PrivateKey.new_rsa(key_size)
+    key = PrivateKey.new_rsa(key_size)
 
     cert =
-      X509.Certificate.self_signed(key, subject,
+      Certificate.self_signed(key, subject,
         template: template,
         validity: validity,
         extensions: extensions,
         hash: :sha256
       )
 
-    der = X509.Certificate.to_der(cert)
-    pem = X509.Certificate.to_pem(cert)
+    der = Certificate.to_der(cert)
+    pem = Certificate.to_pem(cert)
 
     %{der: der, pem: pem, b64: Base.encode64(der)}
   end
@@ -56,9 +61,8 @@ defmodule ExSaml.Test.CertFactory do
         [
           template: :server,
           extensions: [
-            basic_constraints: X509.Certificate.Extension.basic_constraints(false),
-            key_usage:
-              X509.Certificate.Extension.key_usage([:digitalSignature, :keyEncipherment])
+            basic_constraints: Extension.basic_constraints(false),
+            key_usage: Extension.key_usage([:digitalSignature, :keyEncipherment])
           ]
         ],
         opts
@@ -74,8 +78,8 @@ defmodule ExSaml.Test.CertFactory do
         [
           template: :server,
           extensions: [
-            basic_constraints: X509.Certificate.Extension.basic_constraints(false),
-            key_usage: X509.Certificate.Extension.key_usage([:keyEncipherment])
+            basic_constraints: Extension.basic_constraints(false),
+            key_usage: Extension.key_usage([:keyEncipherment])
           ]
         ],
         opts
@@ -91,9 +95,9 @@ defmodule ExSaml.Test.CertFactory do
         [
           template: :root_ca,
           extensions: [
-            basic_constraints: X509.Certificate.Extension.basic_constraints(true),
+            basic_constraints: Extension.basic_constraints(true),
             key_usage:
-              X509.Certificate.Extension.key_usage([
+              Extension.key_usage([
                 :digitalSignature,
                 :keyCertSign,
                 :cRLSign
@@ -121,15 +125,13 @@ defmodule ExSaml.Test.CertFactory do
         v
 
       :error ->
-        X509.Certificate.Validity.days_from_now(
-          Keyword.get(opts, :validity_days, @default_validity_days)
-        )
+        Validity.days_from_now(Keyword.get(opts, :validity_days, @default_validity_days))
     end
   end
 
   defp expired_validity do
     not_before = DateTime.add(DateTime.utc_now(), -30 * 86_400, :second)
     not_after = DateTime.add(DateTime.utc_now(), -1 * 86_400, :second)
-    X509.Certificate.Validity.new(not_before, not_after)
+    Validity.new(not_before, not_after)
   end
 end

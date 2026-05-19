@@ -53,17 +53,21 @@ defmodule ExSaml.Metadata.Certificate do
 
     root
     |> xpath_elems("./md:#{descriptor_tag}", namespaces)
-    |> Enum.flat_map(fn desc ->
-      kds = xpath_elems(desc, "./md:KeyDescriptor", namespaces)
-      total = length(kds)
+    |> Enum.flat_map(&kds_under_descriptor(&1, descriptor_tag, namespaces))
+  end
 
-      kds
-      |> Enum.with_index(1)
-      |> Enum.map(fn {kd, idx} ->
-        index_segment = if total > 1, do: "[#{idx}]", else: ""
-        {kd, "/EntityDescriptor/#{descriptor_tag}/KeyDescriptor#{index_segment}"}
-      end)
-    end)
+  defp kds_under_descriptor(desc, descriptor_tag, namespaces) do
+    kds = xpath_elems(desc, "./md:KeyDescriptor", namespaces)
+    total = length(kds)
+
+    kds
+    |> Enum.with_index(1)
+    |> Enum.map(&kd_with_path(&1, descriptor_tag, total))
+  end
+
+  defp kd_with_path({kd, idx}, descriptor_tag, total) do
+    index_segment = if total > 1, do: "[#{idx}]", else: ""
+    {kd, "/EntityDescriptor/#{descriptor_tag}/KeyDescriptor#{index_segment}"}
   end
 
   defp descriptor_tag(:sp), do: "SPSSODescriptor"
@@ -85,14 +89,16 @@ defmodule ExSaml.Metadata.Certificate do
 
         list
         |> Enum.with_index(1)
-        |> Enum.flat_map(fn {cert_elem, idx} ->
-          cert_path = cert_path(kd_path, idx, total)
+        |> Enum.flat_map(&cert_elem_violations(&1, kd_path, total))
+    end
+  end
 
-          case String.trim(text_content(cert_elem)) do
-            "" -> [missing_cert_violation(kd_path)]
-            text -> validate_cert(text, cert_path)
-          end
-        end)
+  defp cert_elem_violations({cert_elem, idx}, kd_path, total) do
+    cert_path = cert_path(kd_path, idx, total)
+
+    case String.trim(text_content(cert_elem)) do
+      "" -> [missing_cert_violation(kd_path)]
+      text -> validate_cert(text, cert_path)
     end
   end
 
@@ -155,8 +161,7 @@ defmodule ExSaml.Metadata.Certificate do
 
   defp parse_asn1_time({:utcTime, charlist}) do
     case to_string(charlist) do
-      <<yy::binary-2, mm::binary-2, dd::binary-2, hh::binary-2, mi::binary-2, ss::binary-2,
-        "Z">> ->
+      <<yy::binary-2, mm::binary-2, dd::binary-2, hh::binary-2, mi::binary-2, ss::binary-2, "Z">> ->
         yy_int = String.to_integer(yy)
         year = if yy_int >= 50, do: 1900 + yy_int, else: 2000 + yy_int
         to_datetime(year, mm, dd, hh, mi, ss)
