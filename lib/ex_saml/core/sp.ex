@@ -32,7 +32,8 @@ defmodule ExSaml.Core.Sp do
     SpMetadata,
     Subject,
     Util,
-    Xml.Dsig
+    Xml.Dsig,
+    Xml.SafeXml
   }
 
   @type xml :: record(:xmlElement)
@@ -516,13 +517,7 @@ defmodule ExSaml.Core.Sp do
 
     assertion_xml = block_decrypt(to_string(algorithm), symmetric_key, cipher_value)
 
-    {assertion, _} =
-      :xmerl_scan.string(:binary.bin_to_list(assertion_xml),
-        namespace_conformant: true,
-        allow_entities: false
-      )
-
-    assertion
+    SafeXml.scan!(assertion_xml)
   end
 
   defp decrypt_key_info(encrypted_data, key) do
