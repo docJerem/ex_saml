@@ -108,9 +108,9 @@ defmodule ExSaml.Helper do
   end
 
   defp decode_saml_payload(saml_encoding, saml_payload) do
-    xml = Core.Binding.decode_response(saml_encoding, saml_payload)
-    {:ok, xml}
-  rescue
-    error -> {:error, {:invalid_response, "#{inspect(error)}"}}
+    case Core.Binding.decode_response(saml_encoding, saml_payload) do
+      {:ok, xml} -> {:ok, xml}
+      {:error, reason} -> {:error, {:invalid_response, reason}}
+    end
   end
 end

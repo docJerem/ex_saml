@@ -1,11 +1,14 @@
 defmodule ExSaml.Core.Xml.SafeXmlTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias ExSaml.Core.Xml.SafeXml
 
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
+
+  # `async: false` because tests in the `on_error hook` describe mutate
+  # `Application.put_env(:ex_saml, :safe_xml, ...)`, which is process-global.
 
   describe "scan/1" do
     test "parses a well-formed XML binary" do
@@ -58,29 +61,61 @@ defmodule ExSaml.Core.Xml.SafeXmlTest do
     end
   end
 
-  describe "scan!/1" do
-    test "returns the root element on success" do
-      root = SafeXml.scan!("<root/>")
-      assert Record.is_record(root, :xmlElement)
-      assert xmlElement(root, :name) == :root
+  describe ":on_error hook" do
+    setup do
+      previous = Application.get_env(:ex_saml, :safe_xml)
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:ex_saml, :safe_xml, previous)
+        else
+          Application.delete_env(:ex_saml, :safe_xml)
+        end
+      end)
+
+      :ok
     end
 
-    test "raises ArgumentError on malformed input" do
-      assert_raise ArgumentError, ~r/invalid XML/, fn ->
-        SafeXml.scan!("<broken")
-      end
+    test "is invoked once per parse failure with a context map" do
+      test_pid = self()
+
+      Application.put_env(:ex_saml, :safe_xml,
+        on_error: fn ctx -> send(test_pid, {:ctx, ctx}) end
+      )
+
+      assert {:error, :invalid_xml} = SafeXml.scan("<broken")
+
+      assert_receive {:ctx, %{reason: :invalid_xml, kind: kind, payload: payload}}
+      assert kind in [:error, :exit, :throw]
+      assert payload != nil
     end
 
-    test "raises ArgumentError on XXE input" do
-      xxe = """
-      <?xml version="1.0"?>
-      <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
-      <foo>&xxe;</foo>
-      """
+    test "is not invoked on successful parses" do
+      test_pid = self()
+      Application.put_env(:ex_saml, :safe_xml, on_error: fn _ctx -> send(test_pid, :called) end)
 
-      assert_raise ArgumentError, ~r/invalid XML/, fn ->
-        SafeXml.scan!(xxe)
-      end
+      assert {:ok, _} = SafeXml.scan("<root/>")
+
+      refute_receive :called, 50
+    end
+
+    test "swallows handler exceptions and still returns the error tuple" do
+      Application.put_env(:ex_saml, :safe_xml, on_error: fn _ctx -> raise "handler boom" end)
+
+      assert {:error, :invalid_xml} = SafeXml.scan("<broken")
+    end
+
+    test "is a no-op when no handler is configured" do
+      Application.delete_env(:ex_saml, :safe_xml)
+      assert {:error, :invalid_xml} = SafeXml.scan("<broken")
+    end
+
+    test "is a no-op when the configured value is not an arity-1 function" do
+      Application.put_env(:ex_saml, :safe_xml, on_error: :not_a_function)
+      assert {:error, :invalid_xml} = SafeXml.scan("<broken")
+
+      Application.put_env(:ex_saml, :safe_xml, on_error: fn -> :wrong_arity end)
+      assert {:error, :invalid_xml} = SafeXml.scan("<broken")
     end
   end
 end
