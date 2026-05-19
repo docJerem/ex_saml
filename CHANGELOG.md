@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ExSaml.Metadata.validate/2` now reports certificate-level violations on every `<md:KeyDescriptor>`: `:missing_x509_certificate`, `:invalid_x509_certificate`, `:certificate_expired` (the last is silence-able via `:ignore`) (#17)
+- `ExSaml.Metadata.validate/2` now reports XML-DSig structure violations on every `<ds:Signature>` declared in metadata: `:invalid_signature_structure`, `:unknown_signature_algorithm`, `:unknown_digest_algorithm`. Cryptographic verification remains out of scope (#17)
+
 ## [1.1.0] - 2026-05-06
 
 ### Added

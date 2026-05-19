@@ -12,6 +12,7 @@ defmodule ExSaml.MixProject do
       description: description(),
       dialyzer: [ignore_warnings: ".dialyzer_ignore.exs"],
       elixir: "~> 1.15",
+      elixirc_paths: elixirc_paths(Mix.env()),
       package: package(),
       preferred_cli_env: preferred_cli_env(),
       source_url: @source_url,
@@ -20,6 +21,9 @@ defmodule ExSaml.MixProject do
       version: @version
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
@@ -42,7 +46,8 @@ defmodule ExSaml.MixProject do
       {:nebulex, "~> 2.6"},
       {:plug, "~> 1.18"},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
-      {:sweet_xml, "~> 0.7"}
+      {:sweet_xml, "~> 0.7"},
+      {:x509, "~> 0.9", only: [:test], runtime: false}
     ]
   end
 

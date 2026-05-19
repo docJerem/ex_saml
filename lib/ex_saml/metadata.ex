@@ -10,7 +10,41 @@ defmodule ExSaml.Metadata do
 
   This module currently implements **spec-conformance rules only** — every
   finding is an `:error`. Best-practice rules (warnings, strict mode,
-  certificate linting) are added in subsequent releases.
+  domain-mismatch lint) are added in subsequent releases.
+
+  ## Violation codes emitted by this version
+
+  Structural rules (root, descriptors, endpoints):
+
+    * `:invalid_xml`
+    * `:invalid_root_element`
+    * `:entities_descriptor_not_supported`
+    * `:missing_entity_id`
+    * `:entity_id_too_long`
+    * `:missing_role_descriptor`
+    * `:missing_saml2_protocol_support`
+    * `:missing_acs`
+    * `:missing_sso_service`
+    * `:invalid_acs_binding`
+    * `:missing_http_post_acs`
+    * `:duplicate_acs_index`
+    * `:multiple_default_acs`
+    * `:invalid_slo_binding`
+
+  Certificate rules (every `<md:KeyDescriptor>`):
+
+    * `:missing_x509_certificate`
+    * `:invalid_x509_certificate`
+    * `:certificate_expired` — silence-able via `:ignore` for legacy scenarios
+
+  Signature-structure rules (every `<ds:Signature>` declared in metadata):
+
+    * `:invalid_signature_structure`
+    * `:unknown_signature_algorithm`
+    * `:unknown_digest_algorithm`
+
+  Cryptographic verification of `<ds:Signature>` against a trust anchor is
+  intentionally out of scope.
 
   ## Example
 
@@ -32,6 +66,8 @@ defmodule ExSaml.Metadata do
   See `ExSaml.Metadata.ValidationResult` for the shape of the returned struct.
   """
 
+  alias ExSaml.Metadata.Certificate
+  alias ExSaml.Metadata.Signature
   alias ExSaml.Metadata.ValidationResult
 
   require Record
@@ -173,7 +209,10 @@ defmodule ExSaml.Metadata do
   # ---------------------------------------------------------------------------
 
   defp check_entity_descriptor(root) do
-    entity_id_violations(root) ++ descriptor_violations(root)
+    entity_id_violations(root) ++
+      descriptor_violations(root) ++
+      Certificate.violations(root, @namespaces) ++
+      Signature.violations(root, @namespaces)
   end
 
   defp entity_id_violations(root) do

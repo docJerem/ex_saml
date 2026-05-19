@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                     xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
+                     entityID="https://sp.example.com/saml">
+  <ds:Signature>
+    <ds:SignedInfo>
+      <ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+      <ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+      <ds:Reference URI="">
+        <ds:Transforms>
+          <ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>
+        </ds:Transforms>
+        <ds:DigestMethod Algorithm="urn:fake:made-up-digest-algorithm"/>
+        <ds:DigestValue>YWJjZGVm</ds:DigestValue>
+      </ds:Reference>
+    </ds:SignedInfo>
+    <ds:SignatureValue>YmFzZTY0c2lnbmF0dXJl</ds:SignatureValue>
+  </ds:Signature>
+  <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:AssertionConsumerService index="0" isDefault="true"
+                                 Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                                 Location="https://sp.example.com/saml/acs"/>
+  </md:SPSSODescriptor>
+</md:EntityDescriptor>
