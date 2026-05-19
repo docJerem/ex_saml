@@ -792,10 +792,7 @@ defmodule ExSaml.Core.Saml do
   defp subject_expiry(_), do: nil
 
   defp conditions_expiry(%Assertion{conditions: conditions}) do
-    case Keyword.get(conditions, :not_on_or_after) do
-      nil -> nil
-      stamp -> to_secs(stamp)
-    end
+    if stamp = Keyword.get(conditions, :not_on_or_after), do: to_secs(stamp)
   end
 
   defp issue_instant_secs(%Assertion{issue_instant: stamp}), do: to_secs(stamp)
