@@ -18,8 +18,6 @@ defmodule ExSaml.Metadata.Signature do
   out of scope (see issue #17 "Non-goals").
   """
 
-  alias ExSaml.Metadata.ValidationResult
-
   require Record
 
   Record.defrecordp(
@@ -64,7 +62,6 @@ defmodule ExSaml.Metadata.Signature do
                              "http://www.w3.org/2001/04/xmlenc#ripemd160"
                            ])
 
-  @spec violations(:xmerl.xmlElement(), keyword()) :: [ValidationResult.violation()]
   def violations(root, namespaces) do
     root
     |> signatures_with_path(namespaces)

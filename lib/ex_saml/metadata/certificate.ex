@@ -19,8 +19,6 @@ defmodule ExSaml.Metadata.Certificate do
   batch of rules alongside strict-mode plumbing — see issue #17 PR 3.
   """
 
-  alias ExSaml.Metadata.ValidationResult
-
   require Record
 
   Record.defrecordp(
@@ -37,7 +35,6 @@ defmodule ExSaml.Metadata.Certificate do
 
   @descriptor_kinds [:sp, :idp]
 
-  @spec violations(:xmerl.xmlElement(), keyword()) :: [ValidationResult.violation()]
   def violations(root, namespaces) do
     @descriptor_kinds
     |> Enum.flat_map(&key_descriptors_with_path(root, &1, namespaces))
