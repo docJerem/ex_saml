@@ -32,6 +32,7 @@ defmodule ExSaml.Metadata do
   See `ExSaml.Metadata.ValidationResult` for the shape of the returned struct.
   """
 
+  alias ExSaml.Metadata.Certificate
   alias ExSaml.Metadata.ValidationResult
 
   require Record
@@ -173,7 +174,9 @@ defmodule ExSaml.Metadata do
   # ---------------------------------------------------------------------------
 
   defp check_entity_descriptor(root) do
-    entity_id_violations(root) ++ descriptor_violations(root)
+    entity_id_violations(root) ++
+      descriptor_violations(root) ++
+      Certificate.violations(root, @namespaces)
   end
 
   defp entity_id_violations(root) do
