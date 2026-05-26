@@ -146,8 +146,11 @@ Samly allowed a custom Plug pipeline to run before storing the assertion:
 ExSaml's `SPHandler.consume_signin_response/2` now returns a structured result instead:
 
 ```elixir
-{:ok, %{assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}
+{:ok, %{flow: flow, assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}
 ```
+
+`flow` is `:sp_initiated` or `:idp_initiated` (with `nonce` being `nil` for the
+IdP-initiated case, since no AuthnRequest — and therefore no nonce — exists).
 
 Move your custom assertion processing logic to the code that calls `consume_signin_response/2`.
 
