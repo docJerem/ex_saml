@@ -41,8 +41,7 @@ defmodule ExSaml.AuthHandler do
       %{
         relay_state: relay_state,
         session_id: session_id,
-        saml_nonce:
-          fetch_cookies(conn, encrypted: ~w(saml_nonce)).cookies["saml_nonce"] || UUID.uuid4(),
+        saml_nonce: resolve_saml_nonce(conn),
         idp_id: idp_id,
         user_token: get_session(conn, :user_token),
         redirect_uri: get_session(conn, :redirect_uri),
@@ -99,8 +98,7 @@ defmodule ExSaml.AuthHandler do
           %{
             relay_state: relay_state,
             session_id: session_id,
-            saml_nonce:
-              fetch_cookies(conn, encrypted: ~w(saml_nonce)).cookies["saml_nonce"] || UUID.uuid4(),
+            saml_nonce: resolve_saml_nonce(conn),
             idp_id: idp_id,
             target_url: target_url,
             user_token: get_session(conn, :user_token),
@@ -179,5 +177,15 @@ defmodule ExSaml.AuthHandler do
     #   error ->
     #     Logger.error("#{inspect error}")
     #     conn |> send_resp(500, "request_failed")
+  end
+
+  # Prefer a caller-assigned nonce so the SP can persist auxiliary state
+  # (e.g. redirect_uri) under the same key the IdP response will resolve to
+  # — `put_resp_cookie` does not populate `req_cookies`, so on the first
+  # round-trip the cookie fallback can't see what we just set.
+  defp resolve_saml_nonce(conn) do
+    conn.assigns[:saml_nonce] ||
+      fetch_cookies(conn, encrypted: ~w(saml_nonce)).cookies["saml_nonce"] ||
+      UUID.uuid4()
   end
 end
