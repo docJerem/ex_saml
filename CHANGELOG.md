@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-06-08
+
+### Fixed
+
+- AuthnRequest generation no longer ignores a caller-supplied SAML nonce. `ExSaml.AuthHandler` now resolves the nonce via `conn.assigns[:saml_nonce]` first, falling back to the encrypted `saml_nonce` cookie and finally a fresh `UUID.uuid4/0`. Because `put_resp_cookie/4` does not populate `req_cookies`, the previous cookie-only lookup could not see a nonce the SP had just set on the same round-trip, so any auxiliary state (e.g. `redirect_uri`) persisted under that key failed to resolve when the IdP response came back (#36)
+
 ## [1.1.1] - 2026-05-19
 
 ### Fixed
@@ -76,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unused routes and pre-session create pipeline from Samly
 - Hardcoded Nebulex cache — replaced with delegate pattern
 
+[1.1.2]: https://github.com/docJerem/ex_saml/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/docJerem/ex_saml/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/docJerem/ex_saml/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/docJerem/ex_saml/compare/v1.0.1...v1.0.2
