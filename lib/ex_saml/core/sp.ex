@@ -252,7 +252,12 @@ defmodule ExSaml.Core.Sp do
          :ok <- verify_envelope_signature(xml, sp),
          :ok <- verify_assertion_signature(assertion_xml, sp),
          {:ok, assertion} <-
-           Saml.validate_assertion(assertion_xml, sp.consume_uri, get_entity_id(sp)),
+           Saml.validate_assertion(
+             assertion_xml,
+             sp.consume_uri,
+             get_entity_id(sp),
+             sp.idp_entity_id
+           ),
          :ok <- check_duplicate(assertion, xml, duplicate_fun) do
       {:ok, assertion}
     end
