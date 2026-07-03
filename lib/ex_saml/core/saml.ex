@@ -812,15 +812,16 @@ defmodule ExSaml.Core.Saml do
   - Audience matches (if present in conditions)
   - Assertion is not stale
   """
-  @spec validate_assertion(tuple(), String.t(), String.t()) ::
+  @spec validate_assertion(tuple(), String.t(), String.t(), String.t() | charlist() | nil) ::
           {:ok, Assertion.t()} | {:error, term()}
-  def validate_assertion(assertion_xml, recipient, audience) do
+  def validate_assertion(assertion_xml, recipient, audience, expected_issuer \\ nil) do
     case decode_assertion(assertion_xml) do
       {:error, reason} ->
         {:error, reason}
 
       {:ok, assertion} ->
         with :ok <- validate_version(assertion),
+             :ok <- validate_issuer(assertion, expected_issuer),
              :ok <- validate_recipient(assertion, recipient),
              :ok <- validate_audience(assertion, audience),
              :ok <- check_not_before(assertion),
@@ -832,6 +833,20 @@ defmodule ExSaml.Core.Saml do
 
   defp validate_version(%Assertion{version: "2.0"}), do: :ok
   defp validate_version(_), do: {:error, :bad_version}
+
+  # Validate the assertion Issuer against the IdP's configured entity_id. When
+  # no expected issuer is provided (nil / empty), the check is skipped for
+  # backward compatibility. This is defense in depth (identity-provider
+  # confusion) that becomes essential whenever assertion signature checking is
+  # relaxed. See shark-up/cryptr-gateway#165 finding #13.
+  defp validate_issuer(_assertion, nil), do: :ok
+
+  defp validate_issuer(%Assertion{issuer: issuer}, expected) do
+    case to_string(expected) do
+      "" -> :ok
+      expected_str -> if to_string(issuer) == expected_str, do: :ok, else: {:error, :bad_issuer}
+    end
+  end
 
   defp validate_recipient(%Assertion{recipient: r}, recipient) do
     if to_string(r) == to_string(recipient) do
