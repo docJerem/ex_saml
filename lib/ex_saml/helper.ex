@@ -61,9 +61,12 @@ defmodule ExSaml.Helper do
     {idp_signout_url, xml_frag}
   end
 
-  def gen_idp_signout_resp(sp, idp_metadata, signout_status) do
+  def gen_idp_signout_resp(sp, idp_metadata, signout_status, in_response_to \\ "") do
     idp_signout_url = idp_metadata.logout_location
-    xml_frag = Core.Sp.generate_logout_response(idp_signout_url, signout_status, sp)
+
+    xml_frag =
+      Core.Sp.generate_logout_response(idp_signout_url, signout_status, sp, in_response_to)
+
     {idp_signout_url, xml_frag}
   end
 

@@ -24,6 +24,8 @@ defmodule ExSaml.SPHandler do
     Subject
   }
 
+  alias ExSaml.Core.RedirectBindingSignature
+
   import ExSaml.Helper, only: [get_idp: 1]
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
 
@@ -228,13 +230,14 @@ defmodule ExSaml.SPHandler do
     %IdpData{sp_config: sp_cfg} = idp
     sp = ensure_sp_uris_set(sp_cfg, conn)
 
-    saml_encoding = conn.body_params["SAMLEncoding"]
     # Handle both POST and Redirect
-    saml_response = conn.body_params["SAMLResponse"] || Map.get(conn.params, "SAMLResponse")
-    rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
+    saml_encoding = msg_param(conn, "SAMLEncoding")
+    saml_response = msg_param(conn, "SAMLResponse")
+    rls = msg_param(conn, "RelayState")
     relay_state = safe_decode_www_form(rls)
 
-    with {:ok, _payload} <- Helper.decode_idp_signout_resp(sp, saml_encoding, saml_response),
+    with :ok <- verify_redirect_logout_response(conn, idp),
+         {:ok, _payload} <- Helper.decode_idp_signout_resp(sp, saml_encoding, saml_response),
          ^relay_state when relay_state != nil <- get_session(conn, "relay_state"),
          ^idp_id <- get_session(conn, "idp_id"),
          target_url when target_url != nil <- get_session(conn, "target_url") do
@@ -259,36 +262,45 @@ defmodule ExSaml.SPHandler do
     %IdpData{idp_metadata: idp_meta, sp_config: sp_cfg} = idp
     sp = ensure_sp_uris_set(sp_cfg, conn)
 
-    saml_encoding = conn.body_params["SAMLEncoding"]
-    saml_request = conn.body_params["SAMLRequest"]
-    rls = conn.body_params["RelayState"]
+    # Handle both POST and Redirect
+    saml_encoding = msg_param(conn, "SAMLEncoding")
+    saml_request = msg_param(conn, "SAMLRequest")
+    rls = msg_param(conn, "RelayState")
     relay_state = safe_decode_www_form(rls)
 
-    case Helper.decode_idp_signout_req(sp, saml_encoding, saml_request) do
-      {:ok, %ExSaml.Core.LogoutRequest{name: nameid}} ->
-        assertion_key = {idp_id, nameid}
+    with {:ok, sp} <- verify_redirect_logout_request(conn, idp, sp),
+         {:ok, %ExSaml.Core.LogoutRequest{name: nameid, id: request_id}} <-
+           Helper.decode_idp_signout_req(sp, saml_encoding, saml_request) do
+      assertion_key = {idp_id, nameid}
 
-        {conn, return_status} =
-          case State.get_assertion(conn, assertion_key) do
-            %Assertion{idp_id: ^idp_id, subject: %Subject{name: ^nameid}} ->
-              conn = State.delete_assertion(conn, assertion_key)
-              {conn, :success}
+      {conn, return_status} =
+        case State.get_assertion(conn, assertion_key) do
+          %Assertion{idp_id: ^idp_id, subject: %Subject{name: ^nameid}} ->
+            conn = State.delete_assertion(conn, assertion_key)
+            {conn, :success}
 
-            _ ->
-              {conn, :denied}
-          end
+          _ ->
+            {conn, :denied}
+        end
 
-        {idp_signout_url, resp_xml_frag} =
-          Helper.gen_idp_signout_resp(sp, idp_meta, return_status)
+      {idp_signout_url, resp_xml_frag} =
+        Helper.gen_idp_signout_resp(sp, idp_meta, return_status, request_id)
 
-        conn
-        |> configure_session(drop: true)
-        |> send_saml_request(
-          idp_signout_url,
-          idp.use_redirect_for_req,
-          resp_xml_frag,
-          relay_state
-        )
+      conn
+      |> configure_session(drop: true)
+      |> send_saml_request(
+        idp_signout_url,
+        idp.use_redirect_for_req,
+        resp_xml_frag,
+        relay_state
+      )
+    else
+      # The Redirect binding signature is missing or does not verify: the
+      # request cannot be attributed to the IdP, so fail closed without
+      # touching the session and without building a LogoutResponse.
+      {:redirect_signature_error, reason} ->
+        Logger.error("[ExSaml] Logout request signature verification failed: #{inspect(reason)}")
+        conn |> send_resp(403, "invalid_request")
 
       error ->
         Logger.error("#{inspect(error)}")
@@ -309,6 +321,42 @@ defmodule ExSaml.SPHandler do
     #     conn |> send_resp(500, "request_failed")
   end
 
+  # HTTP-Redirect binding carries its signature in the query string, not in
+  # the XML (SAML 2.0 Bindings §3.4.4.1) — signed Redirect messages MUST have
+  # the XML signature removed. So for GET requests the query signature is
+  # verified against the IdP metadata certificates and, on success, the XML
+  # signature check is disabled for this request. POST (HTTP-POST binding)
+  # requests keep the XML signature check as-is.
+  defp verify_redirect_logout_request(%Plug.Conn{method: "GET"} = conn, idp, sp) do
+    if sp.idp_signs_logout_requests do
+      case RedirectBindingSignature.verify(conn.query_string, idp.certs) do
+        :ok -> {:ok, %{sp | idp_signs_logout_requests: false}}
+        {:error, reason} -> {:redirect_signature_error, reason}
+      end
+    else
+      {:ok, sp}
+    end
+  end
+
+  defp verify_redirect_logout_request(_conn, _idp, sp), do: {:ok, sp}
+
+  # LogoutResponses are verified opt-in, mirroring the XML-signature policy of
+  # `Core.Sp.validate_logout_response/2` (verify only when a signature is
+  # present): a query signature, when sent, must verify; its absence is not an
+  # error.
+  defp verify_redirect_logout_response(%Plug.Conn{method: "GET"} = conn, idp) do
+    if Map.get(conn.params, "Signature") do
+      case RedirectBindingSignature.verify(conn.query_string, idp.certs) do
+        :ok -> :ok
+        {:error, reason} -> {:redirect_signature_error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp verify_redirect_logout_response(_conn, _idp), do: :ok
+
   @doc """
   Returns the target URL from session or relay state cache, falling back
   to `target_url/0` (`Application.get_env(:ex_saml, :fallback_target_url, "/")`)
@@ -325,4 +373,14 @@ defmodule ExSaml.SPHandler do
 
   defp safe_decode_www_form(nil), do: ""
   defp safe_decode_www_form(data), do: URI.decode_www_form(data)
+
+  # Reads a SAML message parameter from the body (HTTP-POST binding) with a
+  # fallback to the query string (HTTP-Redirect binding). Body params may be
+  # unfetched when no Plug.Parsers ran (e.g. a bare GET outside Phoenix).
+  defp msg_param(conn, name) do
+    case conn.body_params do
+      %Plug.Conn.Unfetched{} -> Map.get(conn.params, name)
+      body_params -> body_params[name] || Map.get(conn.params, name)
+    end
+  end
 end

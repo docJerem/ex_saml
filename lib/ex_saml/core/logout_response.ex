@@ -6,6 +6,7 @@ defmodule ExSaml.Core.LogoutResponse do
   """
 
   defstruct version: "2.0",
+            in_response_to: "",
             issue_instant: "",
             destination: "",
             issuer: "",
@@ -13,6 +14,7 @@ defmodule ExSaml.Core.LogoutResponse do
 
   @type t :: %__MODULE__{
           version: String.t(),
+          in_response_to: String.t(),
           issue_instant: String.t(),
           destination: String.t(),
           issuer: String.t(),

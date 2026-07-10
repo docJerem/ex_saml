@@ -3,6 +3,19 @@
 [![Hex.pm](https://img.shields.io/hexpm/v/ex_saml.svg)](https://hex.pm/packages/ex_saml)
 [![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/ex_saml)
 
+> **This is the artis-co-ltd fork of [docJerem/ex_saml](https://github.com/docJerem/ex_saml).**
+> The `redirect-binding-slo` branch adds, on top of v1.1.2, single-logout
+> support over the HTTP-Redirect binding (as sent by Microsoft Entra ID):
+>
+> - `GET /logout/:idp_id` route (the HTTP-POST binding route is unchanged)
+> - Mandatory query-string signature verification (SigAlg/Signature, SAML 2.0
+>   Bindings §3.4.4.1) of Redirect-binding LogoutRequests against the IdP
+>   metadata certificates — modelled after ruby-saml's
+>   `Utils.verify_signature` / `build_query_from_raw_parts`
+> - `InResponseTo` on generated LogoutResponses
+>
+> The changes are self-contained and intended to be proposed upstream.
+
 SAML 2.0 Service Provider (SP) library for Elixir/Phoenix applications.
 
 Originally built from the [Samly](https://hex.pm/packages/samly) codebase (by [handnot2](https://github.com/handnot2/samly)), before the [Dropbox fork](https://github.com/dropbox/samly) was created. Dropbox's fork has since been [declared unmaintained](https://github.com/dropbox/samly/pull/23#issuecomment-2537921498). ExSaml is the actively maintained successor, with enhanced security, configurable caching, and streamlined routing.

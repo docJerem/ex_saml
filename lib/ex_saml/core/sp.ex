@@ -168,14 +168,18 @@ defmodule ExSaml.Core.Sp do
 
   @doc """
   Generates a LogoutResponse XML element.
+
+  `in_response_to` is the `ID` of the LogoutRequest being answered; it is
+  emitted as the `InResponseTo` attribute and omitted when empty.
   """
-  @spec generate_logout_response(String.t(), atom(), SpConfig.t()) :: xml()
-  def generate_logout_response(idp_url, status, %SpConfig{} = sp) do
+  @spec generate_logout_response(String.t(), atom(), SpConfig.t(), String.t()) :: xml()
+  def generate_logout_response(idp_url, status, %SpConfig{} = sp, in_response_to \\ "") do
     stamp = now_saml_stamp()
     issuer = get_entity_id(sp)
 
     xml =
       Saml.to_xml(%LogoutResponse{
+        in_response_to: in_response_to,
         issue_instant: stamp,
         destination: idp_url,
         issuer: issuer,

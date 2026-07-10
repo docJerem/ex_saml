@@ -466,8 +466,15 @@ defmodule ExSaml.Core.Saml do
           :not_found -> ""
         end
 
+      id =
+        case xpath_attr(xml, "/samlp:LogoutRequest/@ID", ns) do
+          {:ok, v} -> v
+          :not_found -> ""
+        end
+
       {:ok,
        %LogoutRequest{
+         id: id,
          version: version,
          issue_instant: issue_instant,
          name: name,
@@ -1016,6 +1023,7 @@ defmodule ExSaml.Core.Saml do
 
   def to_xml(%LogoutResponse{
         version: v,
+        in_response_to: in_response_to,
         issue_instant: time,
         destination: dest,
         issuer: issuer,
@@ -1029,16 +1037,22 @@ defmodule ExSaml.Core.Saml do
         ]
       )
 
+    in_response_to_attrs =
+      if in_response_to in [nil, ""],
+        do: [],
+        else: maybe_string_attr(:InResponseTo, in_response_to)
+
     elem =
       xmlElement(
         name: :"samlp:LogoutResponse",
-        attributes: [
-          xmlAttribute(name: :"xmlns:samlp", value: ~c"urn:oasis:names:tc:SAML:2.0:protocol"),
-          xmlAttribute(name: :"xmlns:saml", value: ~c"urn:oasis:names:tc:SAML:2.0:assertion"),
-          xmlAttribute(name: :IssueInstant, value: time),
-          xmlAttribute(name: :Version, value: v),
-          xmlAttribute(name: :Destination, value: dest)
-        ],
+        attributes:
+          [
+            xmlAttribute(name: :"xmlns:samlp", value: ~c"urn:oasis:names:tc:SAML:2.0:protocol"),
+            xmlAttribute(name: :"xmlns:saml", value: ~c"urn:oasis:names:tc:SAML:2.0:assertion"),
+            xmlAttribute(name: :IssueInstant, value: time),
+            xmlAttribute(name: :Version, value: v),
+            xmlAttribute(name: :Destination, value: dest)
+          ] ++ in_response_to_attrs,
         content: [
           xmlElement(
             name: :"saml:Issuer",

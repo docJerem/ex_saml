@@ -5,7 +5,8 @@ defmodule ExSaml.Core.LogoutRequest do
   Ported from the Erlang `esaml_logoutreq` record.
   """
 
-  defstruct version: "2.0",
+  defstruct id: "",
+            version: "2.0",
             issue_instant: "",
             destination: "",
             issuer: "",
@@ -17,6 +18,7 @@ defmodule ExSaml.Core.LogoutRequest do
             reason: :user
 
   @type t :: %__MODULE__{
+          id: String.t(),
           version: String.t(),
           issue_instant: String.t(),
           destination: String.t(),

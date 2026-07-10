@@ -319,5 +319,21 @@ defmodule ExSaml.Core.SpTest do
       status = find_child(xml, :"samlp:Status")
       assert status != nil
     end
+
+    test "emits InResponseTo when the answered request ID is given" do
+      sp = base_sp()
+
+      xml = Sp.generate_logout_response("https://idp.example.com/slo", :success, sp, "_req_1")
+
+      assert attr_to_string(find_attr(xml, :InResponseTo)) == "_req_1"
+    end
+
+    test "omits InResponseTo when the request ID is empty" do
+      sp = base_sp()
+
+      xml = Sp.generate_logout_response("https://idp.example.com/slo", :success, sp)
+
+      assert find_attr(xml, :InResponseTo) == nil
+    end
   end
 end
