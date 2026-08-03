@@ -99,6 +99,13 @@ defmodule ExSaml.SPHandler do
         conn
 
       {:error, error} ->
+        Logger.warning(
+          "[ExSaml] SAML auth response rejected: #{inspect(error)} " <>
+            "(idp_id=#{inspect(idp_id)}, " <>
+            "relay_state_present?=#{relay_state not in [nil, ""]}, " <>
+            "relay_state_cached?=#{RelayStateCache.get(relay_state) != nil})"
+        )
+
         redirect_with_error(conn, relay_state, error)
 
       # Defensive fallback: unreachable today (Dialyzer flags it as such), but
