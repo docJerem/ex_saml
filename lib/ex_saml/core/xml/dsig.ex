@@ -302,6 +302,7 @@ defmodule ExSaml.Core.Xml.Dsig do
              :bad_digest
              | :bad_signature
              | :cert_not_accepted
+             | :missing_certificate
              | :no_signature
              | :multiple_signatures
              | :insecure_algorithm
@@ -403,31 +404,39 @@ defmodule ExSaml.Core.Xml.Dsig do
 
     sig = :base64.decode(xmlText(sig_text, :value))
 
-    {key, cert_bin} = extract_public_key(element, ds_ns)
-
-    case :public_key.verify(data, hash_function, sig, key) do
-      true -> check_fingerprints(cert_bin, fingerprints)
-      false -> {:error, :bad_signature}
+    with {:ok, {key, cert_bin}} <- extract_public_key(element, ds_ns) do
+      case :public_key.verify(data, hash_function, sig, key) do
+        true -> check_fingerprints(cert_bin, fingerprints)
+        false -> {:error, :bad_signature}
+      end
     end
   end
 
   defp extract_public_key(element, ds_ns) do
-    [cert_text] =
-      :xmerl_xpath.string(~c"ds:Signature//ds:X509Certificate/text()", element, namespace: ds_ns)
+    case :xmerl_xpath.string(
+           ~c"ds:Signature//ds:X509Certificate/text()",
+           element,
+           namespace: ds_ns
+         ) do
+      [] ->
+        {:error, :missing_certificate}
 
-    cert_bin = :base64.decode(xmlText(cert_text, :value))
-    cert = :public_key.pkix_decode_cert(cert_bin, :plain)
-    tbs = certificate(cert, :tbsCertificate)
-    spki = tbs_certificate(tbs, :subjectPublicKeyInfo)
+      # The first certificate is the signing one; the rest is its chain.
+      [cert_text | _] ->
+        cert_bin = :base64.decode(xmlText(cert_text, :value))
+        cert = :public_key.pkix_decode_cert(cert_bin, :plain)
+        tbs = certificate(cert, :tbsCertificate)
+        spki = tbs_certificate(tbs, :subjectPublicKeyInfo)
 
-    key_bin =
-      case subject_public_key_info(spki, :subjectPublicKey) do
-        {_, kb} -> kb
-        kb -> kb
-      end
+        key_bin =
+          case subject_public_key_info(spki, :subjectPublicKey) do
+            {_, kb} -> kb
+            kb -> kb
+          end
 
-    key = :public_key.pem_entry_decode({:RSAPublicKey, key_bin, :not_encrypted})
-    {key, cert_bin}
+        key = :public_key.pem_entry_decode({:RSAPublicKey, key_bin, :not_encrypted})
+        {:ok, {key, cert_bin}}
+    end
   end
 
   defp check_fingerprints(_cert_bin, :any), do: :ok

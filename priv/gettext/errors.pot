@@ -13,6 +13,9 @@ msgstr "Missing signature. Please ensure that the assertions are properly signed
 msgid "assertion_cert_not_accepted"
 msgstr "The certificate used to sign the assertions has not been accepted. It is possible that the certificate has expired or is not supported."
 
+msgid "missing_certificate"
+msgstr "No X.509 certificate was found in the SAML signature. Please configure your Identity Provider to include its signing certificate in signed responses and assertions."
+
 msgid "missing_envelope_signature"
 msgstr "Missing envelope signature. Please make sure you uploaded correctly the Cryptr Certificate to your IdP."
 
