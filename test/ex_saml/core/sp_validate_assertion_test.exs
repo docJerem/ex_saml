@@ -126,4 +126,24 @@ defmodule ExSaml.Core.SpValidateAssertionTest do
       assert {:error, :bad_saml} = Sp.validate_assertion(xml, sp())
     end
   end
+
+  describe "signature failures" do
+    test "tampered envelope signature -> {:envelope, {:error, :bad_signature}}, with a message" do
+      xml = File.read!(Path.join([__DIR__, "../fixtures/sha256_signed_response.xml"]))
+      [_, sig] = Regex.run(~r|<ds:SignatureValue>([^<]+)</ds:SignatureValue>|, xml)
+      flipped = if String.first(sig) == "A", do: "B", else: "A"
+      tampered_sig = flipped <> String.slice(sig, 1..-1//1)
+
+      tampered =
+        String.replace(xml, "<ds:SignatureValue>#{sig}", "<ds:SignatureValue>#{tampered_sig}")
+
+      sp = %{sp() | idp_signs_envelopes: true, trusted_fingerprints: :any}
+
+      assert {:error, {:envelope, {:error, :bad_signature}} = reason} =
+               Sp.validate_assertion(parse(tampered), sp)
+
+      assert ExSaml.ErrorMessages.get(reason) =~ "signature could not be verified"
+      assert ExSaml.ErrorMessages.get(reason, "fr") =~ "signature SAML n'a pas pu être vérifiée"
+    end
+  end
 end
