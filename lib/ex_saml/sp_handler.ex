@@ -126,6 +126,7 @@ defmodule ExSaml.SPHandler do
       relay_state: relay_state,
       saml_encoding: saml_encoding,
       saml_response: saml_response,
+      saml_response_sha256: payload_fingerprint(saml_response),
       xml: safe_decode_xml(saml_encoding, saml_response),
       host: conn.host,
       received_at: DateTime.utc_now()
@@ -148,7 +149,10 @@ defmodule ExSaml.SPHandler do
         cookie_names: conn |> fetch_cookies() |> Map.get(:req_cookies) |> Map.keys(),
         body_param_keys: Map.keys(conn.body_params),
         saml_encoding: saml_encoding,
-        saml_response: saml_response,
+        # The raw payload lives only in the capture (`Debug.saml_response/1`);
+        # the report keeps enough to correlate with it without duplicating PII.
+        saml_response_bytes: saml_response && byte_size(saml_response),
+        saml_response_sha256: payload_fingerprint(saml_response),
         session: session_snapshot(conn),
         consume_uri: sp.consume_uri,
         entity_id: sp.entity_id
@@ -381,6 +385,13 @@ defmodule ExSaml.SPHandler do
     if ours?, do: relay_state, else: State.gen_id()
   end
 
+  defp payload_fingerprint(nil), do: nil
+
+  defp payload_fingerprint(payload) when is_binary(payload),
+    do: :sha256 |> :crypto.hash(payload) |> Base.encode16(case: :lower)
+
+  defp payload_fingerprint(_), do: nil
+
   # Human-readable copy of the payload for the capture; failures are expected
   # (that is often why we are capturing) and must never break the flow.
   defp safe_decode_xml(_encoding, nil), do: nil
@@ -519,7 +530,8 @@ defmodule ExSaml.SPHandler do
             error: error,
             relay_state: relay_state,
             saml_encoding: saml_encoding,
-            saml_response: saml_response,
+            saml_response_bytes: saml_response && byte_size(saml_response),
+            saml_response_sha256: payload_fingerprint(saml_response),
             session: session_snapshot(conn)
           }
         end)
@@ -574,7 +586,8 @@ defmodule ExSaml.SPHandler do
             error: error,
             relay_state: relay_state,
             saml_encoding: saml_encoding,
-            saml_request: saml_request
+            saml_request_bytes: saml_request && byte_size(saml_request),
+            saml_request_sha256: payload_fingerprint(saml_request)
           }
         end)
 

@@ -431,9 +431,19 @@ defmodule ExSaml.SPHandlerTest do
 
       conn = SPHandler.consume_signin_response(acs_conn("idp-1", body))
       {_, error_id} = error_id_from(conn)
-      {:ok, %Error{id: id}} = Error.get_from_id(error_id)
+      {:ok, %Error{id: id, report: report}} = Error.get_from_id(error_id)
 
       assert Debug.saml_response(id) == nil
+
+      # The payload lives only in the capture: the report keeps its size and
+      # fingerprint, never the base64 itself.
+      refute inspect(report, limit: :infinity, printable_limit: :infinity) =~ body["SAMLResponse"]
+
+      assert {:response_received, %{saml_response_bytes: bytes, saml_response_sha256: sha}} =
+               List.keyfind(report, :response_received, 0)
+
+      assert bytes == byte_size(body["SAMLResponse"])
+      assert sha == :sha256 |> :crypto.hash(body["SAMLResponse"]) |> Base.encode16(case: :lower)
     end
 
     test "log: :steps never writes the payload to the logs" do
