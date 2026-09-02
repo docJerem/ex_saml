@@ -146,6 +146,41 @@ ExSaml.Debug.disable("acme")
 Debug mode logs the raw `SAMLResponse` and the assertion attributes: keep the
 TTL short. Details in the [guide](guides/error_handling_and_debugging.md#4-debug-mode).
 
+### Response validation
+
+Beyond signatures, `Version`, `Recipient`, `Audience` and the validity window,
+the library checks the response against SAML 2.0 Core / Profiles:
+
+| Check | Error | Enforced by default |
+|---|---|---|
+| `Issuer` matches the IdP `entityID` | `:bad_issuer` | yes |
+| `InResponseTo` matches the `AuthnRequest` we sent | `:bad_in_response_to` | yes |
+| `SubjectConfirmation/@Method` is bearer | `:bad_subject_confirmation` | yes |
+| `SessionNotOnOrAfter` has not passed | `:session_expired` | yes |
+| `Destination` matches the ACS URL | `:bad_destination` | not yet |
+| The assertion has not been replayed | `:duplicate` | not yet |
+
+A check that is not enforced is still evaluated, and a failure is logged as:
+
+```
+[ExSaml] saml_validation check=:bad_destination enforced=false idp_id="acme" expected="…" actual="…"
+```
+
+which is how a check is observed against real IdP traffic before it starts
+refusing logins. Change the set with:
+
+```elixir
+# enforce everything, including the two still being observed
+config :ex_saml, enforced_response_checks: :all
+
+# log everything, reject nothing — the rollback lever
+config :ex_saml, enforced_response_checks: []
+```
+
+Checks that cannot be evaluated are skipped rather than failed: no IdP
+`entityID` configured, an absent optional element, a timestamp that does not
+parse.
+
 ### Dynamic Provider Loading
 
 For loading providers from a database at runtime:

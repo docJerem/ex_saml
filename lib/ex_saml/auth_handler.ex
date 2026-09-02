@@ -38,8 +38,10 @@ defmodule ExSaml.AuthHandler do
     {idp_signin_url, req_xml_frag} =
       Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
 
+    authn_request_id = Helper.authn_request_id(req_xml_frag)
+
     conn
-    |> put_relay_state(idp, relay_state, target_url, idp_signin_url)
+    |> put_relay_state(idp, relay_state, target_url, idp_signin_url, authn_request_id)
     |> State.delete_assertion(assertion_key)
     # NOTE: conflict with the current Gateway User session ?
     # # if yes then we need to add an option to put back the user token session
@@ -47,6 +49,7 @@ defmodule ExSaml.AuthHandler do
     |> put_session("relay_state", relay_state)
     |> put_session("idp_id", idp_id)
     |> put_session("target_url", target_url)
+    |> put_session("authn_request_id", authn_request_id)
     |> send_saml_request(
       idp_signin_url,
       idp.use_redirect_for_req,
@@ -80,13 +83,16 @@ defmodule ExSaml.AuthHandler do
         {idp_signin_url, req_xml_frag} =
           Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
 
+        authn_request_id = Helper.authn_request_id(req_xml_frag)
+
         conn
-        |> put_relay_state(idp, relay_state, target_url, idp_signin_url)
+        |> put_relay_state(idp, relay_state, target_url, idp_signin_url, authn_request_id)
         |> State.delete_assertion(assertion_key)
         |> configure_session(renew: true)
         |> put_session("relay_state", relay_state)
         |> put_session("idp_id", idp_id)
         |> put_session("target_url", target_url)
+        |> put_session("authn_request_id", authn_request_id)
         |> send_saml_request(
           idp_signin_url,
           idp.use_redirect_for_req,
@@ -153,7 +159,14 @@ defmodule ExSaml.AuthHandler do
   # Persists the server-side relay state shared by `request_idp/2` and
   # `send_signin_req/1`, and traces the outgoing AuthnRequest in debug mode.
   # The relay state doubles as the flow's `debug_id`.
-  defp put_relay_state(conn, %IdpData{id: idp_id} = idp, relay_state, target_url, idp_signin_url) do
+  defp put_relay_state(
+         conn,
+         %IdpData{id: idp_id} = idp,
+         relay_state,
+         target_url,
+         idp_signin_url,
+         authn_request_id
+       ) do
     {saml_nonce, nonce_source} = resolve_saml_nonce(conn)
     session_id = get_session(conn, :session_id)
 
@@ -164,6 +177,7 @@ defmodule ExSaml.AuthHandler do
         session_id: session_id,
         saml_nonce: saml_nonce,
         idp_id: idp_id,
+        authn_request_id: authn_request_id,
         user_token: get_session(conn, :user_token),
         redirect_uri: get_session(conn, :redirect_uri),
         target_url: target_url
@@ -179,6 +193,7 @@ defmodule ExSaml.AuthHandler do
         debug_id: relay_state,
         relay_state: relay_state,
         target_url: target_url,
+        authn_request_id: authn_request_id,
         saml_nonce: saml_nonce,
         nonce_source: nonce_source,
         session_id_present: not is_nil(session_id),

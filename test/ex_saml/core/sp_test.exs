@@ -137,6 +137,38 @@ defmodule ExSaml.Core.SpTest do
       assert issue_instant != nil
     end
 
+    # The InResponseTo check is only as good as our ability to read back the id
+    # we minted. If `xml_id/1` returned nil the check would silently never fire,
+    # so both generation paths are pinned here.
+    test "xml_id/1 reads back the ID on the unsigned path" do
+      xml = Sp.generate_authn_request("https://idp.example.com/sso", base_sp(), nil)
+
+      id = Sp.xml_id(xml)
+      assert is_binary(id) and id != ""
+      assert attr_to_string(find_attr(xml, :ID)) == id
+    end
+
+    test "xml_id/1 reads back the ID on the signed path" do
+      sp_data =
+        ExSaml.SpData.load_provider(%ExSaml.SpData{
+          id: "sp1",
+          certfile: "test/data/test.crt",
+          keyfile: "test/data/test.pem"
+        })
+
+      sp = %{base_sp() | sp_sign_requests: true, key: sp_data.key, certificate: sp_data.cert}
+      xml = Sp.generate_authn_request("https://idp.example.com/sso", sp, nil)
+
+      id = Sp.xml_id(xml)
+      assert is_binary(id) and id != ""
+      assert attr_to_string(find_attr(xml, :ID)) == id
+    end
+
+    test "xml_id/1 returns nil for an element with no ID" do
+      xml = xmlElement(name: :"samlp:AuthnRequest", attributes: [])
+      assert Sp.xml_id(xml) == nil
+    end
+
     test "produces XML with Issuer child element" do
       sp = base_sp()
       xml = Sp.generate_authn_request("https://idp.example.com/sso", sp, nil)

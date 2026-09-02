@@ -84,6 +84,20 @@ msgstr "This assertion has already been used. Please start the sign-in again."
 
 ## Flow validation
 
+## Response validation (SAML 2.0 Core / Profiles)
+
+msgid "bad_issuer"
+msgstr "The identity provider that issued this response is not the one configured for this connection. Check that the IdP metadata (entityID) is up to date."
+
+msgid "bad_in_response_to"
+msgstr "This response does not correspond to the authentication request that was sent. Please start the sign-in again."
+
+msgid "bad_subject_confirmation"
+msgstr "The assertion does not use the bearer subject confirmation method required for web browser SSO."
+
+msgid "session_expired"
+msgstr "The session established by the identity provider has expired. Please sign in again."
+
 msgid "idp_initiated_not_allowed"
 msgstr "IdP-initiated sign-in is not enabled for this identity provider."
 

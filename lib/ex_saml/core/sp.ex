@@ -33,6 +33,7 @@ defmodule ExSaml.Core.Sp do
     StatusCode,
     Subject,
     Util,
+    ValidationContext,
     Xml.Dsig
   }
 
@@ -104,7 +105,7 @@ defmodule ExSaml.Core.Sp do
   @spec generate_authn_request(String.t(), SpConfig.t(), String.t() | nil) :: xml()
   def generate_authn_request(idp_url, %SpConfig{consume_uri: consume_uri} = sp, format) do
     stamp = now_saml_stamp()
-    issuer = get_entity_id(sp)
+    issuer = SpConfig.entity_id(sp)
 
     xml =
       Saml.to_xml(%AuthnRequest{
@@ -143,7 +144,7 @@ defmodule ExSaml.Core.Sp do
   @spec generate_logout_request(String.t(), String.t(), Subject.t(), SpConfig.t()) :: xml()
   def generate_logout_request(idp_url, session_index, %Subject{} = subject, %SpConfig{} = sp) do
     stamp = now_saml_stamp()
-    issuer = get_entity_id(sp)
+    issuer = SpConfig.entity_id(sp)
 
     xml =
       Saml.to_xml(%LogoutRequest{
@@ -175,7 +176,7 @@ defmodule ExSaml.Core.Sp do
   @spec generate_logout_response(String.t(), atom(), SpConfig.t()) :: xml()
   def generate_logout_response(idp_url, status, %SpConfig{} = sp) do
     stamp = now_saml_stamp()
-    issuer = get_entity_id(sp)
+    issuer = SpConfig.entity_id(sp)
 
     xml =
       Saml.to_xml(%LogoutResponse{
@@ -201,7 +202,7 @@ defmodule ExSaml.Core.Sp do
   """
   @spec generate_metadata(SpConfig.t()) :: xml()
   def generate_metadata(%SpConfig{org: org, tech: tech} = sp) do
-    entity_id = get_entity_id(sp)
+    entity_id = SpConfig.entity_id(sp)
 
     xml =
       Saml.to_xml(%SpMetadata{
@@ -250,12 +251,14 @@ defmodule ExSaml.Core.Sp do
     ns = @protocol_ns
     success_status = ~c"urn:oasis:names:tc:SAML:2.0:status:Success"
 
+    ctx = ValidationContext.from_sp_config(sp)
+
     with :ok <- check_status_code(xml, ns, success_status),
          {:ok, assertion_xml} <- extract_assertion(xml, ns, sp),
          :ok <- verify_envelope_signature(xml, sp),
          :ok <- verify_assertion_signature(assertion_xml, sp),
-         {:ok, assertion} <-
-           Saml.validate_assertion(assertion_xml, sp.consume_uri, get_entity_id(sp)),
+         :ok <- check_response_issuer(xml, ns, ctx),
+         {:ok, assertion} <- Saml.validate_assertion(assertion_xml, ctx),
          :ok <- check_duplicate(assertion, xml, duplicate_fun) do
       {:ok, assertion}
     else
@@ -264,7 +267,7 @@ defmodule ExSaml.Core.Sp do
           %{
             reason: reason,
             consume_uri: sp.consume_uri,
-            entity_id: get_entity_id(sp),
+            entity_id: SpConfig.entity_id(sp),
             idp_signs_envelopes: sp.idp_signs_envelopes,
             idp_signs_assertions: sp.idp_signs_assertions,
             trusted_fingerprints: sp.trusted_fingerprints
@@ -276,6 +279,39 @@ defmodule ExSaml.Core.Sp do
   end
 
   # -- assertion validation helpers --
+
+  # Profiles §4.1.4.2. `Issuer` is optional on a `StatusResponseType`, so an
+  # absent element is not a failure; a present one that names a different IdP
+  # is. Runs after signature verification on purpose — checking it on an
+  # unverified document would fill the warn logs with forged traffic that the
+  # signature check rejects anyway.
+  defp check_response_issuer(xml, ns, %ValidationContext{} = ctx) do
+    expected = ctx.idp_entity_id |> to_string() |> String.trim()
+
+    case {expected, response_issuer(xml, ns)} do
+      {"", _} ->
+        :ok
+
+      {_, nil} ->
+        :ok
+
+      {expected, expected} ->
+        :ok
+
+      {expected, actual} ->
+        ValidationContext.verdict(ctx, {:error, :bad_issuer}, expected: expected, actual: actual)
+    end
+  end
+
+  defp response_issuer(xml, ns) do
+    case :xmerl_xpath.string(~c"/samlp:Response/saml:Issuer/text()", xml, [{:namespace, ns}]) do
+      [text] when Record.is_record(text, :xmlText) ->
+        text |> xmlText(:value) |> to_string() |> String.trim()
+
+      _ ->
+        nil
+    end
+  end
 
   defp check_status_code(xml, ns, success_status) do
     case :xmerl_xpath.string(
@@ -537,6 +573,27 @@ defmodule ExSaml.Core.Sp do
     end
   end
 
+  @doc """
+  Returns the `ID` attribute of a generated request element, or `nil`.
+
+  `generate_authn_request/3` mints the id internally — `Dsig.sign/4` prepends it
+  when SP signing is on, `add_xml_id/1` appends it otherwise — and the SP needs
+  it back to match the `InResponseTo` of the response it will receive.
+  """
+  @spec xml_id(xml()) :: String.t() | nil
+  def xml_id(xml) do
+    xml
+    |> xmlElement(:attributes)
+    |> Enum.find_value(fn attr ->
+      Record.is_record(attr, :xmlAttribute) and xmlAttribute(attr, :name) == :ID and
+        to_string(xmlAttribute(attr, :value))
+    end)
+    |> case do
+      false -> nil
+      value -> value
+    end
+  end
+
   defp add_xml_id(xml) do
     attrs =
       xmlElement(xml, :attributes) ++
@@ -544,9 +601,6 @@ defmodule ExSaml.Core.Sp do
 
     xmlElement(xml, attributes: attrs)
   end
-
-  defp get_entity_id(%SpConfig{entity_id: nil, metadata_uri: meta_uri}), do: meta_uri
-  defp get_entity_id(%SpConfig{entity_id: entity_id}), do: entity_id
 
   defp reorder_issuer(elem) do
     content = xmlElement(elem, :content)

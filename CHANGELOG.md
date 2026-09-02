@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ExSaml.Core.StatusCode`: full catalogue of the 23 SAML 2.0 `StatusCode` URIs (4 top level, 19 second level) with `to_atom/1`, `to_uri/1`, `top_level?/1`, `second_level?/1`. `ExSaml.Core.Sp` now reads the nested second-level `StatusCode`, `StatusMessage` and `StatusDetail` of a non-success response; the public `{:saml_error, status, message}` tuple is unchanged and the nested code is exposed through `%ExSaml.Error{saml_sub_status: _}` and `ExSaml.ErrorMessages` (#54)
 - English consumer guide `guides/error_handling_and_debugging.md`: callback contract, `%ExSaml.Error{}` reference and catalogue of reasons, legacy session behaviour, debug mode, troubleshooting recipes (#54)
 - `ExSaml.ErrorMessages` (en/fr) now covers every reason produced on the sign-in path, every signature verification error and every second-level SAML status (#54)
+- Four SAML 2.0 Core / Profiles checks that were missing from response validation, each with an en/fr message (#55):
+  - `Response/Issuer` and `Assertion/Issuer` are compared against the IdP `entityID` from its metadata → `:bad_issuer` (Core §2.2.3, Profiles §4.1.4.2). Skipped when the entityID is unknown; an absent `Response/Issuer` is not a failure, the element is optional on a `StatusResponseType`
+  - `SubjectConfirmationData/@InResponseTo` is compared against the `ID` of the `AuthnRequest` we issued → `:bad_in_response_to` (Profiles §4.1.4.3). The id is stored next to the relay state and mirrored into the session, so it resolves through whichever of the two survives the IdP's cross-site POST
+  - `AuthnStatement/@SessionNotOnOrAfter` is enforced → `:session_expired` (Core §2.7.2), with the same 5 s clock skew as the other time checks. A value that cannot be parsed warns and passes rather than rejecting
+  - `SubjectConfirmation/@Method` must be bearer → `:bad_subject_confirmation` (Profiles §4.1.4.2)
+- `ExSaml.Core.ValidationContext`: carries what the checks need and decides, per check, whether a failure rejects or only logs. `config :ex_saml, :enforced_response_checks, [...]` selects the enforcing set; anything absent is evaluated and logged under a single `[ExSaml] saml_validation check=… enforced=false expected=… actual=…` line. Setting it to `[]` downgrades every check to log-only, which is the rollback lever if one of them turns out to reject real traffic (#55)
+- `ExSaml.Core.SpConfig` gains `idp_entity_id` and `idp_id`, both filled from data already on `%ExSaml.IdpData{}`, and a public `entity_id/1` replacing the private helper in `ExSaml.Core.Sp` (#55)
+- `ExSaml.Core.Sp.xml_id/1` and `ExSaml.Helper.authn_request_id/1` read back the `ID` of a generated AuthnRequest. `gen_idp_signin_req/3`'s return tuple is unchanged (#55)
 
 ### Fixed
 
@@ -26,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authorization code payload gains an additive `debug_id:` key (`nil` unless debug mode is on) (#54)
 - `ExSaml.Assertion.get_from_code/1` logs a missing / expired code at `:warning` (was `:info`) with the code (#54)
 - `ExSaml.Core.Saml` status mapping delegates to `ExSaml.Core.StatusCode`; historical atoms (`:bad_version`, `:bad_attr`, `:denied`, `:bad_binding`, `:authn_failed`) are preserved, and the 17 other spec statuses now map to their catalogue atom instead of a raw URI suffix (#54)
+- **Responses that were previously accepted can now be rejected.** The four checks above are enforcing by default; a conformant IdP is unaffected, but an IdP that sends the wrong `Issuer`, echoes the wrong `InResponseTo`, uses a non-bearer confirmation method, or reports an already-expired session will now fail. `config :ex_saml, :enforced_response_checks, []` turns them all into warnings without a library release (#55)
+- `ExSaml.Core.Saml.validate_assertion/2` takes an `ExSaml.Core.ValidationContext`. The 3-arity form is unchanged and still supported; it skips the checks that need a context, so callers that build a `%SpConfig{}` by hand keep their current behaviour (#55)
+- The relay-state cache payload and the session both gain an additive `authn_request_id` key. A stored `nil` skips the `InResponseTo` check rather than rejecting, so logins already in flight during a rolling deploy are unaffected (#55)
 
 ## [1.1.2] - 2026-06-08
 

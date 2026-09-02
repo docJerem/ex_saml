@@ -55,6 +55,16 @@ defmodule ExSaml.Helper do
     {idp_signin_url, xml_frag}
   end
 
+  @doc """
+  The `ID` of a generated AuthnRequest, to be matched against the `InResponseTo`
+  of the response it comes back with.
+
+  A separate accessor rather than a third element in `gen_idp_signin_req/3`'s
+  tuple, so existing callers keep working unchanged.
+  """
+  @spec authn_request_id(tuple()) :: String.t() | nil
+  def authn_request_id(req_xml_frag), do: Core.Sp.xml_id(req_xml_frag)
+
   def gen_idp_signout_req(sp, idp_metadata, subject, session_index) do
     idp_signout_url = idp_metadata.logout_location
     xml_frag = Core.Sp.generate_logout_request(idp_signout_url, session_index, subject, sp)

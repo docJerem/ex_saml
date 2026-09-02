@@ -84,6 +84,20 @@ msgstr "Cette assertion a déjà été utilisée. Veuillez relancer la connexion
 
 ## Validation du flux
 
+## Response validation (SAML 2.0 Core / Profiles)
+
+msgid "bad_issuer"
+msgstr "Le fournisseur d'identité ayant émis cette réponse n'est pas celui configuré pour cette connexion. Vérifiez que les métadonnées de l'IdP (entityID) sont à jour."
+
+msgid "bad_in_response_to"
+msgstr "Cette réponse ne correspond pas à la requête d'authentification envoyée. Veuillez recommencer la connexion."
+
+msgid "bad_subject_confirmation"
+msgstr "L'assertion n'utilise pas la méthode de confirmation « bearer » requise pour le SSO navigateur."
+
+msgid "session_expired"
+msgstr "La session établie par le fournisseur d'identité a expiré. Veuillez vous reconnecter."
+
 msgid "idp_initiated_not_allowed"
 msgstr "La connexion initiée par l'IdP n'est pas activée pour ce fournisseur d'identité."
 

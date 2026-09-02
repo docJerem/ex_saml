@@ -204,6 +204,101 @@ defmodule ExSaml.SPHandlerTest do
                SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
     end
 
+    test "returns {:ok, ...} when InResponseTo matches the AuthnRequest we issued" do
+      idp = %IdpData{id: "idp-1"}
+
+      conn =
+        build_conn(%{
+          "relay_state" => "rs-abc",
+          "idp_id" => "idp-1",
+          "saml_nonce" => "nonce-xyz",
+          "authn_request_id" => "request-id-42"
+        })
+
+      assert {:ok, :sp_initiated, "nonce-xyz"} =
+               SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
+    end
+
+    test "returns :bad_in_response_to when InResponseTo names a different request" do
+      idp = %IdpData{id: "idp-1"}
+
+      conn =
+        build_conn(%{
+          "relay_state" => "rs-abc",
+          "idp_id" => "idp-1",
+          "saml_nonce" => "nonce-xyz",
+          "authn_request_id" => "some-other-request"
+        })
+
+      assert {:error, :bad_in_response_to} =
+               SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
+    end
+
+    # Rolling-deploy regression: relay-state entries written before this check
+    # existed carry no id, and every login in flight at deploy time would fail
+    # if a missing id rejected instead of skipping.
+    test "a stored nil AuthnRequest id skips the check instead of rejecting" do
+      idp = %IdpData{id: "idp-1"}
+
+      conn =
+        build_conn(%{
+          "relay_state" => "rs-abc",
+          "idp_id" => "idp-1",
+          "saml_nonce" => "nonce-xyz"
+        })
+
+      assert {:ok, :sp_initiated, "nonce-xyz"} =
+               SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
+    end
+
+    test "reads the AuthnRequest id from the relay-state cache when the session is empty" do
+      idp = %IdpData{id: "idp-1"}
+
+      Process.put(:stub_relay_cache_value, %{
+        relay_state: "rs-abc",
+        idp_id: "idp-1",
+        saml_nonce: "nonce-xyz",
+        authn_request_id: "request-id-42"
+      })
+
+      assert {:ok, :sp_initiated, "nonce-xyz"} =
+               SPHandler.validate_authresp(
+                 build_conn(%{}),
+                 idp,
+                 sp_initiated_assertion(),
+                 "rs-abc"
+               )
+
+      Process.put(:stub_relay_cache_value, %{
+        relay_state: "rs-abc",
+        idp_id: "idp-1",
+        saml_nonce: "nonce-xyz",
+        authn_request_id: "wrong-request"
+      })
+
+      assert {:error, :bad_in_response_to} =
+               SPHandler.validate_authresp(
+                 build_conn(%{}),
+                 idp,
+                 sp_initiated_assertion(),
+                 "rs-abc"
+               )
+    end
+
+    test "a bad relay state still reports :invalid_relay_state, not :bad_in_response_to" do
+      idp = %IdpData{id: "idp-1"}
+
+      conn =
+        build_conn(%{
+          "relay_state" => "rs-different",
+          "idp_id" => "idp-1",
+          "authn_request_id" => "some-other-request"
+        })
+
+      assert {:error, :invalid_relay_state} =
+               SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
+    end
+
     test "returns :invalid_idp_id when session idp_id does not match" do
       idp = %IdpData{id: "idp-1"}
 
