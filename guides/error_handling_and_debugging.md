@@ -276,7 +276,7 @@ report.
 | Step | Where | Captured |
 |---|---|---|
 | `:authn_request` | AuthnRequest sent | idp_id, relay_state, target_url, nonce and its source (`:assigns` / `:cookie` / `:generated`), binding, IdP URL, whether a session id / user token was present |
-| `:response_received` | ACS entry | relay_state (raw / decoded), relay-state cache hit and content, method, host, origin / referer / user-agent, cookie names, body param keys, `SAMLEncoding`, raw `SAMLResponse`, which session keys were present |
+| `:response_received` | ACS entry | relay_state (raw / decoded), relay-state cache hit and content, method, host, origin / referer / user-agent, cookie names, body param keys, `SAMLEncoding`, size and SHA-256 of the `SAMLResponse` (the payload itself lives only in the capture), which session keys were present |
 | `:saml_status_error` | IdP non-success status | top-level and nested `StatusCode`, `StatusMessage`, `StatusDetail` |
 | `:validate_assertion_failed` | XML validation | the reason, and for `:bad_assertion` which extraction path failed (`where:`) with the swallowed exception |
 | `:decode_payload_failed` | payload decoding | encoding, payload size, exception with stack trace |
@@ -288,7 +288,7 @@ report.
 | `:relay_state_taken` / `:relay_state_deleted` | `ExSaml.RelayStateCache` | key, hit / miss |
 | `:error_issued` | failure | error id, reason, scope, step, detail, target URL and its source, session snapshot |
 | `:unexpected_error` | rescued exception | formatted exception with stack trace |
-| `:logout_response_failed` / `:logout_request_failed` | single logout | error, payload |
+| `:logout_response_failed` / `:logout_request_failed` | single logout | error, size and SHA-256 of the payload, session snapshot |
 
 ### Captured `SAMLResponse`
 
@@ -300,6 +300,7 @@ it is persisted as soon as it is received. The capture is stored on its own
 | Key | Content |
 |---|---|
 | `saml_response` | the base64 exactly as posted by the IdP — what a signature replay needs |
+| `saml_response_sha256` | fingerprint of that base64, also present in the report's `:response_received` step so both can be matched |
 | `xml` | the decoded document, for reading |
 | `saml_encoding`, `relay_state`, `idp_id`, `host`, `received_at` | request context |
 | `captured_on` | `:error` or `:always` |
