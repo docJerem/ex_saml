@@ -266,7 +266,7 @@ If you're coming from [Samly](https://hex.pm/packages/samly) or the [Dropbox for
 - **Security Plug** - Centralized security headers with CSP nonce support
 - **Configurable cache backend** - Cache module set via `config.exs` instead of hardcoded
 - **Nonce validation** - Cryptographic nonce generated and validated during auth flow
-- **Relay state anti-replay** - `RelayStateCache.take/1` atomically reads and deletes relay state
+- **Relay state** - scoped to a short TTL and deleted once the response is consumed. `RelayStateCache.take/1` is available for consumers that need an atomic read-and-delete; the built-in consume path reads and deletes in two steps
 - **Streamlined routing** - Removed unused routes, simplified session handling
 
 ## Documentation

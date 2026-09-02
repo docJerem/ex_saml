@@ -268,6 +268,18 @@ defmodule ExSaml.SPHandlerTest do
     {location, URI.decode_query(query)["error_id"]}
   end
 
+  # Stands in for a cache whose backend is down (or is simply not configured):
+  # every operation raises. The consume path must survive it.
+  defmodule RaisingCache do
+    def get(_key), do: raise("cache unavailable")
+    def put(_key, _value, _opts), do: raise("cache unavailable")
+    def put_new!(_key, _value, _opts), do: raise("cache unavailable")
+    def take(_key), do: raise("cache unavailable")
+    def delete(_key), do: raise("cache unavailable")
+    def ttl(_key), do: raise("cache unavailable")
+    def all(_query, _opts), do: raise("cache unavailable")
+  end
+
   describe "consume_signin_response/1 failure path" do
     alias ExSaml.{Core.SpConfig, Debug, Error}
 
@@ -307,10 +319,61 @@ defmodule ExSaml.SPHandlerTest do
       assert location == "/?error_id=#{error_id}"
       assert get_session(conn, "ex_saml_error") == {:error, {:unknown_idp, "nope"}}
 
-      assert {:ok, %Error{reason: {:unknown_idp, "nope"}, step: :idp_lookup, details: nil}} =
-               Error.get_from_id(error_id)
+      # The idp lookup fails before the flow context is established, so the id
+      # has to be threaded in explicitly rather than read back from the process.
+      assert {:ok,
+              %Error{
+                reason: {:unknown_idp, "nope"},
+                step: :idp_lookup,
+                idp_id: "nope",
+                details: nil
+              }} = Error.get_from_id(error_id)
 
       assert {:error, :not_found} = Error.get_from_id(error_id)
+    end
+
+    test "params without an idp_id fail closed with a 403, not a FunctionClauseError" do
+      conn =
+        SPHandler.consume_signin_response(
+          acs_conn("idp-1")
+          |> Map.update!(:params, &Map.delete(&1, "idp_id"))
+        )
+
+      assert conn.status == 403
+      assert conn.resp_body == "invalid_request"
+    end
+
+    test "a raising cache still redirects — the error redirect cannot itself 500" do
+      Application.put_env(:ex_saml, :cache, RaisingCache)
+      on_exit(fn -> Application.put_env(:ex_saml, :cache, ExSaml.StubCache) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = SPHandler.consume_signin_response(acs_conn("nope"))
+
+          # No error_id — it could not be stored — but the browser is still
+          # redirected and the legacy session entry still carries the reason.
+          assert conn.status == 302
+          assert get_resp_header(conn, "location") == ["/"]
+          assert get_session(conn, "ex_saml_error") == {:error, {:unknown_idp, "nope"}}
+        end)
+
+      assert log =~ "could not store the error"
+    end
+
+    test "an unstorable error and an unusable target url degrade to a 403, never an exception" do
+      Application.put_env(:ex_saml, :cache, RaisingCache)
+      on_exit(fn -> Application.put_env(:ex_saml, :cache, ExSaml.StubCache) end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        conn =
+          SPHandler.consume_signin_response(
+            acs_conn("nope", %{}, %{"target_url" => "https://app.example.com/cb\nInjected: 1"})
+          )
+
+        assert conn.status == 403
+        assert conn.resp_body == "access_denied"
+      end)
     end
 
     test "missing SAMLResponse -> :missing_saml_response with step :decode" do
@@ -352,6 +415,37 @@ defmodule ExSaml.SPHandlerTest do
         end)
 
       assert log =~ "consume_signin_response crashed"
+    end
+
+    test "with debug off the exception reason and the log carry only the type" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = SPHandler.consume_signin_response(acs_conn("broken", %{"SAMLResponse" => "x"}))
+          {_, error_id} = error_id_from(conn)
+
+          assert {:ok, %Error{reason: {:exception, message}}} = Error.get_from_id(error_id)
+
+          # Exception messages embed the value that caused them, which on this
+          # path is routinely the decoded assertion. Type only, no message.
+          refute message =~ ":"
+          assert message =~ ~r/Error$/
+        end)
+
+      assert log =~ "enable ExSaml.Debug for the full report"
+      refute log =~ "** (stacktrace)"
+    end
+
+    test "with debug on the exception reason carries a truncated message" do
+      Debug.enable(idp_id: "broken")
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        conn = SPHandler.consume_signin_response(acs_conn("broken", %{"SAMLResponse" => "x"}))
+        {_, error_id} = error_id_from(conn)
+
+        assert {:ok, %Error{reason: {:exception, message}}} = Error.get_from_id(error_id)
+        assert message =~ ":"
+        assert String.length(message) < 400
+      end)
     end
 
     test "in debug mode the error carries the flow report" do

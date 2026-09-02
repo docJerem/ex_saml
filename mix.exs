@@ -11,6 +11,7 @@ defmodule ExSaml.MixProject do
       deps: deps(),
       description: description(),
       dialyzer: [ignore_warnings: ".dialyzer_ignore.exs"],
+      docs: docs(),
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       package: package(),
@@ -58,12 +59,24 @@ defmodule ExSaml.MixProject do
     """
   end
 
+  # Without `extras` the guides are absent from the generated docs, and without
+  # `files` they are absent from the Hex tarball — so a consumer guide that is
+  # not listed in both is only readable by cloning the repository.
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md"] ++ Path.wildcard("guides/*.md"),
+      source_ref: "v#{@version}"
+    ]
+  end
+
   defp package do
     [
       maintainers: [
         "Jeremie Flandrin"
       ],
       licenses: ["MIT"],
+      files: ~w(lib priv guides .formatter.exs mix.exs README.md CHANGELOG.md),
       links: %{
         "Github" => @source_url
       }

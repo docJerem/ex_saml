@@ -39,6 +39,9 @@ defmodule ExSaml.SPHandler do
     Subject
   }
 
+  # How much of an exception message reaches `{:exception, _}` in debug mode.
+  @exception_message_limit 200
+
   import ExSaml.Helper, only: [get_idp: 1]
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
 
@@ -89,6 +92,13 @@ defmodule ExSaml.SPHandler do
     rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
     relay_state = safe_decode_www_form(rls)
 
+    # Start from a clean process context. `Logger.metadata` and the process
+    # dictionary outlive a request on adapters that reuse a process across a
+    # keep-alive connection, so a stale `debug_id` would let one flow's report
+    # be attached to another flow's error.
+    Debug.put_context(idp_id, nil)
+    Process.delete(:ex_saml_error_step)
+
     try do
       do_consume_signin_response(conn, idp_id, rls, relay_state)
     rescue
@@ -99,6 +109,11 @@ defmodule ExSaml.SPHandler do
         unexpected_error(conn, idp_id, relay_state, kind, value, __STACKTRACE__)
     end
   end
+
+  # No usable `idp_id` in the params — `idp_id_from: :subdomain`, or a direct
+  # call from a consumer that did not route through `ExSaml.SPRouter`. Fails
+  # closed with a 403 instead of a `FunctionClauseError`.
+  def consume_signin_response(conn), do: send_resp(conn, 403, "invalid_request")
 
   # Library-facing clause: pure decode+validate. Returns the assertion data
   # as a tuple — caller is responsible for any conn handling. Useful when
@@ -195,7 +210,7 @@ defmodule ExSaml.SPHandler do
         conn
 
       {:error, error} ->
-        redirect_with_error(conn, relay_state, error)
+        redirect_with_error(conn, idp_id, relay_state, error)
 
       # Defensive fallback: unreachable today (Dialyzer flags it as such), but
       # kept so that any future change introducing a new return shape from the
@@ -238,7 +253,11 @@ defmodule ExSaml.SPHandler do
   defp redirect_with_authorization_code(conn, ctx) do
     code = State.gen_id()
     {_idp_id, debug_id} = Debug.context()
-    debug? = Debug.enabled?(ctx.idp_id)
+
+    # Derived from the id rather than re-reading the flag: the TTL can expire
+    # between the two calls, which would store `debug_id: nil` in the payload
+    # while the report itself still exists.
+    debug? = not is_nil(debug_id)
 
     if debug?, do: Debug.link_code(code, debug_id, ctx.idp_id)
 
@@ -263,32 +282,42 @@ defmodule ExSaml.SPHandler do
       }
     end)
 
-    redirect(conn, 302, "#{ctx.target_url}?code=#{code}")
+    redirect(conn, 302, Helper.append_query_param(ctx.target_url, "code", code))
   end
 
   # Failure path, symmetric with the success path: the error is stored under a
   # random single-use `error_id` and the browser is redirected with
   # `?error_id=<id>`. The legacy session entry is kept for compatibility.
-  defp redirect_with_error(conn, relay_state, reason) do
+  #
+  # This function is also the handler the whole consume path rescues into, so
+  # anything it raises would escape as the bare 500 the contract promises never
+  # to produce. It therefore guards itself, and the last-resort branch touches
+  # neither the session nor the cache.
+  defp redirect_with_error(conn, idp_id, relay_state, reason) do
+    do_redirect_with_error(conn, idp_id, relay_state, reason)
+  rescue
+    e -> last_resort_error(conn, :error, e, __STACKTRACE__)
+  catch
+    kind, value -> last_resort_error(conn, kind, value, __STACKTRACE__)
+  end
+
+  defp do_redirect_with_error(conn, idp_id, relay_state, reason) do
     {target_url, target_source} =
       case reason do
         :invalid_target_url -> {target_url(), :fallback}
         _ -> target_url_with_source(conn, relay_state)
       end
 
-    {idp_id, debug_id} = Debug.context()
+    # `idp_id` is threaded in from the request rather than read back from the
+    # process context: the context is only established once the flow reaches
+    # the 2-arity clause, so an earlier failure would otherwise report `nil` —
+    # or, on a process reused across a keep-alive connection, the previous
+    # flow's id.
+    {_ctx_idp_id, debug_id} = Debug.context()
     step = Process.delete(:ex_saml_error_step) || :validate_authresp
+    step = if reason == :invalid_target_url, do: :target_url, else: step
 
-    {error_id, error} =
-      Error.new(%{
-        reason: reason,
-        step: if(reason == :invalid_target_url, do: :target_url, else: step),
-        flow: flow_for(reason),
-        idp_id: idp_id,
-        relay_state: relay_state,
-        debug_id: debug_id
-      })
-      |> Error.issue()
+    error_id = issue_error(reason, step, idp_id, relay_state, debug_id)
 
     Debug.log(:error_issued, idp_id, fn ->
       %{
@@ -296,7 +325,7 @@ defmodule ExSaml.SPHandler do
         debug_id: debug_id,
         error_id: error_id,
         reason: reason,
-        step: error.step,
+        step: step,
         target_url: target_url,
         target_source: target_source,
         session: session_snapshot(conn),
@@ -306,24 +335,97 @@ defmodule ExSaml.SPHandler do
 
     conn
     |> put_session("ex_saml_error", {:error, reason})
-    |> redirect(302, Error.append_error_id(target_url, error_id))
+    |> redirect(302, maybe_append_error_id(target_url, error_id))
   end
+
+  # Storing the error must not be able to take the request down: a cache outage
+  # is exactly the kind of incident this contract exists to report on. When the
+  # store fails the consumer still gets the redirect and the legacy session
+  # entry, just without a redeemable id.
+  defp issue_error(reason, step, idp_id, relay_state, debug_id) do
+    {error_id, _error} =
+      Error.new(%{
+        reason: reason,
+        step: step,
+        flow: flow_for(reason),
+        idp_id: idp_id,
+        relay_state: relay_state,
+        debug_id: debug_id
+      })
+      |> Error.issue()
+
+    error_id
+  rescue
+    e ->
+      Logger.error("[ExSaml] could not store the error: #{Exception.message(e)}")
+      nil
+  catch
+    _, _ -> nil
+  end
+
+  defp last_resort_error(conn, kind, value, stacktrace) do
+    Logger.error(
+      "[ExSaml] the error redirect itself failed: #{Exception.format(kind, value, stacktrace)}"
+    )
+
+    send_resp(conn, 403, "access_denied")
+  rescue
+    # The response was already sent, or the conn is unusable. Nothing left to
+    # do but hand it back untouched.
+    _ -> conn
+  end
+
+  defp maybe_append_error_id(target_url, nil), do: target_url
+
+  defp maybe_append_error_id(target_url, error_id),
+    do: Error.append_error_id(target_url, error_id)
 
   defp unexpected_error(conn, idp_id, relay_state, kind, value, stacktrace) do
+    debug? = Debug.enabled?(idp_id)
     formatted = Exception.format(kind, value, stacktrace)
-    Logger.error("[ExSaml] consume_signin_response crashed: #{formatted}")
 
-    Debug.log(:unexpected_error, %{idp_id: idp_id, relay_state: relay_state, error: formatted})
+    # A formatted exception embeds the offending value, and on this path that
+    # value is routinely the decoded assertion (NameID and every attribute).
+    # The full text is a debug-mode artefact; normal operation gets the type.
+    if debug? do
+      Logger.error("[ExSaml] consume_signin_response crashed: #{formatted}")
+    else
+      Logger.error(
+        "[ExSaml] consume_signin_response crashed: #{exception_type(kind, value)} " <>
+          "(enable ExSaml.Debug for the full report)"
+      )
+    end
+
+    Debug.log(:unexpected_error, idp_id, fn ->
+      %{idp_id: idp_id, relay_state: relay_state, error: formatted}
+    end)
+
     Process.put(:ex_saml_error_step, :unexpected)
 
-    message =
-      case kind do
-        :error -> Exception.message(Exception.normalize(:error, value, stacktrace))
-        _ -> inspect(value)
-      end
-
-    redirect_with_error(conn, relay_state, {:exception, message})
+    redirect_with_error(conn, idp_id, relay_state, exception_reason(kind, value, debug?))
   end
+
+  # `{:exception, _}` travels into the session cookie and into an `error_id`
+  # anyone holding the id can redeem, so with debug off it carries only the
+  # exception type — exception messages embed the value that caused them.
+  defp exception_message(:error, value), do: Exception.message(Exception.normalize(:error, value))
+  defp exception_message(_kind, value), do: inspect(value)
+
+  defp exception_reason(kind, value, false), do: {:exception, exception_type(kind, value)}
+
+  defp exception_reason(kind, value, true) do
+    message = kind |> exception_message(value) |> String.slice(0, @exception_message_limit)
+    {:exception, "#{exception_type(kind, value)}: #{message}"}
+  end
+
+  defp exception_type(:error, value) do
+    case Exception.normalize(:error, value) do
+      %module{} -> inspect(module)
+      other -> inspect(other)
+    end
+  end
+
+  defp exception_type(kind, _value), do: to_string(kind)
 
   defp flow_for(:idp_initiated_not_allowed), do: :idp_initiated
   defp flow_for(:invalid_target_url), do: :idp_initiated
@@ -352,6 +454,12 @@ defmodule ExSaml.SPHandler do
            not is_nil(RelayStateCache.get(relay_state)))
 
     if ours?, do: relay_state, else: State.gen_id()
+  rescue
+    # Debug must never break a sign-in: an unfetched session or a cache failure
+    # falls back to a standalone report rather than propagating.
+    _ -> State.gen_id()
+  catch
+    _, _ -> State.gen_id()
   end
 
   defp session_snapshot(conn) do
@@ -560,12 +668,27 @@ defmodule ExSaml.SPHandler do
   @doc "Returns the fallback target URL from application config (defaults to `\"/\"`)."
   def target_url, do: Application.get_env(:ex_saml, :fallback_target_url, "/")
 
+  # Resolving where to send the user must not depend on the cache being up:
+  # this runs on the failure path, and a cache outage is one of the failures it
+  # has to be able to report. Falls back to the configured default.
   defp target_url_with_source(conn, relay_state) do
     cond do
       url = get_session(conn, "target_url") -> {url, :session}
-      url = RelayStateCache.get(relay_state)[:target_url] -> {url, :cache}
+      url = cached_target_url(relay_state) -> {url, :cache}
       true -> {target_url(), :fallback}
     end
+  rescue
+    _ -> {target_url(), :fallback}
+  catch
+    _, _ -> {target_url(), :fallback}
+  end
+
+  defp cached_target_url(relay_state) do
+    RelayStateCache.get(relay_state)[:target_url]
+  rescue
+    _ -> nil
+  catch
+    _, _ -> nil
   end
 
   defp safe_decode_www_form(nil), do: ""

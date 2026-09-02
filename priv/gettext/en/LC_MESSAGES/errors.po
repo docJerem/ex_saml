@@ -58,6 +58,9 @@ msgstr "The SAML response is signed with an algorithm this service does not supp
 msgid "invalid_response"
 msgstr "The SAML response could not be decoded. Make sure your IdP uses the HTTP-POST binding with a base64-encoded SAMLResponse."
 
+msgid "invalid_request"
+msgstr "The single logout request or response could not be read. Check that your IdP signs it with a trusted certificate and uses a supported binding."
+
 msgid "missing_saml_response"
 msgstr "No SAMLResponse was received. The IdP must POST the SAML response to the assertion consumer service."
 

@@ -49,28 +49,42 @@ defmodule ExSaml.Assertion do
   consumed, and `{:error, assertion: :not_found}` when the code was valid but the
   assertion is no longer in the assertion store. Both cases are traced by
   `ExSaml.Debug` when debug mode is on.
+
+  Accepts both payload shapes the cache can hold: the map minted by
+  `ExSaml.SPHandler` on the callback path, and the bare assertion key stored by
+  consumers that drive the flow themselves.
   """
   def get_from_code(code) do
     ctx = Debug.code_context(code) || %{}
 
-    case AuthorizationCodeCache.take(code) do
+    case assertion_key(AuthorizationCodeCache.take(code)) do
       {idp_id, _} = key ->
         fetch_assertion(code, key, idp_id, ctx)
 
-      other ->
-        Logger.warning("[ExSaml] Authorization code not found or expired: #{inspect(code)}")
+      nil ->
+        Logger.warning("[ExSaml] Authorization code not found or expired: #{redact(code)}")
 
         Debug.log(:code_redeemed, %{
           code: code,
           idp_id: ctx[:idp_id],
           debug_id: ctx[:debug_id],
-          code_found: false,
-          cache_value: other
+          code_found: false
         })
 
         {:error, :unauthorized}
     end
   end
+
+  # `ExSaml.SPHandler.redirect_with_authorization_code/2` stores a map so it can
+  # carry the nonce candidate and the debug id alongside the key.
+  defp assertion_key(%{ex_saml_assertion_key: {_idp_id, _} = key}), do: key
+  defp assertion_key({_idp_id, _} = key), do: key
+  defp assertion_key(_), do: nil
+
+  # The code is a bearer credential. It is single-use and already consumed or
+  # expired by the time this is logged, but a prefix is enough to correlate.
+  defp redact(code) when is_binary(code), do: String.slice(code, 0, 8) <> "…"
+  defp redact(code), do: inspect(code)
 
   defp fetch_assertion(code, key, idp_id, ctx) do
     base = %{code: code, idp_id: idp_id, debug_id: ctx[:debug_id], assertion_key: key}

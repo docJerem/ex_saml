@@ -58,6 +58,9 @@ msgstr "La réponse SAML est signée avec un algorithme non pris en charge par c
 msgid "invalid_response"
 msgstr "La réponse SAML n'a pas pu être décodée. Assurez-vous que votre IdP utilise le binding HTTP-POST avec un SAMLResponse encodé en base64."
 
+msgid "invalid_request"
+msgstr "La requête ou la réponse de déconnexion unique n'a pas pu être lue. Vérifiez que votre IdP la signe avec un certificat de confiance et utilise un binding pris en charge."
+
 msgid "missing_saml_response"
 msgstr "Aucun SAMLResponse n'a été reçu. L'IdP doit envoyer la réponse SAML en POST au service consommateur d'assertions."
 

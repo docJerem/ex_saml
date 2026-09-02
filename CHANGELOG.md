@@ -15,17 +15,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - English consumer guide `guides/error_handling_and_debugging.md`: callback contract, `%ExSaml.Error{}` reference and catalogue of reasons, legacy session behaviour, debug mode, troubleshooting recipes (#54)
 - `ExSaml.ErrorMessages` (en/fr) now covers every reason produced on the sign-in path, every signature verification error and every second-level SAML status (#54)
 
-### Fixed
-
-- Signature verification no longer crashes with a `MatchError` when the IdP signs without embedding its X.509 certificate in `KeyInfo`: `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :missing_certificate}`, translated (en/fr) by `ExSaml.ErrorMessages` and surfaced through the `error_id` contract like every other signature reason (#51)
-
 ### Changed
 
 - `ExSaml.SPHandler.consume_signin_response/1` fails closed: an unknown `idp_id` yields `{:unknown_idp, idp_id}`, a missing `SAMLResponse` yields `:missing_saml_response`, and any exception raised while consuming the response is rescued, logged, and turned into an `error_id` redirect with reason `{:exception, message}` instead of a bare 500 (#54)
 - `ExSaml.ErrorMessages.get/2` no longer raises on an unknown code: it returns the generic `unknown_error` message and logs the raw code at `:warning`. It also accepts `%ExSaml.Error{}` and resolves `{:saml_error, _, _}` through the status catalogue instead of an exact-match on `:undefined` messages that never matched (#54)
 - Authorization code payload gains an additive `debug_id:` key (`nil` unless debug mode is on) (#54)
-- `ExSaml.Assertion.get_from_code/1` logs a missing / expired code at `:warning` (was `:info`) with the code (#54)
+- `ExSaml.Assertion.get_from_code/1` logs a missing / expired code at `:warning` (was `:info`), truncated to its first 8 characters — the code is a bearer credential (#54)
 - `ExSaml.Core.Saml` status mapping delegates to `ExSaml.Core.StatusCode`; historical atoms (`:bad_version`, `:bad_attr`, `:denied`, `:bad_binding`, `:authn_failed`) are preserved, and the 17 other spec statuses now map to their catalogue atom instead of a raw URI suffix (#54)
+- **Breaking, logout only.** `ExSaml.Core.Sp.validate_logout_response/2` now returns the status as an atom (`{:error, :requester}`, `{:error, :partial_logout}`) where it previously returned the URI's last segment as a binary (`{:error, "Requester"}`). Consumers matching on the string need updating; `consume_signin_response/2`'s reasons are unaffected (#54)
+- `ExSaml.SPHandler.consume_signin_response/1` accepts a conn whose params carry no `idp_id` (`idp_id_from: :subdomain`, or a direct call) and answers 403 instead of raising a `FunctionClauseError` (#54)
+- `ExSaml.AuthHandler.request_idp/2` answers 403 for an unknown `idp_id` instead of raising a `MatchError`. Sign-in has not started at that point, so there is no target URL to redirect to and no `error_id` to issue (#54)
+- Both callback parameters are now appended with `ExSaml.Helper.append_query_param/3`, so a `target_url` that already carries a query gets a well-formed `?…&code=` rather than a second `?` (#54)
+
+### Fixed
+
+- Signature verification no longer crashes with a `MatchError` when the IdP signs without embedding its X.509 certificate in `KeyInfo`: `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :missing_certificate}`, translated (en/fr) by `ExSaml.ErrorMessages` and surfaced through the `error_id` contract like every other signature reason (#51)
+- The failure path could still produce the bare 500 it exists to prevent. `redirect_with_error/3` is the handler the whole consume path rescues into, and it re-ran the operations that could have raised in the first place — storing the error, resolving the target URL, writing the session — so a cache outage, an unfetched session or a target URL that cannot go in a header raised a second time, outside the rescue. Error issuance and target-URL resolution now degrade instead of raising (the consumer still gets the redirect and the legacy session entry, just without a redeemable id), and the redirect itself has a last-resort 403 that touches neither the session nor the cache (#54)
+- `ExSaml.Assertion.get_from_code/1` could not redeem a code minted by `ExSaml.SPHandler`: the handler stores a map, the function matched a 2-tuple, so every code issued on the callback path resolved to `{:error, :unauthorized}` — including for consumers following the documented contract. Both payload shapes are now accepted (#54)
+- A crash while consuming no longer writes assertion contents to the logs, the session cookie and the redeemable error when debug mode is off. Exception messages embed the value that caused them, which on this path is routinely the decoded assertion; `{:exception, _}` now carries only the exception type unless debug is on for the IdP (#54)
+- A nested `StatusCode` that repeats a top-level code (spec-legal, and what several IdPs send) resolved to the generic `unknown_error` with nothing logged, where 1.1.2 returned the detailed top-level message. Only second-level codes carry a message of their own; anything else falls through to the top-level wording, and a status outside the catalogue is logged with its raw URI (#54)
+- Enabling debug mode could break a sign-in: `debug_id/2` was the only debug call site without a guard, and it reads the session and the relay-state cache. It now falls back to a standalone report id (#54)
+- A failure occurring before the flow context was established read `idp_id` and `debug_id` back from `Logger.metadata`, which is never cleared. On an adapter that reuses a process across a keep-alive connection that attached one flow's debug report — raw `SAMLResponse`, NameID, attributes — to another flow's redeemable error. The context is now reset at the start of every ACS request and `idp_id` is threaded explicitly (#54)
+- `ExSaml.RelayStateCache`'s debug hooks keyed their entries on the raw RelayState, so for an IdP-initiated flow they landed in a report the consumer never sees. They now use the flow's own `debug_id` from the process context (#54)
+- `ExSaml.Core.Sp` formatted the decryption stacktrace even with debug off, on an unauthenticated endpoint taking attacker-controlled input. It is now built lazily like every other capture (#54)
+- `guides/` is included in the Hex package and in the generated documentation, so the consumer guide is reachable without cloning the repository (#54)
+- `:invalid_request`, produced by the single-logout decode paths, has an en/fr message instead of falling back to `unknown_error` (#54)
 
 ## [1.1.2] - 2026-06-08
 

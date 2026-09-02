@@ -34,7 +34,7 @@ defmodule ExSaml.Error do
     * `details` — the full `ExSaml.Debug.report/1` when debug was on, else `nil`
   """
 
-  alias ExSaml.{Core.StatusCode, Debug, ErrorCache, State}
+  alias ExSaml.{Core.StatusCode, Debug, ErrorCache, Helper, State}
 
   defstruct reason: nil,
             step: nil,
@@ -117,11 +117,7 @@ defmodule ExSaml.Error do
 
   @doc "Appends `error_id=<id>` to a URL, preserving any existing query string."
   @spec append_error_id(binary(), binary()) :: binary()
-  def append_error_id(url, error_id) do
-    uri = URI.parse(url)
-    query = (uri.query && URI.decode_query(uri.query)) || %{}
-    URI.to_string(%{uri | query: URI.encode_query(Map.put(query, "error_id", error_id))})
-  end
+  def append_error_id(url, error_id), do: Helper.append_query_param(url, "error_id", error_id)
 
   # `ExSaml.Core.Sp.check_status_value/4` records the nested StatusCode in the
   # process Logger metadata so it can be surfaced here without changing the

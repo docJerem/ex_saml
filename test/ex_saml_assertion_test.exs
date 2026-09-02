@@ -30,6 +30,40 @@ defmodule ExSaml.AssertionTest do
       assert {:error, :unauthorized} = Assertion.get_from_code("c1")
     end
 
+    test "redeems the map payload minted on the callback path" do
+      key = {"acme", "user@example.com"}
+
+      assertion = %Assertion{
+        idp_id: "acme",
+        subject: %Subject{name: "user@example.com"},
+        attributes: %{"email" => "user@example.com"}
+      }
+
+      AssertionCache.put(key, assertion, ttl: :timer.minutes(1))
+
+      # This is the shape `ExSaml.SPHandler.redirect_with_authorization_code/2`
+      # stores, and the one the callback contract in the guide tells consumers
+      # to redeem with this function.
+      AuthorizationCodeCache.put_new!("c3", %{
+        ex_saml_assertion_key: key,
+        saml_nonce_candidate: "nonce",
+        debug_id: nil
+      })
+
+      assert {:ok, {"acme", %{"email" => "user@example.com"}}} = Assertion.get_from_code("c3")
+      assert {:error, :unauthorized} = Assertion.get_from_code("c3")
+    end
+
+    test "does not log the authorization code in full" do
+      log =
+        capture_log(fn ->
+          assert {:error, :unauthorized} = Assertion.get_from_code("abcdefghijklmnop")
+        end)
+
+      assert log =~ "abcdefgh"
+      refute log =~ "abcdefghijklmnop"
+    end
+
     test "distinguishes a missing code from a missing assertion, and traces both in debug" do
       Debug.enable()
       Debug.link_code("c2", "flow-2", "acme")

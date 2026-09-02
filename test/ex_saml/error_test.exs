@@ -88,4 +88,26 @@ defmodule ExSaml.ErrorTest do
                "/callback?error_id=abc&foo=bar"
     end
   end
+
+  # `append_error_id/2` delegates here, and the success path uses it for `code`,
+  # so both halves of the callback contract survive a target URL that carries a
+  # query of its own.
+  describe "Helper.append_query_param/3" do
+    test "adds the param to a bare URL" do
+      assert ExSaml.Helper.append_query_param("https://app.example.com/cb", "code", "abc") ==
+               "https://app.example.com/cb?code=abc"
+    end
+
+    test "preserves an existing query string instead of emitting a second ?" do
+      url = ExSaml.Helper.append_query_param("https://app.example.com/cb?x=1", "code", "abc")
+
+      refute url =~ ~r/\?.*\?/
+      assert URI.decode_query(URI.parse(url).query) == %{"x" => "1", "code" => "abc"}
+    end
+
+    test "keeps the fragment" do
+      assert ExSaml.Helper.append_query_param("/cb#section", "code", "abc") ==
+               "/cb?code=abc#section"
+    end
+  end
 end

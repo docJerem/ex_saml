@@ -92,6 +92,30 @@ defmodule ExSaml.ErrorMessagesTest do
       assert ErrorMessages.get({:saml_error, @responder, nil}) =~ "AuthnFailed"
     end
 
+    test "a nested top-level status falls back to the top-level message" do
+      # Repeating the top-level code as the nested one is spec-legal and several
+      # IdPs do it. Only second-level codes carry a message of their own, so
+      # this must not degrade to the generic unknown text.
+      for status <- [:responder, :requester, :success, :version_mismatch] do
+        Logger.metadata(ex_saml_saml_sub_status: status)
+
+        assert ErrorMessages.get({:saml_error, @responder, nil}) ==
+                 ErrorMessages.get(:status_responder)
+      end
+    end
+
+    test "an uncatalogued status logs the raw value instead of silently unknowning it" do
+      vendor = ~c"urn:example:vendor:status:SomethingElse"
+
+      log =
+        capture_log(fn ->
+          assert ErrorMessages.get({:saml_error, vendor, nil}) == @unknown_en
+        end)
+
+      assert log =~ "No error message for code"
+      assert log =~ "SomethingElse"
+    end
+
     test "every second-level status has a message" do
       for status <- StatusCode.second_level() do
         message = ErrorMessages.get(status)
@@ -109,6 +133,11 @@ defmodule ExSaml.ErrorMessagesTest do
   test "accepts %ExSaml.Error{} and uses its nested status when present" do
     error = %Error{reason: {:saml_error, @responder, nil}, saml_sub_status: :unknown_principal}
     assert ErrorMessages.get(error) =~ "UnknownPrincipal"
+
+    # Same rule as the bare tuple: a nested top-level code has no message of its
+    # own and must fall through rather than resolve to the generic text.
+    error = %Error{reason: {:saml_error, @responder, nil}, saml_sub_status: :responder}
+    assert ErrorMessages.get(error) == ErrorMessages.get(:status_responder)
 
     error = %Error{reason: :bad_audience}
     assert ErrorMessages.get(error) == ErrorMessages.get(:bad_audience)

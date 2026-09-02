@@ -25,11 +25,22 @@ defmodule ExSaml.AuthHandler do
   done.
   """
   def request_idp(conn, idp_id) do
-    conn = put_private(conn, :ex_saml_idp, ExSaml.Helper.get_idp(idp_id))
+    case Helper.get_idp(idp_id) do
+      %IdpData{id: ^idp_id} = idp -> do_request_idp(put_private(conn, :ex_saml_idp, idp), idp)
+      _ -> unknown_idp(conn, idp_id)
+    end
+  end
 
-    %IdpData{id: ^idp_id, idp_metadata: idp_meta, sp_config: sp_cfg} =
-      idp = conn.private[:ex_saml_idp]
+  # No IdP configured under that id. Sign-in has not started yet, so there is
+  # no target URL to redirect to and no `error_id` to hand back — but this must
+  # still be a clean 403 rather than the `MatchError` it used to raise.
+  defp unknown_idp(conn, idp_id) do
+    Logger.warning("[ExSaml] No identity provider configured for #{inspect(idp_id)}")
+    Debug.log(:unknown_idp, %{idp_id: idp_id, step: :request_idp})
+    send_resp(conn, 403, "invalid_request")
+  end
 
+  defp do_request_idp(conn, %IdpData{id: idp_id, idp_metadata: idp_meta, sp_config: sp_cfg} = idp) do
     sp = ensure_sp_uris_set(sp_cfg, conn)
     assertion_key = get_session(conn, "ex_saml_assertion_key")
     relay_state = State.gen_id()

@@ -372,16 +372,20 @@ defmodule ExSaml.Core.Sp do
           end
         rescue
           e ->
-            bad_assertion(:decrypt_assertion, %{
-              error: Exception.format(:error, e, __STACKTRACE__),
-              has_private_key: not is_nil(sp.key)
-            })
+            bad_assertion(:decrypt_assertion, fn ->
+              %{
+                error: Exception.format(:error, e, __STACKTRACE__),
+                has_private_key: not is_nil(sp.key)
+              }
+            end)
         catch
           kind, value ->
-            bad_assertion(:decrypt_assertion, %{
-              error: Exception.format(kind, value, __STACKTRACE__),
-              has_private_key: not is_nil(sp.key)
-            })
+            bad_assertion(:decrypt_assertion, fn ->
+              %{
+                error: Exception.format(kind, value, __STACKTRACE__),
+                has_private_key: not is_nil(sp.key)
+              }
+            end)
         end
 
       _ ->
@@ -401,11 +405,15 @@ defmodule ExSaml.Core.Sp do
 
   # Keeps the public `:bad_assertion` reason while surfacing the swallowed cause
   # in debug mode (which of the three extraction paths failed, and why).
-  defp bad_assertion(where, meta) do
-    Debug.log(
-      :validate_assertion_failed,
+  #
+  # `meta` may be a zero-arity function so that stacktrace formatting — this is
+  # an unauthenticated endpoint taking attacker-controlled input — only happens
+  # when debug is actually on.
+  defp bad_assertion(where, meta) when is_map(meta) or is_function(meta, 0) do
+    Debug.log(:validate_assertion_failed, fn ->
+      meta = if is_function(meta, 0), do: meta.(), else: meta
       Map.merge(%{reason: :bad_assertion, where: where}, meta)
-    )
+    end)
 
     {:error, :bad_assertion}
   end

@@ -4,6 +4,20 @@ defmodule ExSaml.Helper do
   alias ExSaml.{Assertion, IdpData}
   alias ExSaml.Core
 
+  @doc """
+  Appends `key=value` to a URL, preserving any existing query string.
+
+  Both callback parameters go through here: a target URL is free to carry its
+  own query, and naive `"\#{url}?\#{key}=\#{value}"` interpolation would produce
+  a second `?` that no query parser can read.
+  """
+  @spec append_query_param(binary(), binary(), binary()) :: binary()
+  def append_query_param(url, key, value) do
+    uri = URI.parse(url)
+    query = (uri.query && URI.decode_query(uri.query)) || %{}
+    URI.to_string(%{uri | query: URI.encode_query(Map.put(query, key, value))})
+  end
+
   @spec get_idp(binary) :: nil | IdpData.t()
   def get_idp(idp_id) do
     idps = Application.get_env(:ex_saml, :identity_providers, %{})
