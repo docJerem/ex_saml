@@ -145,6 +145,21 @@ defmodule ExSaml.Core.Xml.DsigTest do
       doc = parse_xml(xml)
       assert :ok = Dsig.verify(doc)
     end
+
+    # The SHA1 "bad signature" fixtures above are rejected as :insecure_algorithm
+    # before the signature is even checked, so this is the only test proving that
+    # a tampered SHA256 signature surfaces as :bad_signature.
+    test "tampered SHA256 signature returns {:error, :bad_signature}" do
+      xml = File.read!(Path.join([__DIR__, "../../fixtures/sha256_signed_response.xml"]))
+      [_, sig] = Regex.run(~r|<ds:SignatureValue>([^<]+)</ds:SignatureValue>|, xml)
+      flipped = if String.first(sig) == "A", do: "B", else: "A"
+      tampered_sig = flipped <> String.slice(sig, 1..-1//1)
+
+      tampered =
+        String.replace(xml, "<ds:SignatureValue>#{sig}", "<ds:SignatureValue>#{tampered_sig}")
+
+      assert {:error, :bad_signature} = Dsig.verify(parse_xml(tampered))
+    end
   end
 
   describe "verify/2" do
