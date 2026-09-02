@@ -108,6 +108,44 @@ Configure the Nebulex cache module used for assertions and relay state:
 config :ex_saml, cache: MyApp.Cache
 ```
 
+### Error handling
+
+The assertion consumer service always redirects to the target URL with either
+`?code=<authorization_code>` (success) or `?error_id=<id>` (failure). Both are
+random, single-use and expire; redeem them with `ExSaml.Assertion.get_from_code/1`
+and `ExSaml.Error.get_from_id/1`:
+
+```elixir
+def callback(conn, %{"error_id" => error_id}) do
+  case ExSaml.Error.get_from_id(error_id) do
+    {:ok, %ExSaml.Error{} = error} ->
+      conn |> put_flash(:error, ExSaml.ErrorMessages.get(error)) |> redirect(to: "/login")
+
+    {:error, :not_found} ->
+      redirect(conn, to: "/login")
+  end
+end
+```
+
+See the [error handling and debugging guide](guides/error_handling_and_debugging.md)
+for the full contract and the catalogue of reasons.
+
+### Debug mode
+
+`ExSaml.Debug` traces the whole sign-in flow (AuthnRequest, IdP response,
+decoding, validation, code issuance and redemption) and stores a per-flow report.
+It is enabled **at runtime**, from a remote console, without a redeploy or a
+config change, globally or for one IdP, and always expires:
+
+```elixir
+ExSaml.Debug.enable(idp_id: "acme", ttl: :timer.minutes(30))
+ExSaml.Debug.status()
+ExSaml.Debug.disable("acme")
+```
+
+Debug mode logs the raw `SAMLResponse` and the assertion attributes: keep the
+TTL short. Details in the [guide](guides/error_handling_and_debugging.md#4-debug-mode).
+
 ### Dynamic Provider Loading
 
 For loading providers from a database at runtime:

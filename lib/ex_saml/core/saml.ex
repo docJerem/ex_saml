@@ -34,6 +34,7 @@ defmodule ExSaml.Core.Saml do
     Org,
     Response,
     SpMetadata,
+    StatusCode,
     Subject,
     Util
   }
@@ -92,43 +93,37 @@ defmodule ExSaml.Core.Saml do
   defp subject_method_map("urn:oasis:names:tc:SAML:2.0:cm:bearer"), do: :bearer
   defp subject_method_map(_), do: :unknown
 
-  @spec status_code_map(String.t()) :: atom()
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:Success"), do: :success
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:VersionMismatch"), do: :bad_version
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"), do: :authn_failed
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:InvalidAttrNameOrValue"), do: :bad_attr
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:RequestDenied"), do: :denied
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:UnsupportedBinding"), do: :bad_binding
+  # Status URIs are resolved through the full SAML 2.0 catalogue in
+  # `ExSaml.Core.StatusCode`. The historical atoms used by `%Response{status: _}`
+  # and by LogoutResponse generation (`:bad_version`, `:bad_attr`, `:denied`,
+  # `:bad_binding`) are preserved for compatibility; every other spec status now
+  # maps to its catalogue atom instead of a raw URI suffix.
+  @legacy_status %{
+    version_mismatch: :bad_version,
+    invalid_attr_name_or_value: :bad_attr,
+    request_denied: :denied,
+    unsupported_binding: :bad_binding
+  }
 
-  defp status_code_map(urn) when is_list(urn) do
-    case urn do
-      ~c"urn:" ++ _ ->
-        urn
-        |> to_string()
-        |> String.split(":")
-        |> List.last()
-
-      _ ->
-        :unknown
-    end
+  @spec status_code_map(String.t() | charlist() | nil) :: atom()
+  defp status_code_map(uri) when is_binary(uri) or is_list(uri) or is_nil(uri) do
+    atom = StatusCode.to_atom(uri)
+    Map.get(@legacy_status, atom, atom)
   end
 
   defp status_code_map(_), do: :unknown
 
   @spec rev_status_code_map(atom()) :: String.t()
-  defp rev_status_code_map(:success), do: "urn:oasis:names:tc:SAML:2.0:status:Success"
-  defp rev_status_code_map(:bad_version), do: "urn:oasis:names:tc:SAML:2.0:status:VersionMismatch"
-  defp rev_status_code_map(:authn_failed), do: "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"
+  defp rev_status_code_map(status) do
+    canonical =
+      Enum.find_value(@legacy_status, status, fn {canonical, legacy} ->
+        if legacy == status, do: canonical
+      end)
 
-  defp rev_status_code_map(:bad_attr),
-    do: "urn:oasis:names:tc:SAML:2.0:status:InvalidAttrNameOrValue"
-
-  defp rev_status_code_map(:denied), do: "urn:oasis:names:tc:SAML:2.0:status:RequestDenied"
-
-  defp rev_status_code_map(:bad_binding),
-    do: "urn:oasis:names:tc:SAML:2.0:status:UnsupportedBinding"
-
-  defp rev_status_code_map(_), do: :erlang.error(:bad_status_code)
+    StatusCode.to_uri(canonical)
+  rescue
+    ArgumentError -> :erlang.error(:bad_status_code)
+  end
 
   @spec logout_reason_map(String.t()) :: atom()
   defp logout_reason_map("urn:oasis:names:tc:SAML:2.0:logout:user"), do: :user
