@@ -8,9 +8,11 @@ defmodule ExSaml.AuthorizationCodeCache do
   The `take/1` function atomically retrieves and deletes the code,
   ensuring single-use consumption.
 
-  Every write and redemption is traced by `ExSaml.Debug` when debug mode is on,
+  Every write and exchange is traced by `ExSaml.Debug` when debug mode is on,
   so a "code not found at callback" can be diagnosed from the library side
-  (already consumed, expired, never stored, different node).
+  (already used, expired, never stored, different node). A missed `take/1` on a
+  code minted by the library also promotes the flow's capture, so the
+  `SAMLResponse` that led to it is kept.
   """
 
   alias ExSaml.Debug
@@ -44,6 +46,14 @@ defmodule ExSaml.AuthorizationCodeCache do
       remaining_ttl: remaining_ttl
     })
 
+    if is_nil(value) do
+      Debug.promote(
+        ctx.trace_id,
+        %{reason: :authorization_code_not_found, step: :code_exchange, idp_id: ctx.idp_id},
+        :authorization_code_not_found
+      )
+    end
+
     value
   end
 
@@ -58,26 +68,26 @@ defmodule ExSaml.AuthorizationCodeCache do
     result
   end
 
-  defp trace(step, code, meta), do: trace(step, code, code_context(code), meta)
+  defp trace(event, code, meta), do: trace(event, code, code_context(code), meta)
 
-  defp trace(step, code, ctx, meta) do
+  defp trace(event, code, ctx, meta) do
     Debug.log(
-      step,
+      event,
       meta
       |> Map.put(:code, code)
-      |> Map.put(:debug_id, ctx.debug_id)
+      |> Map.put(:trace_id, ctx.trace_id)
       |> Map.put(:idp_id, ctx.idp_id)
     )
   end
 
   # Codes minted by `ExSaml.SPHandler` in debug mode are linked to their flow
-  # (`debug_id` + `idp_id`), which lets per-IdP debug apply on the redemption
+  # (`trace_id` + `idp_id`), which lets per-IdP debug apply on the exchange
   # side even though that request carries no process context. Codes minted by
   # consumers are not linked and are only traced under the global flag.
   defp code_context(code) do
     case Debug.code_context(code) do
-      %{debug_id: debug_id, idp_id: idp_id} -> %{debug_id: debug_id, idp_id: idp_id}
-      _ -> %{debug_id: nil, idp_id: nil}
+      %{trace_id: trace_id, idp_id: idp_id} -> %{trace_id: trace_id, idp_id: idp_id}
+      _ -> %{trace_id: nil, idp_id: nil}
     end
   end
 

@@ -48,7 +48,8 @@ defmodule ExSaml.Assertion do
   On failure returns `{:error, %ExSaml.Error{step: :code_exchange}}` with `reason`
   `:authorization_code_not_found` (unknown, expired or already used code) or
   `:assertion_not_found` (valid code, but the assertion is gone from the
-  assertion store). Both are traced by `ExSaml.Debug` when debug mode is on.
+  assertion store). Both are traced by `ExSaml.Debug` when debug mode is on,
+  and the flow's capture is promoted so the `SAMLResponse` is kept.
   """
   @spec get_from_code(term()) :: {:ok, {binary(), map()}} | {:error, Error.t()}
   def get_from_code(code) do
@@ -58,23 +59,40 @@ defmodule ExSaml.Assertion do
       {idp_id, _} = key ->
         fetch_assertion(code, key, idp_id, ctx)
 
+      # `take/1` already promoted the capture for this miss.
+      %{ex_saml_assertion_key: key, trace_id: trace_id} = payload ->
+        fetch_assertion(
+          code,
+          key,
+          elem(key, 0),
+          Map.merge(ctx, %{trace_id: trace_id || ctx[:trace_id]}),
+          payload
+        )
+
       other ->
         Logger.warning("[ExSaml] Authorization code not found or expired: #{inspect(code)}")
 
         Debug.log(:code_exchanged, %{
           code: code,
           idp_id: ctx[:idp_id],
-          debug_id: ctx[:debug_id],
+          trace_id: ctx[:trace_id],
           code_found: false,
           cache_value: other
         })
 
-        {:error, code_exchange_error(:authorization_code_not_found, ctx[:idp_id], ctx[:debug_id])}
+        {:error,
+         Error.new(%{
+           reason: :authorization_code_not_found,
+           step: :code_exchange,
+           idp_id: ctx[:idp_id],
+           trace_id: ctx[:trace_id]
+         })}
     end
   end
 
-  defp fetch_assertion(code, key, idp_id, ctx) do
-    base = %{code: code, idp_id: idp_id, debug_id: ctx[:debug_id], assertion_key: key}
+  defp fetch_assertion(code, key, idp_id, ctx, payload \\ nil) do
+    trace_id = ctx[:trace_id]
+    base = %{code: code, idp_id: idp_id, trace_id: trace_id, assertion_key: key, payload: payload}
 
     case AssertionCache.get(key) do
       %__MODULE__{attributes: attributes} = assertion ->
@@ -86,12 +104,18 @@ defmodule ExSaml.Assertion do
 
       other ->
         Debug.log(:code_exchanged, Map.merge(base, %{assertion_found: false, cache_value: other}))
-        {:error, code_exchange_error(:assertion_not_found, idp_id, ctx[:debug_id])}
-    end
-  end
 
-  defp code_exchange_error(reason, idp_id, debug_id) do
-    Error.new(%{reason: reason, step: :code_exchange, idp_id: idp_id, debug_id: debug_id})
+        error =
+          Error.new(%{
+            reason: :assertion_not_found,
+            step: :code_exchange,
+            idp_id: idp_id,
+            trace_id: trace_id
+          })
+
+        Debug.promote(trace_id, error, :assertion_not_found)
+        {:error, error}
+    end
   end
 
   @doc false

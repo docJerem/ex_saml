@@ -105,14 +105,20 @@ msgstr "An unexpected error occurred while processing the IdP response."
 msgid "access_denied"
 msgstr "Access denied."
 
-msgid "code_not_found"
-msgstr "The sign-in code is unknown, expired or was already used. Please start the sign-in again."
+msgid "authorization_code_not_found"
+msgstr "The authorization code is unknown, expired or was already used. Please start the sign-in again."
 
 msgid "assertion_not_found"
-msgstr "The sign-in code was valid but the authentication data has expired. Please start the sign-in again."
+msgstr "The authorization code was valid but the authentication data has expired. Please start the sign-in again."
 
 msgid "error_not_found"
 msgstr "The error reference is unknown, expired or was already consulted."
+
+msgid "capture_not_found"
+msgstr "No capture exists for this trace: debug mode was off when the flow ran, or the capture has expired."
+
+msgid "payload_not_captured"
+msgstr "The capture of this flow holds no SAMLResponse (capture: :none was active)."
 
 msgid "unknown_error"
 msgstr "An unknown SAML error occurred."

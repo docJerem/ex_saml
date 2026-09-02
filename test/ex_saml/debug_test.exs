@@ -3,30 +3,47 @@ defmodule ExSaml.DebugTest do
 
   import ExUnit.CaptureLog
 
-  alias ExSaml.{Debug, StubCache}
+  alias ExSaml.{Core.SpConfig, Debug, Error, IdpData, StubCache}
 
   setup do
     StubCache.install()
     previous_static = Application.get_env(:ex_saml, :debug)
+    previous_idps = Application.get_env(:ex_saml, :identity_providers)
     Application.delete_env(:ex_saml, :debug)
     Application.delete_env(:ex_saml, :debug_runtime)
     Application.delete_env(:ex_saml, :debug_cache)
     Application.delete_env(:ex_saml, :debug_log_level)
-    Logger.metadata(ex_saml_idp_id: nil, ex_saml_debug_id: nil)
-    Process.delete(:ex_saml_debug_payload)
+    Logger.metadata(ex_saml_idp_id: nil, ex_saml_trace_id: nil)
+    Process.delete(:ex_saml_debug_capture)
 
     on_exit(fn ->
       Application.delete_env(:ex_saml, :debug_runtime)
       Application.delete_env(:ex_saml, :debug_cache)
       Application.delete_env(:ex_saml, :debug_log_level)
+      Application.delete_env(:ex_saml, :max_failures_per_idp)
+      Application.delete_env(:ex_saml, :payload_ttl)
+      Application.delete_env(:ex_saml, :provisional_ttl)
 
       if is_nil(previous_static),
         do: Application.delete_env(:ex_saml, :debug),
         else: Application.put_env(:ex_saml, :debug, previous_static)
+
+      if is_nil(previous_idps),
+        do: Application.delete_env(:ex_saml, :identity_providers),
+        else: Application.put_env(:ex_saml, :identity_providers, previous_idps)
     end)
 
     :ok
   end
+
+  @payload %{
+    saml_response: Base.encode64("<not-saml/>"),
+    saml_encoding: nil,
+    relay_state: "rs-1",
+    consume_uri: "https://sp.example.com/consume",
+    entity_id: "https://sp.example.com/metadata",
+    received_at: ~U[2026-09-02 10:00:00Z]
+  }
 
   describe "enabled?/1 and settings/1" do
     test "is false by default" do
@@ -83,7 +100,9 @@ defmodule ExSaml.DebugTest do
       refute Debug.enabled?()
       refute Debug.enabled?("acme")
       assert :ok = Debug.log(:anything, %{idp_id: "acme"})
-      assert :ok = Debug.stash_payload("acme", "d", %{})
+      assert :ok = Debug.stash_capture("acme", "t", @payload)
+      assert :ok = Debug.promote("t", %{reason: :bad_saml, step: :decode})
+      assert Debug.failures("acme") == []
     end
 
     test "no cache configured yields false" do
@@ -107,15 +126,18 @@ defmodule ExSaml.DebugTest do
       refute Debug.enabled?()
     end
 
-    test "a dedicated debug cache is used for flags, reports and captures" do
+    test "a dedicated debug cache is used for flags, traces and captures" do
       Application.put_env(:ex_saml, :debug_cache, ExSaml.StubCache)
       Application.put_env(:ex_saml, :cache, ExSaml.RaisingCache)
 
-      assert {:ok, _} = Debug.enable(idp_id: "acme")
+      assert {:ok, _} = Debug.enable(idp_id: "acme", capture: :always)
       assert Debug.enabled?("acme")
 
-      capture_log(fn -> Debug.log(:step, %{idp_id: "acme", debug_id: "d1"}) end)
-      assert [{:step, _}] = Debug.report("d1")
+      capture_log(fn -> Debug.log(:event, %{idp_id: "acme", trace_id: "t1"}) end)
+      assert [{:event, _}] = Debug.trace("t1")
+
+      Debug.stash_capture("acme", "t1", @payload)
+      assert %{captured_on: :always} = Debug.capture("t1")
     end
   end
 
@@ -139,22 +161,22 @@ defmodule ExSaml.DebugTest do
     end
   end
 
-  describe "log/2,3 and report/1" do
+  describe "log/2,3 and trace/1" do
     test "log/2 is a no-op when disabled" do
       log =
-        capture_log(fn -> assert :ok = Debug.log(:step, %{idp_id: "acme", debug_id: "d1"}) end)
+        capture_log(fn -> assert :ok = Debug.log(:event, %{idp_id: "acme", trace_id: "t1"}) end)
 
       assert log == ""
-      assert Debug.report("d1") == nil
+      assert Debug.trace("t1") == nil
     end
 
-    test "writes a warning with the metadata and appends to the report, in order" do
+    test "writes a warning with the metadata and appends to the trace, in order" do
       Debug.enable(idp_id: "acme")
 
       log =
         capture_log(fn ->
-          Debug.log(:first, %{idp_id: "acme", debug_id: "d1", foo: 1})
-          Debug.log(:second, "acme", fn -> %{debug_id: "d1", bar: 2} end)
+          Debug.log(:first, %{idp_id: "acme", trace_id: "t1", foo: 1})
+          Debug.log(:second, "acme", fn -> %{trace_id: "t1", bar: 2} end)
         end)
 
       assert log =~ "[ExSaml.Debug] first"
@@ -162,21 +184,21 @@ defmodule ExSaml.DebugTest do
       assert log =~ "[ExSaml.Debug] second"
       assert log =~ "bar: 2"
 
-      assert [{:first, first}, {:second, second}] = Debug.report("d1")
+      assert [{:first, first}, {:second, second}] = Debug.trace("t1")
       assert first.foo == 1
       assert first.node == node()
       assert %DateTime{} = first.at
       assert second.bar == 2
     end
 
-    test "log: :steps redacts PII from the log message but not from the report" do
+    test "log: :steps redacts PII from the log message but not from the trace" do
       Debug.enable(idp_id: "acme")
 
       log =
         capture_log(fn ->
           Debug.log(:response_received, %{
             idp_id: "acme",
-            debug_id: "d1",
+            trace_id: "t1",
             saml_response: "PHNhbWw+",
             assertion_key: {"acme", "user@example.com"},
             host: "sp.example.com"
@@ -191,8 +213,7 @@ defmodule ExSaml.DebugTest do
       assert [
                {:response_received,
                 %{saml_response: "PHNhbWw+", assertion_key: {"acme", "user@example.com"}}}
-             ] =
-               Debug.report("d1")
+             ] = Debug.trace("t1")
     end
 
     test "log: :full keeps everything in the log message" do
@@ -202,7 +223,7 @@ defmodule ExSaml.DebugTest do
         capture_log(fn ->
           Debug.log(:response_received, %{
             idp_id: "acme",
-            debug_id: "d1",
+            trace_id: "t1",
             saml_response: "PHNhbWw+"
           })
         end)
@@ -210,112 +231,213 @@ defmodule ExSaml.DebugTest do
       assert log =~ ~s(saml_response: "PHNhbWw+")
     end
 
-    test "log: :silent writes nothing but still feeds the report" do
+    test "log: :silent writes nothing but still feeds the trace" do
       Debug.enable(idp_id: "acme", log: :silent)
 
-      log = capture_log(fn -> Debug.log(:step, %{idp_id: "acme", debug_id: "d1"}) end)
+      log = capture_log(fn -> Debug.log(:event, %{idp_id: "acme", trace_id: "t1"}) end)
 
       assert log == ""
-      assert [{:step, _}] = Debug.report("d1")
+      assert [{:event, _}] = Debug.trace("t1")
     end
 
     test "log level is configurable" do
       Application.put_env(:ex_saml, :debug_log_level, :info)
       Debug.enable(idp_id: "acme")
 
-      log = capture_log(fn -> Debug.log(:step, %{idp_id: "acme"}) end)
+      log = capture_log(fn -> Debug.log(:event, %{idp_id: "acme"}) end)
       assert log =~ "[info]"
     end
 
     test "lazy metadata is not evaluated when disabled" do
-      Debug.log(:step, fn -> flunk("should not be evaluated") end)
+      Debug.log(:event, fn -> flunk("should not be evaluated") end)
     end
 
-    test "uses the process context when the metadata carries no idp_id / debug_id" do
+    test "uses the process context when the metadata carries no idp_id / trace_id" do
       Debug.enable(idp_id: "acme")
       Debug.put_context("acme", "ctx-id")
 
-      capture_log(fn -> Debug.log(:step, %{value: 42}) end)
+      capture_log(fn -> Debug.log(:event, %{value: 42}) end)
 
-      assert [{:step, %{value: 42, idp_id: "acme", debug_id: "ctx-id"}}] = Debug.report("ctx-id")
+      assert [{:event, %{value: 42, idp_id: "acme", trace_id: "ctx-id"}}] = Debug.trace("ctx-id")
     end
 
-    test "capture/3 ignores empty debug ids" do
-      assert :ok = Debug.capture("", :step, %{})
-      assert :ok = Debug.capture(nil, :step, %{})
+    test "record/3 ignores empty trace ids" do
+      assert :ok = Debug.record("", :event, %{})
+      assert :ok = Debug.record(nil, :event, %{})
     end
   end
 
-  describe "SAMLResponse capture" do
-    @payload %{saml_response: "PHNhbWw+", xml: "<saml>", relay_state: "d1"}
-
-    test "capture: :on_error keeps the payload until the failure path persists it" do
+  describe "captures" do
+    test "capture: :on_error writes a provisional capture, promoted on failure" do
+      Application.put_env(:ex_saml, :provisional_ttl, 1111)
+      Application.put_env(:ex_saml, :payload_ttl, 2222)
       Debug.enable(idp_id: "acme")
 
-      assert :ok = Debug.stash_payload("acme", "d1", @payload)
-      assert Debug.saml_response("d1") == nil
+      assert :ok = Debug.stash_capture("acme", "t1", @payload)
 
-      assert :ok = Debug.persist_payload("d1")
-      assert %{saml_response: "PHNhbWw+", captured_on: :error} = Debug.saml_response("d1")
+      assert %{
+               captured_on: :pending,
+               error: nil,
+               saml_response: payload,
+               consume_uri: "https://sp.example.com/consume"
+             } =
+               Debug.capture("t1")
 
-      # Nothing left to persist on a second call.
-      assert :ok = Debug.persist_payload("d1")
+      assert payload == @payload.saml_response
+      assert StubCache.ttl({ExSaml.Debug, {:capture, "t1"}}) == 1111
+      assert Debug.failure("t1") == nil
+      assert Debug.failures("acme") == []
+
+      error =
+        Error.from_reason({:envelope, {:error, :bad_digest}},
+          step: :decode,
+          idp_id: "acme",
+          trace_id: "t1"
+        )
+
+      assert :ok = Debug.promote("t1", error)
+
+      assert %{
+               captured_on: :error,
+               error: %{reason: :bad_digest, scope: :envelope, step: :decode}
+             } =
+               Debug.failure("t1")
+
+      assert StubCache.ttl({ExSaml.Debug, {:capture, "t1"}}) == 2222
+
+      assert [
+               %{
+                 trace_id: "t1",
+                 captured_on: :error,
+                 error: %{reason: :bad_digest},
+                 received_at: ~U[2026-09-02 10:00:00Z]
+               }
+             ] =
+               Debug.failures("acme")
     end
 
-    test "capture: :always persists immediately" do
+    test "capture: :always persists immediately with the full TTL" do
+      Application.put_env(:ex_saml, :payload_ttl, 3333)
       Debug.enable(idp_id: "acme", capture: :always)
 
-      Debug.stash_payload("acme", "d1", @payload)
-      assert %{captured_on: :always} = Debug.saml_response("d1")
+      Debug.stash_capture("acme", "t1", @payload)
+      assert %{captured_on: :always, error: nil} = Debug.capture("t1")
+      assert StubCache.ttl({ExSaml.Debug, {:capture, "t1"}}) == 3333
     end
 
-    test "capture: :none never stores the payload" do
+    test "capture: :none keeps a failure record without the payload" do
       Debug.enable(idp_id: "acme", capture: :none)
 
-      Debug.stash_payload("acme", "d1", @payload)
-      Debug.persist_payload("d1")
-      assert Debug.saml_response("d1") == nil
+      Debug.stash_capture("acme", "t1", @payload)
+      assert Debug.capture("t1") == nil
+
+      Debug.promote("t1", %{reason: :bad_saml, step: :decode, idp_id: "acme"})
+
+      assert %{saml_response: nil, error: %{reason: :bad_saml}, relay_state: "rs-1"} =
+               Debug.failure("t1")
+
+      assert Debug.saml_response("t1") == nil
+      assert [%{trace_id: "t1"}] = Debug.failures("acme")
     end
 
-    test "nothing is stashed when debug is off" do
-      Debug.stash_payload("acme", "d1", @payload)
-      assert Process.get(:ex_saml_debug_payload) == nil
+    test "promotion from another process (code exchange) builds a minimal record when needed" do
+      Debug.enable(idp_id: "acme")
+
+      Debug.promote(
+        "t9",
+        %{reason: :authorization_code_not_found, step: :code_exchange, idp_id: "acme"},
+        :authorization_code_not_found
+      )
+
+      assert %{
+               captured_on: :authorization_code_not_found,
+               saml_response: nil,
+               error: %{reason: :authorization_code_not_found}
+             } =
+               Debug.failure("t9")
     end
 
-    test "payload_ttl config is honoured" do
-      Application.put_env(:ex_saml, :payload_ttl, 4321)
-      on_exit(fn -> Application.delete_env(:ex_saml, :payload_ttl) end)
+    test "nothing is recorded when debug is off" do
+      Debug.stash_capture("acme", "t1", @payload)
+      Debug.promote("t1", %{reason: :bad_saml, step: :decode, idp_id: "acme"})
+      assert Debug.capture("t1") == nil
+      assert Debug.failures("acme") == []
+    end
+
+    test "saml_response/2 returns the raw base64 or the decoded document" do
       Debug.enable(idp_id: "acme", capture: :always)
+      Debug.stash_capture("acme", "t1", @payload)
 
-      Debug.stash_payload("acme", "d1", @payload)
-      assert StubCache.ttl({ExSaml.Debug, {:payload, "d1"}}) == 4321
+      assert Debug.saml_response("t1") == @payload.saml_response
+      assert Debug.saml_response("t1", decode: true) == "<not-saml/>"
+      assert Debug.saml_response("nope") == nil
+    end
+
+    test "failures are listed most recent first and capped per IdP, evicting old captures" do
+      Application.put_env(:ex_saml, :max_failures_per_idp, 2)
+      Debug.enable(idp_id: "acme")
+
+      for id <- ["t1", "t2", "t3"] do
+        Debug.stash_capture("acme", id, @payload)
+        Debug.promote(id, %{reason: :bad_saml, step: :decode, idp_id: "acme"})
+      end
+
+      assert ["t3", "t2"] = Enum.map(Debug.failures("acme"), & &1.trace_id)
+      assert Debug.capture("t1") == nil
+      assert Debug.failures("globex") == []
     end
   end
 
-  describe "correlation indexes" do
+  describe "replay/2" do
+    setup do
+      idp = %IdpData{
+        id: "acme",
+        sp_config: %SpConfig{
+          metadata_uri: "https://sp.example.com/metadata",
+          consume_uri: "https://sp.example.com/consume",
+          idp_signs_envelopes: false,
+          idp_signs_assertions: false
+        }
+      }
+
+      Application.put_env(:ex_saml, :identity_providers, %{"acme" => idp})
+      Debug.enable(idp_id: "acme", capture: :always, log: :silent)
+      :ok
+    end
+
+    test "replays the captured payload against the current IdP configuration" do
+      Debug.stash_capture("acme", "t1", @payload)
+
+      assert {:error, %Error{reason: :bad_saml, step: :decode, trace_id: "t1", idp_id: "acme"}} =
+               Debug.replay("t1")
+    end
+
+    test "unknown trace, missing payload, unknown IdP" do
+      assert {:error, %Error{reason: :capture_not_found, step: :replay, trace_id: "nope"}} =
+               Debug.replay("nope")
+
+      Debug.enable(idp_id: "acme", capture: :none)
+      Debug.stash_capture("acme", "t2", @payload)
+      Debug.promote("t2", %{reason: :bad_saml, step: :decode, idp_id: "acme"})
+      assert {:error, %Error{reason: :payload_not_captured, step: :replay}} = Debug.replay("t2")
+
+      Debug.enable(idp_id: "ghost", capture: :always)
+      Debug.stash_capture("ghost", "t3", @payload)
+
+      assert {:error, %Error{reason: :unknown_idp, idp_id: "ghost", step: :replay}} =
+               Debug.replay("t3")
+    end
+  end
+
+  describe "code correlation" do
     test "link_code/3 and code_context/1" do
       assert Debug.code_context("code-1") == nil
 
-      Debug.link_code("code-1", "d1", "acme")
-      assert Debug.code_context("code-1") == %{debug_id: "d1", idp_id: "acme"}
+      Debug.link_code("code-1", "t1", "acme")
+      assert Debug.code_context("code-1") == %{trace_id: "t1", idp_id: "acme"}
 
       Debug.link_code("code-2", nil, "acme")
       assert Debug.code_context("code-2") == nil
-    end
-
-    test "link_error/2 lets report/1 and saml_response/1 accept an error id" do
-      Debug.enable(idp_id: "acme", capture: :always)
-      Debug.capture("d1", :step, %{})
-      Debug.stash_payload("acme", "d1", %{saml_response: "x"})
-
-      Debug.link_error("err-1", "d1")
-
-      assert [{:step, _}] = Debug.report("err-1")
-      assert %{saml_response: "x"} = Debug.saml_response("err-1")
-      assert Debug.report("unknown") == nil
-
-      assert :ok = Debug.link_error("err-2", nil)
-      assert Debug.report("err-2") == nil
     end
   end
 end

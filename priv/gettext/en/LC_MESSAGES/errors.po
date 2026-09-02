@@ -114,6 +114,12 @@ msgstr "The authorization code was valid but the authentication data has expired
 msgid "error_not_found"
 msgstr "The error reference is unknown, expired or was already consulted."
 
+msgid "capture_not_found"
+msgstr "No capture exists for this trace: debug mode was off when the flow ran, or the capture has expired."
+
+msgid "payload_not_captured"
+msgstr "The capture of this flow holds no SAMLResponse (capture: :none was active)."
+
 msgid "unknown_error"
 msgstr "An unknown SAML error occurred."
 

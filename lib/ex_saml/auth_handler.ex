@@ -152,7 +152,7 @@ defmodule ExSaml.AuthHandler do
 
   # Persists the server-side relay state shared by `request_idp/2` and
   # `send_signin_req/1`, and traces the outgoing AuthnRequest in debug mode.
-  # The relay state doubles as the flow's `debug_id`.
+  # The relay state is the flow's `trace_id`.
   defp put_relay_state(conn, %IdpData{id: idp_id} = idp, relay_state, target_url, idp_signin_url) do
     {saml_nonce, nonce_source} = resolve_saml_nonce(conn)
     session_id = get_session(conn, :session_id)
@@ -176,7 +176,7 @@ defmodule ExSaml.AuthHandler do
     Debug.log(:authn_request, idp_id, fn ->
       %{
         idp_id: idp_id,
-        debug_id: relay_state,
+        trace_id: relay_state,
         relay_state: relay_state,
         target_url: target_url,
         saml_nonce: saml_nonce,
