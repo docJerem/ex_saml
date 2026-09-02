@@ -239,7 +239,7 @@ defmodule ExSaml.SPHandlerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # consume_signin_response/1 — failure path issues an error_id
+  # consume_signin_response/1 — failure path issues an error_id (= trace_id)
   # ---------------------------------------------------------------------------
 
   defp acs_conn(idp_id, body \\ %{}, session \\ %{}) do
@@ -306,18 +306,17 @@ defmodule ExSaml.SPHandlerTest do
       {location, error_id} = error_id_from(conn)
       assert location == "/?error_id=#{error_id}"
 
-      assert {:error, %Error{reason: :unknown_idp, idp_id: "nope", report: nil}} =
+      assert {:error, %Error{reason: :unknown_idp, idp_id: "nope", trace: nil}} =
                get_session(conn, "ex_saml_error")
 
       assert {:ok,
               %Error{
-                id: ^error_id,
+                trace_id: ^error_id,
                 reason: :unknown_idp,
                 idp_id: "nope",
                 step: :idp_lookup,
-                report: nil
-              } = error} =
-               Error.get_from_id(error_id)
+                trace: nil
+              } = error} = Error.get_from_id(error_id)
 
       assert Error.to_legacy(error) == {:unknown_idp, "nope"}
       assert {:error, %Error{reason: :error_not_found}} = Error.get_from_id(error_id)
@@ -333,9 +332,16 @@ defmodule ExSaml.SPHandlerTest do
                 reason: :missing_saml_response,
                 step: :decode,
                 idp_id: "idp-1",
-                relay_state: "rs-1"
-              }} =
-               Error.get_from_id(error_id)
+                relay_state: "rs-1",
+                trace_id: ^error_id
+              }} = Error.get_from_id(error_id)
+    end
+
+    test "the trace_id exists even when debug is off" do
+      conn = SPHandler.consume_signin_response(acs_conn("idp-1"))
+      {_, error_id} = error_id_from(conn)
+      assert {:ok, %Error{trace_id: trace_id, trace: nil}} = Error.get_from_id(error_id)
+      assert is_binary(trace_id) and trace_id == error_id
     end
 
     test "target_url from session gets the error_id appended, preserving its query" do
@@ -365,98 +371,78 @@ defmodule ExSaml.SPHandlerTest do
       assert log =~ "consume_signin_response crashed"
     end
 
-    test "in debug mode the error carries the flow report" do
+    test "in debug mode the error carries the flow trace and the capture is promoted" do
       Debug.enable(idp_id: "idp-1")
+      body = %{"SAMLResponse" => Base.encode64("<not-saml/>"), "RelayState" => "rs-2"}
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          conn = SPHandler.consume_signin_response(acs_conn("idp-1", %{"RelayState" => "rs-2"}))
+          conn = SPHandler.consume_signin_response(acs_conn("idp-1", body))
           {_, error_id} = error_id_from(conn)
 
-          assert {:ok, %Error{id: id, report: report, debug_id: debug_id}} =
+          assert {:ok, %Error{trace_id: trace_id, trace: trace, reason: :bad_saml}} =
                    Error.get_from_id(error_id)
 
-          assert is_binary(debug_id)
-
-          steps = Enum.map(report, &elem(&1, 0))
+          steps = Enum.map(trace, &elem(&1, 0))
           assert :response_received in steps
           assert :decode_result in steps
 
-          # The error id alone is enough to reach the flow report, which keeps
-          # growing after the error was built (`:error_issued` is appended last).
-          full = Debug.report(id)
-          assert Enum.take(full, length(report)) == report
-          assert {:error_issued, %{error_id: ^id}} = List.last(full)
+          # The trace keeps growing after the error was built (`:error_issued` is last).
+          full = Debug.trace(trace_id)
+          assert Enum.take(full, length(trace)) == trace
+          assert {:error_issued, %{trace_id: ^trace_id}} = List.last(full)
+
+          # The capture is promoted with the error summary and the raw payload.
+          assert %{
+                   captured_on: :error,
+                   error: %{reason: :bad_saml, step: :decode},
+                   saml_response: saml_response,
+                   relay_state: "rs-2",
+                   consume_uri: "https://sp.example.com/consume",
+                   entity_id: "https://sp.example.com/metadata"
+                 } = Debug.failure(trace_id)
+
+          assert saml_response == body["SAMLResponse"]
+          assert Debug.saml_response(trace_id, decode: true) == "<not-saml/>"
+          assert [%{trace_id: ^trace_id}] = Debug.failures("idp-1")
+
+          # Nothing but the size of the payload in the trace.
+          refute inspect(trace, limit: :infinity, printable_limit: :infinity) =~
+                   body["SAMLResponse"]
+
+          assert {:response_received, %{saml_response_bytes: bytes}} =
+                   List.keyfind(trace, :response_received, 0)
+
+          assert bytes == byte_size(body["SAMLResponse"])
         end)
 
       assert log =~ "[ExSaml.Debug] response_received"
       assert log =~ "[ExSaml.Debug] error_issued"
+      refute log =~ body["SAMLResponse"]
     end
 
-    test "without debug nothing is logged and details stay nil" do
+    test "without debug nothing is logged, no trace, no capture" do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           conn = SPHandler.consume_signin_response(acs_conn("idp-1"))
           {_, error_id} = error_id_from(conn)
-          assert {:ok, %Error{report: nil, debug_id: nil}} = Error.get_from_id(error_id)
+          assert {:ok, %Error{trace: nil, trace_id: trace_id}} = Error.get_from_id(error_id)
+          assert Debug.failure(trace_id) == nil
         end)
 
       refute log =~ "[ExSaml.Debug]"
     end
 
-    test "capture: :on_error stores the raw SAMLResponse only when the flow fails" do
-      Debug.enable(idp_id: "idp-1", log: :silent)
-      body = %{"SAMLResponse" => Base.encode64("<not-saml/>"), "RelayState" => "rs-3"}
-
-      conn = SPHandler.consume_signin_response(acs_conn("idp-1", body))
-      {_, error_id} = error_id_from(conn)
-
-      # Valid base64 + XML but no <Status>: the flow fails at :bad_saml.
-      assert {:ok, %Error{id: id, reason: :bad_saml, step: :decode}} = Error.get_from_id(error_id)
-
-      assert %{
-               saml_response: saml_response,
-               xml: "<not-saml/>",
-               relay_state: "rs-3",
-               idp_id: "idp-1",
-               captured_on: :error
-             } = Debug.saml_response(id)
-
-      assert saml_response == body["SAMLResponse"]
-    end
-
-    test "capture: :none leaves no payload behind" do
+    test "capture: :none leaves a failure record without the payload" do
       Debug.enable(idp_id: "idp-1", capture: :none, log: :silent)
       body = %{"SAMLResponse" => Base.encode64("<not-saml/>")}
 
       conn = SPHandler.consume_signin_response(acs_conn("idp-1", body))
       {_, error_id} = error_id_from(conn)
-      {:ok, %Error{id: id, report: report}} = Error.get_from_id(error_id)
+      {:ok, %Error{trace_id: trace_id}} = Error.get_from_id(error_id)
 
-      assert Debug.saml_response(id) == nil
-
-      # The payload lives only in the capture: the report keeps its size and
-      # fingerprint, never the base64 itself.
-      refute inspect(report, limit: :infinity, printable_limit: :infinity) =~ body["SAMLResponse"]
-
-      assert {:response_received, %{saml_response_bytes: bytes, saml_response_sha256: sha}} =
-               List.keyfind(report, :response_received, 0)
-
-      assert bytes == byte_size(body["SAMLResponse"])
-      assert sha == :sha256 |> :crypto.hash(body["SAMLResponse"]) |> Base.encode16(case: :lower)
-    end
-
-    test "log: :steps never writes the payload to the logs" do
-      Debug.enable(idp_id: "idp-1")
-      payload = Base.encode64("<secret-assertion/>")
-
-      log =
-        ExUnit.CaptureLog.capture_log(fn ->
-          SPHandler.consume_signin_response(acs_conn("idp-1", %{"SAMLResponse" => payload}))
-        end)
-
-      assert log =~ "[ExSaml.Debug] response_received"
-      refute log =~ payload
+      assert %{saml_response: nil, error: %{reason: :bad_saml}} = Debug.failure(trace_id)
+      assert Debug.saml_response(trace_id) == nil
     end
   end
 end

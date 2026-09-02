@@ -114,6 +114,12 @@ msgstr "Le code d'autorisation était valide mais les données d'authentificatio
 msgid "error_not_found"
 msgstr "La référence d'erreur est inconnue, expirée ou a déjà été consultée."
 
+msgid "capture_not_found"
+msgstr "Aucune capture n'existe pour cette trace : le mode debug était inactif pendant le flux, ou la capture a expiré."
+
+msgid "payload_not_captured"
+msgstr "La capture de ce flux ne contient pas de SAMLResponse (capture: :none était actif)."
+
 msgid "unknown_error"
 msgstr "Une erreur SAML inconnue s'est produite."
 

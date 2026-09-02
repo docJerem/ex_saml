@@ -17,7 +17,7 @@ defmodule ExSaml.SPHandler do
 
     * `?code=<authorization_code>` on success — exchange it once with
       `ExSaml.Assertion.get_from_code/1`
-    * `?error_id=<id>` on failure — look it up once with `ExSaml.Error.get_from_id/1`
+    * `?error_id=<trace_id>` on failure — look it up once with `ExSaml.Error.get_from_id/1`
 
   Both are random, single-use and expire. The failure path also keeps the legacy
   `ex_saml_error` session entry (now holding `{:error, %ExSaml.Error{}}`) for
@@ -61,7 +61,7 @@ defmodule ExSaml.SPHandler do
   Processes the IdP sign-in response and extracts the SAML assertion.
 
   On success returns
-  `{:ok, %{flow: flow, assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
+  `{:ok, %{flow: flow, assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri, trace_id: trace_id}}`
   where:
 
     * `flow` is `:idp_initiated` or `:sp_initiated` and reflects which SAML flow
@@ -71,6 +71,7 @@ defmodule ExSaml.SPHandler do
       `nil` for IdP-initiated flows (no AuthnRequest exists in that case, so no
       nonce is generated; downstream consumers must accept `nil` for the
       IdP-initiated case).
+    * `trace_id` identifies the flow (see `ExSaml.Debug`).
 
   On failure returns `{:error, %ExSaml.Error{}}` whose `reason` is always an
   atom (`:invalid_relay_state`, `:bad_digest` with `scope: :assertion`,
@@ -116,26 +117,23 @@ defmodule ExSaml.SPHandler do
     user_token = relay_entry[:user_token]
     redirect_uri = relay_entry[:redirect_uri]
 
-    # The debug id only exists when a report is being built for this IdP, so
-    # consumers never see a dangling id that resolves to nothing.
-    debug_id = if Debug.enabled?(idp_id), do: debug_id(conn, relay_state)
-    Debug.put_context(idp_id, debug_id)
+    # Every flow has a trace id, debug on or off; it is the error's identifier.
+    trace_id = trace_id(conn, relay_state)
+    Debug.put_context(idp_id, trace_id)
 
-    Debug.stash_payload(idp_id, debug_id, %{
-      idp_id: idp_id,
-      relay_state: relay_state,
-      saml_encoding: saml_encoding,
+    Debug.stash_capture(idp_id, trace_id, %{
       saml_response: saml_response,
-      saml_response_sha256: payload_fingerprint(saml_response),
-      xml: safe_decode_xml(saml_encoding, saml_response),
-      host: conn.host,
+      saml_encoding: saml_encoding,
+      relay_state: relay_state,
+      consume_uri: sp.consume_uri,
+      entity_id: sp.entity_id || sp.metadata_uri,
       received_at: DateTime.utc_now()
     })
 
     Debug.log(:response_received, idp_id, fn ->
       %{
         idp_id: idp_id,
-        debug_id: debug_id,
+        trace_id: trace_id,
         relay_state_raw: rls,
         relay_state: relay_state,
         relay_cache_hit: not is_nil(relay_entry),
@@ -149,10 +147,8 @@ defmodule ExSaml.SPHandler do
         cookie_names: conn |> fetch_cookies() |> Map.get(:req_cookies) |> Map.keys(),
         body_param_keys: Map.keys(conn.body_params),
         saml_encoding: saml_encoding,
-        # The raw payload lives only in the capture (`Debug.saml_response/1`);
-        # the report keeps enough to correlate with it without duplicating PII.
+        # The raw payload lives only in the capture (`Debug.saml_response/2`).
         saml_response_bytes: saml_response && byte_size(saml_response),
-        saml_response_sha256: payload_fingerprint(saml_response),
         session: session_snapshot(conn),
         consume_uri: sp.consume_uri,
         entity_id: sp.entity_id
@@ -168,7 +164,7 @@ defmodule ExSaml.SPHandler do
       end
     end)
 
-    context = %{idp_id: idp_id, relay_state: relay_state, debug_id: debug_id}
+    context = %{idp_id: idp_id, relay_state: relay_state, trace_id: trace_id}
 
     with {:ok, assertion} <- step(decoded, :decode, context),
          {:ok, flow, nonce} <-
@@ -183,7 +179,8 @@ defmodule ExSaml.SPHandler do
          assertion: %Assertion{assertion | idp_id: idp_id},
          nonce: nonce,
          user_token: user_token,
-         redirect_uri: redirect_uri
+         redirect_uri: redirect_uri,
+         trace_id: trace_id
        }}
     end
   end
@@ -191,7 +188,7 @@ defmodule ExSaml.SPHandler do
   defp do_consume_signin_response(conn, idp_id, rls, relay_state) do
     with {:ok, idp_data} <- fetch_idp(idp_id, relay_state),
          :ok <- maybe_redirect_to_start_url(conn, rls),
-         {:ok, %{assertion: assertion, nonce: nonce, flow: flow}} <-
+         {:ok, %{assertion: assertion, nonce: nonce, flow: flow, trace_id: trace_id}} <-
            consume_signin_response(conn, idp_data) do
       nameid = assertion.subject.name
       assertion_key = {idp_data.id, maybe_idp_user_id(assertion) || nameid}
@@ -207,7 +204,8 @@ defmodule ExSaml.SPHandler do
         target_source: target_source,
         assertion_key: assertion_key,
         nonce: nonce,
-        relay_state: relay_state
+        relay_state: relay_state,
+        trace_id: trace_id
       })
     else
       {:halted, conn} ->
@@ -259,21 +257,19 @@ defmodule ExSaml.SPHandler do
 
   defp redirect_with_authorization_code(conn, ctx) do
     code = State.gen_id()
-    {_idp_id, debug_id} = Debug.context()
-    debug? = Debug.enabled?(ctx.idp_id)
 
-    if debug?, do: Debug.link_code(code, debug_id, ctx.idp_id)
+    if Debug.enabled?(ctx.idp_id), do: Debug.link_code(code, ctx.trace_id, ctx.idp_id)
 
     AuthorizationCodeCache.put_new!(code, %{
       ex_saml_assertion_key: ctx.assertion_key,
       saml_nonce_candidate: ctx.nonce,
-      debug_id: if(debug?, do: debug_id)
+      trace_id: ctx.trace_id
     })
 
     Debug.log(:code_issued, ctx.idp_id, fn ->
       %{
         idp_id: ctx.idp_id,
-        debug_id: debug_id,
+        trace_id: ctx.trace_id,
         code: code,
         assertion_key: ctx.assertion_key,
         nonce: ctx.nonce,
@@ -288,9 +284,9 @@ defmodule ExSaml.SPHandler do
     redirect(conn, 302, "#{ctx.target_url}?code=#{code}")
   end
 
-  # Failure path, symmetric with the success path: the error is stored under a
-  # random single-use `id` and the browser is redirected with `?error_id=<id>`.
-  # The legacy session entry is kept for compatibility.
+  # Failure path, symmetric with the success path: the error is stored under
+  # its `trace_id` (single use) and the browser is redirected with
+  # `?error_id=<trace_id>`. The legacy session entry is kept for compatibility.
   defp redirect_with_error(conn, relay_state, %Error{} = error) do
     {target_url, target_source} =
       case error.reason do
@@ -298,22 +294,25 @@ defmodule ExSaml.SPHandler do
         _ -> target_url_with_source(conn, relay_state)
       end
 
-    {ctx_idp_id, ctx_debug_id} = Debug.context()
+    {ctx_idp_id, ctx_trace_id} = Debug.context()
     idp_id = error.idp_id || ctx_idp_id
-    debug_id = error.debug_id || ctx_debug_id
-
-    Debug.persist_payload(debug_id)
 
     error =
-      %{error | idp_id: idp_id, debug_id: debug_id, relay_state: error.relay_state || relay_state}
+      %{
+        error
+        | idp_id: idp_id,
+          trace_id: error.trace_id || ctx_trace_id,
+          relay_state: error.relay_state || relay_state
+      }
       |> Error.new()
       |> Error.issue()
+
+    Debug.promote(error.trace_id, error, :error)
 
     Debug.log(:error_issued, idp_id, fn ->
       %{
         idp_id: idp_id,
-        debug_id: debug_id,
-        error_id: error.id,
+        trace_id: error.trace_id,
         reason: error.reason,
         scope: error.scope,
         step: error.step,
@@ -326,8 +325,8 @@ defmodule ExSaml.SPHandler do
     end)
 
     conn
-    |> put_session("ex_saml_error", {:error, %{error | report: nil}})
-    |> redirect(302, Error.append_error_id(target_url, error.id))
+    |> put_session("ex_saml_error", {:error, %{error | trace: nil}})
+    |> redirect(302, Error.append_error_id(target_url, error.trace_id))
   end
 
   defp unexpected_error(conn, idp_id, relay_state, kind, value, stacktrace) do
@@ -337,7 +336,7 @@ defmodule ExSaml.SPHandler do
     Debug.log(:unexpected_error, idp_id, %{
       idp_id: idp_id,
       relay_state: relay_state,
-      error: formatted
+      stacktrace: formatted
     })
 
     message =
@@ -373,40 +372,16 @@ defmodule ExSaml.SPHandler do
     end
   end
 
-  # SP-initiated flows reuse the relay state as debug id (it was generated by
-  # `ExSaml.AuthHandler` and already carries the AuthnRequest step). IdP-initiated
+  # SP-initiated flows reuse the relay state as trace id (it was generated by
+  # `ExSaml.AuthHandler` and already carries the AuthnRequest event). IdP-initiated
   # flows have no relay state of ours, so a fresh id is generated per request.
-  defp debug_id(conn, relay_state) do
+  defp trace_id(conn, relay_state) do
     ours? =
       relay_state != "" and
         (get_session(conn, "relay_state") == relay_state or
            not is_nil(RelayStateCache.get(relay_state)))
 
     if ours?, do: relay_state, else: State.gen_id()
-  end
-
-  defp payload_fingerprint(nil), do: nil
-
-  defp payload_fingerprint(payload) when is_binary(payload),
-    do: :sha256 |> :crypto.hash(payload) |> Base.encode16(case: :lower)
-
-  defp payload_fingerprint(_), do: nil
-
-  # Human-readable copy of the payload for the capture; failures are expected
-  # (that is often why we are capturing) and must never break the flow.
-  defp safe_decode_xml(_encoding, nil), do: nil
-
-  defp safe_decode_xml(encoding, payload) do
-    decoded =
-      if encoding == IdpData.oasis_redirect_flow_uri(),
-        do: payload |> :base64.decode() |> :zlib.unzip(),
-        else: :base64.decode(payload)
-
-    if String.valid?(decoded), do: decoded, else: nil
-  rescue
-    _ -> nil
-  catch
-    _, _ -> nil
   end
 
   defp session_snapshot(conn) do
@@ -531,7 +506,6 @@ defmodule ExSaml.SPHandler do
             relay_state: relay_state,
             saml_encoding: saml_encoding,
             saml_response_bytes: saml_response && byte_size(saml_response),
-            saml_response_sha256: payload_fingerprint(saml_response),
             session: session_snapshot(conn)
           }
         end)
@@ -586,8 +560,7 @@ defmodule ExSaml.SPHandler do
             error: error,
             relay_state: relay_state,
             saml_encoding: saml_encoding,
-            saml_request_bytes: saml_request && byte_size(saml_request),
-            saml_request_sha256: payload_fingerprint(saml_request)
+            saml_request_bytes: saml_request && byte_size(saml_request)
           }
         end)
 

@@ -146,7 +146,7 @@
           {Credo.Check.Warning.IExPry, []},
           {Credo.Check.Warning.IoInspect, []},
           {Credo.Check.Warning.MissedMetadataKeyInLoggerConfig,
-           [metadata_keys: [:ex_saml_idp_id, :ex_saml_debug_id, :ex_saml_saml_sub_status]]},
+           [metadata_keys: [:ex_saml_idp_id, :ex_saml_trace_id, :ex_saml_saml_sub_status]]},
           {Credo.Check.Warning.OperationOnSameValues, []},
           {Credo.Check.Warning.OperationWithConstantResult, []},
           {Credo.Check.Warning.RaiseInsideRescue, []},

@@ -12,7 +12,7 @@ defmodule ExSaml.Core.SpValidateAssertionTest do
     StubCache.install()
     Application.delete_env(:ex_saml, :debug)
     Application.delete_env(:ex_saml, :debug_runtime)
-    Logger.metadata(ex_saml_saml_sub_status: nil, ex_saml_idp_id: nil, ex_saml_debug_id: nil)
+    Logger.metadata(ex_saml_saml_sub_status: nil, ex_saml_idp_id: nil, ex_saml_trace_id: nil)
     :ok
   end
 
@@ -144,6 +144,53 @@ defmodule ExSaml.Core.SpValidateAssertionTest do
 
       assert ExSaml.ErrorMessages.get(reason) =~ "signature could not be verified"
       assert ExSaml.ErrorMessages.get(reason, "fr") =~ "signature SAML n'a pas pu être vérifiée"
+    end
+  end
+
+  describe "time conditions and the :now option (replay)" do
+    defp signed_off_response do
+      parse("""
+      <samlp:Response #{@ns} ID="_r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
+        <saml:Issuer>https://idp.example.com</saml:Issuer>
+        <samlp:Status>
+          <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>
+        </samlp:Status>
+        <saml:Assertion ID="_a1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
+          <saml:Issuer>https://idp.example.com</saml:Issuer>
+          <saml:Subject>
+            <saml:NameID>user@example.com</saml:NameID>
+            <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+              <saml:SubjectConfirmationData NotOnOrAfter="2026-01-01T00:10:00Z"
+                Recipient="https://sp.example.com/consume" InResponseTo="_req"/>
+            </saml:SubjectConfirmation>
+          </saml:Subject>
+          <saml:Conditions NotBefore="2026-01-01T00:00:00Z" NotOnOrAfter="2026-01-01T00:10:00Z">
+            <saml:AudienceRestriction>
+              <saml:Audience>https://sp.example.com/metadata</saml:Audience>
+            </saml:AudienceRestriction>
+          </saml:Conditions>
+          <saml:AuthnStatement AuthnInstant="2026-01-01T00:00:00Z"/>
+        </saml:Assertion>
+      </samlp:Response>
+      """)
+    end
+
+    test "evaluated now, a 2026-01-01 assertion is stale; evaluated as of its receipt, it passes" do
+      assert {:error, :stale_assertion} = Sp.validate_assertion(signed_off_response(), sp())
+
+      assert {:ok, %ExSaml.Core.Assertion{}} =
+               Sp.validate_assertion(signed_off_response(), sp(), now: ~U[2026-01-01 00:01:00Z])
+
+      assert {:error, :too_early} =
+               Sp.validate_assertion(signed_off_response(), sp(), now: ~U[2025-12-31 23:00:00Z])
+
+      assert {:ok, _} =
+               Sp.validate_assertion(
+                 signed_off_response(),
+                 fn _, _ -> :ok end,
+                 sp(),
+                 now: {{2026, 1, 1}, {0, 5, 0}}
+               )
     end
   end
 end

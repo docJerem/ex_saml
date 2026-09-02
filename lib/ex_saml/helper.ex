@@ -67,9 +67,9 @@ defmodule ExSaml.Helper do
     {idp_signout_url, xml_frag}
   end
 
-  def decode_idp_auth_resp(sp, saml_encoding, saml_response) do
+  def decode_idp_auth_resp(sp, saml_encoding, saml_response, opts \\ []) do
     with {:ok, xml_frag} <- decode_saml_payload(saml_encoding, saml_response),
-         {:ok, core_assertion} <- Core.Sp.validate_assertion(xml_frag, sp) do
+         {:ok, core_assertion} <- Core.Sp.validate_assertion(xml_frag, sp, opts) do
       {:ok, Assertion.from_core(core_assertion)}
     else
       {:error, reason} -> {:error, reason}

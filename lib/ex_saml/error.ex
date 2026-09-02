@@ -3,22 +3,28 @@ defmodule ExSaml.Error do
   The single error shape exposed by the library.
 
   Every public function that can fail returns `{:error, %ExSaml.Error{}}`:
-  `ExSaml.SPHandler.consume_signin_response/2`, `ExSaml.Error.get_from_id/1`
-  and `ExSaml.Assertion.get_from_code/1`. Internally, `ExSaml.Core.*` keep
-  returning plain tuples; `from_reason/2` is the one place where those tuples
-  are normalised, **without losing any of the information they carried**.
+  `ExSaml.SPHandler.consume_signin_response/2`, `ExSaml.Error.get_from_id/1`,
+  `ExSaml.Assertion.get_from_code/1` and `ExSaml.Debug.replay/2`. Internally,
+  `ExSaml.Core.*` keep returning plain tuples; `from_reason/2` is the one place
+  where those tuples are normalised, **without losing any of the information
+  they carried**.
+
+  ## Identifier: `trace_id`
+
+  Every sign-in flow has a `trace_id` (the `RelayState` for SP-initiated flows,
+  a fresh id otherwise), whether debug is on or off. It is the identifier of
+  the error, the value of the `?error_id=` redirect parameter, the key of the
+  `ExSaml.Debug` trace and capture, and the id carried by the authorization
+  code payload. Show it to the end user and log it: it is the one key the
+  support team needs.
 
   ## Looking up an error at the callback
 
-  When the assertion consumer service cannot complete a sign-in, the error is
-  stored under a random single-use `id` and the browser is redirected to the
-  target URL with `?error_id=<id>` (the failure-side counterpart of `?code=`):
-
       def callback(conn, %{"error_id" => error_id}) do
         case ExSaml.Error.get_from_id(error_id) do
-          {:ok, %ExSaml.Error{} = error} ->
-            Logger.warning("SAML sign-in failed", error_id: error.id, reason: error.reason)
-            render(conn, "error.html", message: ExSaml.ErrorMessages.get(error), error_id: error.id)
+          {:ok, %ExSaml.Error{trace_id: trace_id} = error} ->
+            Logger.warning("SAML sign-in failed", trace_id: trace_id, reason: error.reason)
+            render(conn, "error.html", message: ExSaml.ErrorMessages.get(error), trace_id: trace_id)
 
           {:error, %ExSaml.Error{reason: :error_not_found}} ->
             redirect(conn, to: "/")
@@ -27,16 +33,15 @@ defmodule ExSaml.Error do
 
   ## Fields
 
-    * `id` — the error's own identifier, always set once issued (equal to the
-      `error_id` of the redirect). Show it to the end user and log it: it is the
-      key the support team needs.
+    * `trace_id` — the identifier (see above); `nil` only when an authorization
+      code could not be found at all
     * `reason` — **always an atom**, from a closed catalogue (see
       `ExSaml.ErrorMessages.codes/0` and the guide)
     * `scope` — `:envelope` or `:assertion` for signature failures (which
       element failed), else `nil`
     * `step` — `:idp_lookup`, `:decode`, `:validate_authresp`, `:target_url`,
       `:code_exchange` (`ExSaml.Assertion.get_from_code/1`), `:error_lookup`
-      (`get_from_id/1`) or `:unexpected`
+      (`get_from_id/1`), `:replay` (`ExSaml.Debug.replay/2`) or `:unexpected`
     * `flow` — `:sp_initiated`, `:idp_initiated` or `nil`
     * `idp_id`, `relay_state`, `node`, `at` — correlation data
     * `saml_status`, `saml_status_uri`, `saml_sub_status`, `saml_message` — the
@@ -44,9 +49,7 @@ defmodule ExSaml.Error do
       the raw top-level URI, and the `StatusMessage` text)
     * `detail` — free text carried by the original error: the exception message
       for `:exception`, the decoding error for `:invalid_response`, …
-    * `debug_id` — internal correlation key of the `ExSaml.Debug` flow (nil when
-      debug was off); prefer `id`, which `ExSaml.Debug.report/1` also accepts
-    * `report` — the full `ExSaml.Debug` report when debug was on, else `nil`
+    * `trace` — the `ExSaml.Debug` trace of the flow when debug was on, else `nil`
 
   ## Legacy tuples
 
@@ -57,7 +60,7 @@ defmodule ExSaml.Error do
 
   alias ExSaml.{Core.StatusCode, Debug, ErrorCache, State}
 
-  defstruct id: nil,
+  defstruct trace_id: nil,
             reason: nil,
             scope: nil,
             step: nil,
@@ -69,8 +72,7 @@ defmodule ExSaml.Error do
             saml_sub_status: nil,
             saml_message: nil,
             detail: nil,
-            debug_id: nil,
-            report: nil,
+            trace: nil,
             node: nil,
             at: nil
 
@@ -81,9 +83,10 @@ defmodule ExSaml.Error do
           | :target_url
           | :code_exchange
           | :error_lookup
+          | :replay
           | :unexpected
   @type t :: %__MODULE__{
-          id: binary() | nil,
+          trace_id: binary() | nil,
           reason: atom(),
           scope: :envelope | :assertion | nil,
           step: step() | nil,
@@ -95,8 +98,7 @@ defmodule ExSaml.Error do
           saml_sub_status: StatusCode.t() | :unknown | nil,
           saml_message: binary() | nil,
           detail: binary() | nil,
-          debug_id: binary() | nil,
-          report: Debug.report() | nil,
+          trace: Debug.trace() | nil,
           node: node() | nil,
           at: DateTime.t() | nil
         }
@@ -107,7 +109,7 @@ defmodule ExSaml.Error do
 
   @doc """
   Normalises any error term produced by the library into an `%ExSaml.Error{}`,
-  merging `attrs` (step, flow, idp_id, relay_state, debug_id, …).
+  merging `attrs` (step, flow, idp_id, relay_state, trace_id, …).
 
   Nothing carried by the legacy tuples is dropped:
 
@@ -179,40 +181,37 @@ defmodule ExSaml.Error do
 
   @doc """
   Builds an error from attributes (`reason` may be a legacy tuple) and attaches
-  the `ExSaml.Debug` report when debug is enabled for the IdP.
+  the `ExSaml.Debug` trace when debug is enabled for the IdP.
   """
   @spec new(t() | map() | keyword()) :: t()
-  def new(%__MODULE__{} = error), do: attach_report(error)
+  def new(%__MODULE__{} = error), do: attach_trace(error)
 
   def new(attrs) do
     attrs = Map.new(attrs)
-    attrs |> Map.get(:reason) |> from_reason(Map.delete(attrs, :reason)) |> attach_report()
+    attrs |> Map.get(:reason) |> from_reason(Map.delete(attrs, :reason)) |> attach_trace()
   end
 
-  defp attach_report(%__MODULE__{} = error) do
-    if Debug.enabled?(error.idp_id) and is_nil(error.report),
-      do: %{error | report: Debug.report(error.debug_id)},
+  defp attach_trace(%__MODULE__{} = error) do
+    if Debug.enabled?(error.idp_id) and is_nil(error.trace),
+      do: %{error | trace: Debug.trace(error.trace_id)},
       else: error
   end
 
   @doc """
-  Stores the error under a fresh random id (single use) and returns it with
-  `id` set. Links the id to the debug flow so `ExSaml.Debug.report/1` and
-  `ExSaml.Debug.saml_response/1` accept it.
+  Stores the error under its `trace_id` (single use) so the consumer can look
+  it up with `get_from_id/1`. Generates a `trace_id` when the error has none.
   """
   @spec issue(t()) :: t()
   def issue(%__MODULE__{} = error) do
-    id = State.gen_id()
-    error = %{error | id: id}
-    ErrorCache.put_new!(id, error)
-    Debug.link_error(id, error.debug_id)
+    error = %{error | trace_id: error.trace_id || State.gen_id()}
+    ErrorCache.put_new!(error.trace_id, error)
     error
   end
 
   @doc """
-  Looks up an `error_id` and consumes it (single use). Returns
+  Looks up an `error_id` (the `trace_id`) and consumes it (single use). Returns
   `{:error, %ExSaml.Error{reason: :error_not_found}}` when the id is unknown,
-  expired or already consumed.
+  expired or already consulted.
   """
   @spec get_from_id(term()) :: {:ok, t()} | {:error, t()}
   def get_from_id(error_id) when is_binary(error_id) do
@@ -225,12 +224,12 @@ defmodule ExSaml.Error do
   def get_from_id(other),
     do: {:error, base(:error_not_found, %{step: :error_lookup, detail: inspect(other)})}
 
-  @doc "Appends `error_id=<id>` to a URL, preserving any existing query string."
+  @doc "Appends `error_id=<trace_id>` to a URL, preserving any existing query string."
   @spec append_error_id(binary(), binary()) :: binary()
-  def append_error_id(url, error_id) do
+  def append_error_id(url, trace_id) do
     uri = URI.parse(url)
     query = (uri.query && URI.decode_query(uri.query)) || %{}
-    URI.to_string(%{uri | query: URI.encode_query(Map.put(query, "error_id", error_id))})
+    URI.to_string(%{uri | query: URI.encode_query(Map.put(query, "error_id", trace_id))})
   end
 
   # ---------------------------------------------------------------------------

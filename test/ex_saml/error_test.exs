@@ -9,7 +9,7 @@ defmodule ExSaml.ErrorTest do
     StubCache.install()
     Application.delete_env(:ex_saml, :debug)
     Application.delete_env(:ex_saml, :debug_runtime)
-    Logger.metadata(ex_saml_saml_sub_status: nil, ex_saml_idp_id: nil, ex_saml_debug_id: nil)
+    Logger.metadata(ex_saml_saml_sub_status: nil, ex_saml_idp_id: nil, ex_saml_trace_id: nil)
     :ok
   end
 
@@ -87,9 +87,15 @@ defmodule ExSaml.ErrorTest do
     end
 
     test "attrs are merged, node and timestamp are set" do
-      error = Error.from_reason(:bad_audience, step: :decode, idp_id: "acme", relay_state: "rs")
+      error =
+        Error.from_reason(:bad_audience,
+          step: :decode,
+          idp_id: "acme",
+          relay_state: "rs",
+          trace_id: "rs"
+        )
 
-      assert %Error{step: :decode, idp_id: "acme", relay_state: "rs"} = error
+      assert %Error{step: :decode, idp_id: "acme", relay_state: "rs", trace_id: "rs"} = error
       assert error.node == node()
       assert %DateTime{} = error.at
     end
@@ -125,32 +131,38 @@ defmodule ExSaml.ErrorTest do
   end
 
   describe "new/1" do
-    test "leaves report nil when debug is off" do
-      assert %Error{report: nil} =
-               Error.new(%{reason: :bad_audience, idp_id: "acme", debug_id: "d1"})
+    test "leaves trace nil when debug is off" do
+      assert %Error{trace: nil} =
+               Error.new(%{reason: :bad_audience, idp_id: "acme", trace_id: "t1"})
     end
 
-    test "embeds the debug report when debug is on for the IdP" do
+    test "embeds the debug trace when debug is on for the IdP" do
       Debug.enable(idp_id: "acme")
-      Debug.capture("d1", :authn_request, %{relay_state: "d1"})
+      Debug.record("t1", :authn_request, %{relay_state: "t1"})
 
-      error = Error.new(%{reason: :invalid_relay_state, idp_id: "acme", debug_id: "d1"})
+      error = Error.new(%{reason: :invalid_relay_state, idp_id: "acme", trace_id: "t1"})
 
-      assert [{:authn_request, %{relay_state: "d1"}}] = error.report
+      assert [{:authn_request, %{relay_state: "t1"}}] = error.trace
     end
   end
 
   describe "issue/1 and get_from_id/1" do
-    test "sets the id, stores once, single use" do
-      %Error{id: id} = issued = Error.issue(Error.new(%{reason: :bad_recipient, step: :decode}))
+    test "stores under the trace_id, single use" do
+      error = Error.new(%{reason: :bad_recipient, step: :decode, trace_id: "t1"})
+      assert %Error{trace_id: "t1"} = issued = Error.issue(error)
 
-      assert is_binary(id)
-      assert ErrorCache.ttl(id) == ErrorCache.ttl()
+      assert ErrorCache.ttl("t1") == ErrorCache.ttl()
 
-      assert {:ok, ^issued} = Error.get_from_id(id)
+      assert {:ok, ^issued} = Error.get_from_id("t1")
 
-      assert {:error, %Error{reason: :error_not_found, step: :error_lookup, detail: ^id}} =
-               Error.get_from_id(id)
+      assert {:error, %Error{reason: :error_not_found, step: :error_lookup, detail: "t1"}} =
+               Error.get_from_id("t1")
+    end
+
+    test "generates a trace_id when the error has none" do
+      %Error{trace_id: trace_id} = Error.issue(Error.new(%{reason: :bad_recipient}))
+      assert is_binary(trace_id)
+      assert {:ok, %Error{trace_id: ^trace_id}} = Error.get_from_id(trace_id)
     end
 
     test "unknown or malformed ids" do
@@ -158,22 +170,12 @@ defmodule ExSaml.ErrorTest do
       assert {:error, %Error{reason: :error_not_found}} = Error.get_from_id(nil)
     end
 
-    test "links the id to the debug flow so Debug.report/1 accepts it" do
-      Debug.enable(idp_id: "acme")
-      Debug.capture("flow-1", :authn_request, %{})
-
-      %Error{id: id} =
-        Error.issue(Error.new(%{reason: :bad_audience, idp_id: "acme", debug_id: "flow-1"}))
-
-      assert [{:authn_request, _}] = Debug.report(id)
-    end
-
     test "error_ttl config is honoured" do
       Application.put_env(:ex_saml, :error_ttl, 1234)
       on_exit(fn -> Application.delete_env(:ex_saml, :error_ttl) end)
 
-      %Error{id: id} = Error.issue(Error.new(%{reason: :duplicate}))
-      assert ErrorCache.ttl(id) == 1234
+      %Error{trace_id: trace_id} = Error.issue(Error.new(%{reason: :duplicate}))
+      assert ErrorCache.ttl(trace_id) == 1234
     end
   end
 
