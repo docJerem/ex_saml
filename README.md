@@ -112,39 +112,48 @@ config :ex_saml, cache: MyApp.Cache
 
 The assertion consumer service always redirects to the target URL with either
 `?code=<authorization_code>` (success) or `?error_id=<id>` (failure). Both are
-random, single-use and expire; redeem them with `ExSaml.Assertion.get_from_code/1`
-and `ExSaml.Error.get_from_id/1`:
+random, single-use and expire; consume them with `ExSaml.Assertion.get_from_code/1`
+and `ExSaml.Error.get_from_id/1`. Every failure is an `%ExSaml.Error{}` whose
+`reason` is always an atom:
 
 ```elixir
 def callback(conn, %{"error_id" => error_id}) do
   case ExSaml.Error.get_from_id(error_id) do
-    {:ok, %ExSaml.Error{} = error} ->
-      conn |> put_flash(:error, ExSaml.ErrorMessages.get(error)) |> redirect(to: "/login")
+    {:ok, %ExSaml.Error{id: id} = error} ->
+      conn
+      |> put_flash(:error, "#{ExSaml.ErrorMessages.get(error)} (error ID: #{id})")
+      |> redirect(to: "/login")
 
-    {:error, :not_found} ->
+    {:error, %ExSaml.Error{reason: :error_not_found}} ->
       redirect(conn, to: "/login")
   end
 end
 ```
 
 See the [error handling and debugging guide](guides/error_handling_and_debugging.md)
-for the full contract and the catalogue of reasons.
+for the full contract, the catalogue of reasons and the 2.0 migration notes.
 
 ### Debug mode
 
 `ExSaml.Debug` traces the whole sign-in flow (AuthnRequest, IdP response,
-decoding, validation, code issuance and redemption) and stores a per-flow report.
-It is enabled **at runtime**, from a remote console, without a redeploy or a
-config change, globally or for one IdP, and always expires:
+decoding, validation, code issuance and exchange), stores a per-flow report and
+can capture the raw `SAMLResponse`. It is enabled **at runtime**, from a remote
+console, without a redeploy or a config change, globally or for one IdP, and
+always expires:
 
 ```elixir
 ExSaml.Debug.enable(idp_id: "acme", ttl: :timer.minutes(30))
+ExSaml.Debug.enable(idp_id: "acme", capture: :always, log: :silent)
 ExSaml.Debug.status()
+ExSaml.Debug.report(error.id)
+ExSaml.Debug.saml_response(error.id)
 ExSaml.Debug.disable("acme")
 ```
 
-Debug mode logs the raw `SAMLResponse` and the assertion attributes: keep the
-TTL short. Details in the [guide](guides/error_handling_and_debugging.md#4-debug-mode).
+By default the log lines redact the payload and the assertion (`log: :steps`)
+and the `SAMLResponse` is captured only when the flow fails (`capture: :on_error`).
+Use `config :ex_saml, debug_cache:` to keep debug data out of your main cache.
+Details in the [guide](guides/error_handling_and_debugging.md#4-debug-mode).
 
 ### Dynamic Provider Loading
 

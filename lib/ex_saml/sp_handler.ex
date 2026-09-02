@@ -15,13 +15,14 @@ defmodule ExSaml.SPHandler do
   After consuming the IdP response, the router-facing `consume_signin_response/1`
   always redirects the browser to the target URL with exactly one of:
 
-    * `?code=<authorization_code>` on success — redeem it once with
+    * `?code=<authorization_code>` on success — exchange it once with
       `ExSaml.Assertion.get_from_code/1`
-    * `?error_id=<id>` on failure — redeem it once with `ExSaml.Error.get_from_id/1`
+    * `?error_id=<id>` on failure — look it up once with `ExSaml.Error.get_from_id/1`
 
   Both are random, single-use and expire. The failure path also keeps the legacy
-  `ex_saml_error` session entry for existing consumers, but the session is not a
-  reliable channel across the cross-site IdP POST: prefer `error_id`.
+  `ex_saml_error` session entry (now holding `{:error, %ExSaml.Error{}}`) for
+  existing consumers, but the session is not a reliable channel across the
+  cross-site IdP POST: prefer `error_id`.
   """
 
   require Logger
@@ -71,10 +72,10 @@ defmodule ExSaml.SPHandler do
       nonce is generated; downstream consumers must accept `nil` for the
       IdP-initiated case).
 
-  On failure returns `{:error, reason}`. Possible reasons include
-  `:idp_initiated_not_allowed`, `:invalid_target_url`, `:invalid_relay_state`,
-  `:invalid_idp_id`, `:missing_saml_response`, and every decoding / validation
-  reason produced by `ExSaml.Core.Sp.validate_assertion/3`.
+  On failure returns `{:error, %ExSaml.Error{}}` whose `reason` is always an
+  atom (`:invalid_relay_state`, `:bad_digest` with `scope: :assertion`,
+  `:saml_error` with the IdP status fields, …). See `ExSaml.Error` and the
+  error handling guide for the catalogue.
   """
   # Router-facing clause: matches when the SP router dispatched here with
   # `idp_id` in path params. Performs the full SAML flow AND handles the
@@ -120,7 +121,17 @@ defmodule ExSaml.SPHandler do
     debug_id = if Debug.enabled?(idp_id), do: debug_id(conn, relay_state)
     Debug.put_context(idp_id, debug_id)
 
-    Debug.log(:response_received, fn ->
+    Debug.stash_payload(idp_id, debug_id, %{
+      idp_id: idp_id,
+      relay_state: relay_state,
+      saml_encoding: saml_encoding,
+      saml_response: saml_response,
+      xml: safe_decode_xml(saml_encoding, saml_response),
+      host: conn.host,
+      received_at: DateTime.utc_now()
+    })
+
+    Debug.log(:response_received, idp_id, fn ->
       %{
         idp_id: idp_id,
         debug_id: debug_id,
@@ -146,16 +157,22 @@ defmodule ExSaml.SPHandler do
 
     decoded = Helper.decode_idp_auth_resp(sp, saml_encoding, saml_response)
 
-    Debug.log(:decode_result, fn ->
+    Debug.log(:decode_result, idp_id, fn ->
       case decoded do
         {:ok, assertion} -> %{result: :ok, assertion: assertion}
         {:error, reason} -> %{result: :error, reason: reason}
       end
     end)
 
-    with {:ok, assertion} <- tag_step(decoded, :decode),
+    context = %{idp_id: idp_id, relay_state: relay_state, debug_id: debug_id}
+
+    with {:ok, assertion} <- step(decoded, :decode, context),
          {:ok, flow, nonce} <-
-           tag_step(validate_authresp(conn, idp_data, assertion, relay_state), :validate_authresp) do
+           step(
+             validate_authresp(conn, idp_data, assertion, relay_state),
+             :validate_authresp,
+             context
+           ) do
       {:ok,
        %{
          flow: flow,
@@ -164,13 +181,11 @@ defmodule ExSaml.SPHandler do
          user_token: user_token,
          redirect_uri: redirect_uri
        }}
-    else
-      {:error, error} -> {:error, error}
     end
   end
 
   defp do_consume_signin_response(conn, idp_id, rls, relay_state) do
-    with {:ok, idp_data} <- fetch_idp(idp_id),
+    with {:ok, idp_data} <- fetch_idp(idp_id, relay_state),
          :ok <- maybe_redirect_to_start_url(conn, rls),
          {:ok, %{assertion: assertion, nonce: nonce, flow: flow}} <-
            consume_signin_response(conn, idp_data) do
@@ -194,7 +209,7 @@ defmodule ExSaml.SPHandler do
       {:halted, conn} ->
         conn
 
-      {:error, error} ->
+      {:error, %Error{} = error} ->
         redirect_with_error(conn, relay_state, error)
 
       # Defensive fallback: unreachable today (Dialyzer flags it as such), but
@@ -206,21 +221,24 @@ defmodule ExSaml.SPHandler do
     end
   end
 
-  defp fetch_idp(idp_id) do
+  defp fetch_idp(idp_id, relay_state) do
     case get_idp(idp_id) do
-      %IdpData{} = idp -> {:ok, idp}
-      _ -> tag_step({:error, {:unknown_idp, idp_id}}, :idp_lookup)
+      %IdpData{} = idp ->
+        {:ok, idp}
+
+      _ ->
+        {:error,
+         Error.from_reason({:unknown_idp, idp_id}, %{step: :idp_lookup, relay_state: relay_state})}
     end
   end
 
-  # Records which step of the flow produced an error, so `%ExSaml.Error{step: _}`
-  # can be filled without threading the information through every return value.
-  defp tag_step({:error, _} = error, step) do
-    Process.put(:ex_saml_error_step, step)
-    error
+  # Normalises a step's failure into `%ExSaml.Error{}` tagged with the step.
+  defp step({:error, reason}, step, context) do
+    step = if reason == :invalid_target_url, do: :target_url, else: step
+    {:error, Error.from_reason(reason, Map.merge(context, %{step: step, flow: flow_for(reason)}))}
   end
 
-  defp tag_step(other, _step), do: other
+  defp step(other, _step, _context), do: other
 
   defp maybe_idp_user_id(%{attributes: %{"idp_user_id" => idp_user_id}}), do: idp_user_id
   defp maybe_idp_user_id(_), do: nil
@@ -267,36 +285,35 @@ defmodule ExSaml.SPHandler do
   end
 
   # Failure path, symmetric with the success path: the error is stored under a
-  # random single-use `error_id` and the browser is redirected with
-  # `?error_id=<id>`. The legacy session entry is kept for compatibility.
-  defp redirect_with_error(conn, relay_state, reason) do
+  # random single-use `id` and the browser is redirected with `?error_id=<id>`.
+  # The legacy session entry is kept for compatibility.
+  defp redirect_with_error(conn, relay_state, %Error{} = error) do
     {target_url, target_source} =
-      case reason do
+      case error.reason do
         :invalid_target_url -> {target_url(), :fallback}
         _ -> target_url_with_source(conn, relay_state)
       end
 
-    {idp_id, debug_id} = Debug.context()
-    step = Process.delete(:ex_saml_error_step) || :validate_authresp
+    {ctx_idp_id, ctx_debug_id} = Debug.context()
+    idp_id = error.idp_id || ctx_idp_id
+    debug_id = error.debug_id || ctx_debug_id
 
-    {error_id, error} =
-      Error.new(%{
-        reason: reason,
-        step: if(reason == :invalid_target_url, do: :target_url, else: step),
-        flow: flow_for(reason),
-        idp_id: idp_id,
-        relay_state: relay_state,
-        debug_id: debug_id
-      })
+    Debug.persist_payload(debug_id)
+
+    error =
+      %{error | idp_id: idp_id, debug_id: debug_id, relay_state: error.relay_state || relay_state}
+      |> Error.new()
       |> Error.issue()
 
     Debug.log(:error_issued, idp_id, fn ->
       %{
         idp_id: idp_id,
         debug_id: debug_id,
-        error_id: error_id,
-        reason: reason,
+        error_id: error.id,
+        reason: error.reason,
+        scope: error.scope,
         step: error.step,
+        detail: error.detail,
         target_url: target_url,
         target_source: target_source,
         session: session_snapshot(conn),
@@ -305,16 +322,19 @@ defmodule ExSaml.SPHandler do
     end)
 
     conn
-    |> put_session("ex_saml_error", {:error, reason})
-    |> redirect(302, Error.append_error_id(target_url, error_id))
+    |> put_session("ex_saml_error", {:error, %{error | report: nil}})
+    |> redirect(302, Error.append_error_id(target_url, error.id))
   end
 
   defp unexpected_error(conn, idp_id, relay_state, kind, value, stacktrace) do
     formatted = Exception.format(kind, value, stacktrace)
     Logger.error("[ExSaml] consume_signin_response crashed: #{formatted}")
 
-    Debug.log(:unexpected_error, %{idp_id: idp_id, relay_state: relay_state, error: formatted})
-    Process.put(:ex_saml_error_step, :unexpected)
+    Debug.log(:unexpected_error, idp_id, %{
+      idp_id: idp_id,
+      relay_state: relay_state,
+      error: formatted
+    })
 
     message =
       case kind do
@@ -322,7 +342,14 @@ defmodule ExSaml.SPHandler do
         _ -> inspect(value)
       end
 
-    redirect_with_error(conn, relay_state, {:exception, message})
+    error =
+      Error.from_reason({:exception, message}, %{
+        step: :unexpected,
+        idp_id: idp_id,
+        relay_state: relay_state
+      })
+
+    redirect_with_error(conn, relay_state, error)
   end
 
   defp flow_for(:idp_initiated_not_allowed), do: :idp_initiated
@@ -352,6 +379,23 @@ defmodule ExSaml.SPHandler do
            not is_nil(RelayStateCache.get(relay_state)))
 
     if ours?, do: relay_state, else: State.gen_id()
+  end
+
+  # Human-readable copy of the payload for the capture; failures are expected
+  # (that is often why we are capturing) and must never break the flow.
+  defp safe_decode_xml(_encoding, nil), do: nil
+
+  defp safe_decode_xml(encoding, payload) do
+    decoded =
+      if encoding == IdpData.oasis_redirect_flow_uri(),
+        do: payload |> :base64.decode() |> :zlib.unzip(),
+        else: :base64.decode(payload)
+
+    if String.valid?(decoded), do: decoded, else: nil
+  rescue
+    _ -> nil
+  catch
+    _, _ -> nil
   end
 
   defp session_snapshot(conn) do

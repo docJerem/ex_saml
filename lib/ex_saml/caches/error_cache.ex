@@ -5,8 +5,8 @@ defmodule ExSaml.ErrorCache do
 
   When the assertion consumer service cannot complete a sign-in, `ExSaml.SPHandler`
   stores a `%ExSaml.Error{}` under a random `error_id` and redirects the browser
-  to the target URL with `?error_id=<id>`. The consumer redeems it once with
-  `ExSaml.Error.get_from_id/1`, exactly like it redeems a `code` with
+  to the target URL with `?error_id=<id>`. The consumer looks it up once with
+  `ExSaml.Error.get_from_id/1`, exactly like it exchanges a `code` with
   `ExSaml.Assertion.get_from_code/1`.
 
   Uses the cache module configured via `config :ex_saml, cache: MyApp.Cache`.

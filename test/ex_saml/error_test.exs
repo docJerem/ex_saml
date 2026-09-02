@@ -3,6 +3,8 @@ defmodule ExSaml.ErrorTest do
 
   alias ExSaml.{Debug, Error, ErrorCache, StubCache}
 
+  @responder ~c"urn:oasis:names:tc:SAML:2.0:status:Responder"
+
   setup do
     StubCache.install()
     Application.delete_env(:ex_saml, :debug)
@@ -11,22 +13,121 @@ defmodule ExSaml.ErrorTest do
     :ok
   end
 
-  describe "new/1" do
-    test "fills node, timestamp and leaves details nil when debug is off" do
-      error = Error.new(%{reason: :bad_audience, step: :decode, idp_id: "acme", debug_id: "d1"})
+  describe "from_reason/2 keeps everything the legacy tuples carried" do
+    test "bare atom" do
+      assert %Error{reason: :bad_audience, scope: nil, detail: nil} =
+               Error.from_reason(:bad_audience)
+    end
+
+    test "{:error, reason} wrapper" do
+      assert %Error{reason: :bad_recipient} = Error.from_reason({:error, :bad_recipient})
+    end
+
+    test "signature failures keep the element in :scope" do
+      assert %Error{reason: :no_signature, scope: :envelope} =
+               Error.from_reason({:envelope, {:error, :no_signature}})
+
+      assert %Error{reason: :bad_digest, scope: :assertion} =
+               Error.from_reason({:assertion, {:error, :bad_digest}})
+
+      assert %Error{reason: :missing_certificate, scope: :assertion} =
+               Error.from_reason({:assertion, {:error, :missing_certificate}})
+    end
+
+    test "IdP status keeps the raw URI, the atoms, the message and the nested status" do
+      Logger.metadata(ex_saml_saml_sub_status: :authn_failed)
+
+      error = Error.from_reason({:saml_error, @responder, ~c"User could not be authenticated"})
 
       assert %Error{
-               reason: :bad_audience,
-               step: :decode,
-               idp_id: "acme",
-               debug_id: "d1",
-               details: nil,
-               saml_status: nil,
-               saml_sub_status: nil
+               reason: :saml_error,
+               saml_status: :responder,
+               saml_status_uri: "urn:oasis:names:tc:SAML:2.0:status:Responder",
+               saml_sub_status: :authn_failed,
+               saml_message: "User could not be authenticated",
+               detail: nil
              } = error
+    end
 
+    test "IdP status with a malformed or missing message" do
+      assert %Error{saml_message: nil, detail: "malformed StatusMessage"} =
+               Error.from_reason({:saml_error, @responder, :malformed})
+
+      assert %Error{saml_message: nil, detail: nil} =
+               Error.from_reason({:saml_error, @responder, nil})
+    end
+
+    test "unknown status URI is kept verbatim" do
+      error = Error.from_reason({:saml_error, "urn:example:custom", nil})
+      assert error.saml_status == :unknown
+      assert error.saml_status_uri == "urn:example:custom"
+    end
+
+    test "free-text reasons go to :detail" do
+      assert %Error{reason: :invalid_response, detail: "%ArgumentError{}"} =
+               Error.from_reason({:invalid_response, "%ArgumentError{}"})
+
+      assert %Error{reason: :exception, detail: "boom"} = Error.from_reason({:exception, "boom"})
+    end
+
+    test "unknown idp keeps the id" do
+      assert %Error{reason: :unknown_idp, idp_id: "nope"} =
+               Error.from_reason({:unknown_idp, "nope"})
+    end
+
+    test "legacy get_from_code reasons" do
+      assert %Error{reason: :assertion_not_found} = Error.from_reason(assertion: :not_found)
+    end
+
+    test "anything else becomes :unknown_error with the term in :detail" do
+      assert %Error{reason: :unknown_error, detail: "{:weird, 1}"} =
+               Error.from_reason({:weird, 1})
+
+      assert %Error{reason: :unknown_error, detail: "nil"} = Error.from_reason(nil)
+    end
+
+    test "attrs are merged, node and timestamp are set" do
+      error = Error.from_reason(:bad_audience, step: :decode, idp_id: "acme", relay_state: "rs")
+
+      assert %Error{step: :decode, idp_id: "acme", relay_state: "rs"} = error
       assert error.node == node()
       assert %DateTime{} = error.at
+    end
+
+    test "an existing struct is returned with attrs merged" do
+      error = Error.from_reason(:bad_audience, step: :decode)
+
+      assert %Error{reason: :bad_audience, step: :decode, flow: :sp_initiated} =
+               Error.from_reason(error, flow: :sp_initiated)
+    end
+  end
+
+  describe "to_legacy/1" do
+    test "round-trips every legacy shape" do
+      Logger.metadata(ex_saml_saml_sub_status: nil)
+
+      for legacy <- [
+            :bad_audience,
+            {:envelope, {:error, :no_signature}},
+            {:assertion, {:error, :bad_digest}},
+            {:saml_error, @responder, ~c"denied"},
+            {:saml_error, @responder, nil},
+            {:invalid_response, "boom"},
+            {:exception, "boom"},
+            {:unknown_idp, "nope"},
+            [assertion: :not_found]
+          ] do
+        assert legacy |> Error.from_reason() |> Error.to_legacy() == legacy
+      end
+
+      assert Error.to_legacy(%Error{reason: :authorization_code_not_found}) == :unauthorized
+    end
+  end
+
+  describe "new/1" do
+    test "leaves report nil when debug is off" do
+      assert %Error{report: nil} =
+               Error.new(%{reason: :bad_audience, idp_id: "acme", debug_id: "d1"})
     end
 
     test "embeds the debug report when debug is on for the IdP" do
@@ -35,45 +136,44 @@ defmodule ExSaml.ErrorTest do
 
       error = Error.new(%{reason: :invalid_relay_state, idp_id: "acme", debug_id: "d1"})
 
-      assert [{:authn_request, %{relay_state: "d1"}}] = error.details
-    end
-
-    test "resolves SAML status atoms for {:saml_error, _, _} reasons" do
-      Logger.metadata(ex_saml_saml_sub_status: :authn_failed)
-
-      error =
-        Error.new(%{
-          reason: {:saml_error, ~c"urn:oasis:names:tc:SAML:2.0:status:Responder", nil}
-        })
-
-      assert error.saml_status == :responder
-      assert error.saml_sub_status == :authn_failed
+      assert [{:authn_request, %{relay_state: "d1"}}] = error.report
     end
   end
 
   describe "issue/1 and get_from_id/1" do
-    test "round-trips once, then the id is gone (single use)" do
-      {error_id, %Error{} = issued} =
-        %{reason: :bad_recipient, step: :decode, idp_id: "acme"} |> Error.new() |> Error.issue()
+    test "sets the id, stores once, single use" do
+      %Error{id: id} = issued = Error.issue(Error.new(%{reason: :bad_recipient, step: :decode}))
 
-      assert is_binary(error_id)
-      assert ErrorCache.ttl(error_id) == ErrorCache.ttl()
+      assert is_binary(id)
+      assert ErrorCache.ttl(id) == ErrorCache.ttl()
 
-      assert {:ok, ^issued} = Error.get_from_id(error_id)
-      assert {:error, :not_found} = Error.get_from_id(error_id)
+      assert {:ok, ^issued} = Error.get_from_id(id)
+
+      assert {:error, %Error{reason: :error_not_found, step: :error_lookup, detail: ^id}} =
+               Error.get_from_id(id)
     end
 
     test "unknown or malformed ids" do
-      assert {:error, :not_found} = Error.get_from_id("nope")
-      assert {:error, :not_found} = Error.get_from_id(nil)
+      assert {:error, %Error{reason: :error_not_found}} = Error.get_from_id("nope")
+      assert {:error, %Error{reason: :error_not_found}} = Error.get_from_id(nil)
+    end
+
+    test "links the id to the debug flow so Debug.report/1 accepts it" do
+      Debug.enable(idp_id: "acme")
+      Debug.capture("flow-1", :authn_request, %{})
+
+      %Error{id: id} =
+        Error.issue(Error.new(%{reason: :bad_audience, idp_id: "acme", debug_id: "flow-1"}))
+
+      assert [{:authn_request, _}] = Debug.report(id)
     end
 
     test "error_ttl config is honoured" do
       Application.put_env(:ex_saml, :error_ttl, 1234)
       on_exit(fn -> Application.delete_env(:ex_saml, :error_ttl) end)
 
-      {error_id, _} = %{reason: :duplicate} |> Error.new() |> Error.issue()
-      assert ErrorCache.ttl(error_id) == 1234
+      %Error{id: id} = Error.issue(Error.new(%{reason: :duplicate}))
+      assert ErrorCache.ttl(id) == 1234
     end
   end
 
@@ -84,8 +184,7 @@ defmodule ExSaml.ErrorTest do
     end
 
     test "preserves an existing query string" do
-      assert Error.append_error_id("/callback?foo=bar", "abc") ==
-               "/callback?error_id=abc&foo=bar"
+      assert Error.append_error_id("/callback?foo=bar", "abc") == "/callback?error_id=abc&foo=bar"
     end
   end
 end
