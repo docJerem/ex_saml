@@ -24,7 +24,7 @@ defmodule ExSaml.RelayStateCache do
   @doc "Deletes the relay state for the given key."
   def delete(key) do
     result = assertion_cache().delete(cache_key(key))
-    Debug.log(:relay_state_deleted, %{relay_state: key, debug_id: key})
+    Debug.log(:relay_state_deleted, %{relay_state: key, trace_id: key})
     result
   end
 
@@ -33,7 +33,7 @@ defmodule ExSaml.RelayStateCache do
     value = assertion_cache().take(cache_key(key))
 
     Debug.log(:relay_state_taken, fn ->
-      %{relay_state: key, debug_id: key, hit: not is_nil(value), value: value}
+      %{relay_state: key, trace_id: key, hit: not is_nil(value), value: value}
     end)
 
     value

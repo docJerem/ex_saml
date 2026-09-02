@@ -9,7 +9,7 @@ defmodule ExSaml.AuthorizationCodeCacheTest do
     StubCache.install()
     Application.delete_env(:ex_saml, :debug)
     Application.delete_env(:ex_saml, :debug_runtime)
-    Logger.metadata(ex_saml_idp_id: nil, ex_saml_debug_id: nil)
+    Logger.metadata(ex_saml_idp_id: nil, ex_saml_trace_id: nil)
     :ok
   end
 
@@ -24,11 +24,18 @@ defmodule ExSaml.AuthorizationCodeCacheTest do
       end)
 
     refute log =~ "[ExSaml.Debug]"
+    assert Debug.failures("acme") == []
   end
 
-  test "codes linked to a flow are traced under the same debug_id, per-IdP scope" do
+  test "codes linked to a flow are traced under the same trace_id, per-IdP scope, and a missed take promotes the capture" do
     Debug.enable(idp_id: "acme")
     Debug.link_code("c2", "flow-1", "acme")
+
+    Debug.stash_capture("acme", "flow-1", %{
+      saml_response: "PHNhbWw+",
+      relay_state: "flow-1",
+      received_at: DateTime.utc_now()
+    })
 
     log =
       capture_log(fn ->
@@ -44,10 +51,20 @@ defmodule ExSaml.AuthorizationCodeCacheTest do
              {:code_stored, %{code: "c2", put_new: true, ttl: ttl}},
              {:code_taken, %{code: "c2", hit: true, remaining_ttl: remaining}},
              {:code_taken, %{code: "c2", hit: false, value: nil}}
-           ] = Debug.report("flow-1")
+           ] = Debug.trace("flow-1")
 
     assert ttl == AuthorizationCodeCache.ttl()
     assert remaining == ttl
+
+    # The second take (already used code) promoted the provisional capture:
+    # the SAMLResponse that led to it is kept and the flow is listed as failed.
+    assert %{
+             captured_on: :authorization_code_not_found,
+             saml_response: "PHNhbWw+",
+             error: %{reason: :authorization_code_not_found, step: :code_exchange}
+           } = Debug.failure("flow-1")
+
+    assert [%{trace_id: "flow-1"}] = Debug.failures("acme")
   end
 
   test "codes minted by consumers (not linked) are only traced under the global flag" do

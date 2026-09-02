@@ -235,7 +235,7 @@ defmodule ExSaml.Core.Sp do
   @spec validate_assertion(xml(), SpConfig.t()) ::
           {:ok, ExSaml.Core.Assertion.t()} | {:error, term()}
   def validate_assertion(xml, %SpConfig{} = sp) do
-    validate_assertion(xml, fn _a, _digest -> :ok end, sp)
+    validate_assertion(xml, fn _a, _digest -> :ok end, sp, [])
   end
 
   @doc """
@@ -243,10 +243,27 @@ defmodule ExSaml.Core.Sp do
 
   The `duplicate_fun` callback receives the decoded assertion and the XML
   digest, and should return `:ok` or an error term to reject duplicates.
+
+  Options:
+
+    * `:now` — the instant at which the assertion's time conditions are
+      evaluated (`DateTime` or Erlang UTC datetime), defaults to now. Used by
+      `ExSaml.Debug.replay/2` to evaluate a captured response as of its receipt.
   """
-  @spec validate_assertion(xml(), dupe_fun(), SpConfig.t()) ::
+  @spec validate_assertion(xml(), dupe_fun() | SpConfig.t(), SpConfig.t() | keyword()) ::
           {:ok, ExSaml.Core.Assertion.t()} | {:error, term()}
-  def validate_assertion(xml, duplicate_fun, %SpConfig{} = sp) do
+  def validate_assertion(xml, %SpConfig{} = sp, opts) when is_list(opts) do
+    validate_assertion(xml, fn _a, _digest -> :ok end, sp, opts)
+  end
+
+  def validate_assertion(xml, duplicate_fun, %SpConfig{} = sp)
+      when is_function(duplicate_fun, 2) do
+    validate_assertion(xml, duplicate_fun, sp, [])
+  end
+
+  @spec validate_assertion(xml(), dupe_fun(), SpConfig.t(), keyword()) ::
+          {:ok, ExSaml.Core.Assertion.t()} | {:error, term()}
+  def validate_assertion(xml, duplicate_fun, %SpConfig{} = sp, opts) do
     ns = @protocol_ns
     success_status = ~c"urn:oasis:names:tc:SAML:2.0:status:Success"
 
@@ -255,7 +272,7 @@ defmodule ExSaml.Core.Sp do
          :ok <- verify_envelope_signature(xml, sp),
          :ok <- verify_assertion_signature(assertion_xml, sp),
          {:ok, assertion} <-
-           Saml.validate_assertion(assertion_xml, sp.consume_uri, get_entity_id(sp)),
+           Saml.validate_assertion(assertion_xml, sp.consume_uri, get_entity_id(sp), opts),
          :ok <- check_duplicate(assertion, xml, duplicate_fun) do
       {:ok, assertion}
     else

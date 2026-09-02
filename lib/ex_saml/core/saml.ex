@@ -807,21 +807,45 @@ defmodule ExSaml.Core.Saml do
   - Audience matches (if present in conditions)
   - Assertion is not stale
   """
-  @spec validate_assertion(tuple(), String.t(), String.t()) ::
+  @spec validate_assertion(tuple(), String.t(), String.t(), keyword()) ::
           {:ok, Assertion.t()} | {:error, term()}
-  def validate_assertion(assertion_xml, recipient, audience) do
+  def validate_assertion(assertion_xml, recipient, audience, opts \\ []) do
     case decode_assertion(assertion_xml) do
       {:error, reason} ->
         {:error, reason}
 
       {:ok, assertion} ->
+        now = now_secs(opts)
+
         with :ok <- validate_version(assertion),
              :ok <- validate_recipient(assertion, recipient),
              :ok <- validate_audience(assertion, audience),
-             :ok <- check_not_before(assertion),
-             :ok <- check_stale(assertion) do
+             :ok <- check_not_before(assertion, now),
+             :ok <- check_stale(assertion, now) do
           {:ok, assertion}
         end
+    end
+  end
+
+  # Time conditions are evaluated against `opts[:now]` when given (a `DateTime`
+  # or an Erlang `{{y, m, d}, {h, mi, s}}` UTC datetime), so a captured response
+  # can be replayed as of the instant it was received. Defaults to the current
+  # UTC time.
+  defp now_secs(opts) do
+    case Keyword.get(opts, :now) do
+      nil ->
+        :erlang.localtime()
+        |> :erlang.localtime_to_universaltime()
+        |> :calendar.datetime_to_gregorian_seconds()
+
+      %DateTime{} = dt ->
+        dt
+        |> DateTime.to_naive()
+        |> NaiveDateTime.to_erl()
+        |> :calendar.datetime_to_gregorian_seconds()
+
+      {{_, _, _}, {_, _, _}} = erl ->
+        :calendar.datetime_to_gregorian_seconds(erl)
     end
   end
 
@@ -851,15 +875,12 @@ defmodule ExSaml.Core.Saml do
   @not_before_skew_secs 5
 
   @doc false
-  defp check_not_before(%Assertion{conditions: conditions}) do
+  defp check_not_before(%Assertion{conditions: conditions}, now_secs) do
     case Keyword.get(conditions, :not_before) do
       nil ->
         :ok
 
       not_before ->
-        now = :erlang.localtime() |> :erlang.localtime_to_universaltime()
-        now_secs = :calendar.datetime_to_gregorian_seconds(now)
-
         nb_secs =
           not_before
           |> Util.saml_to_datetime()
@@ -874,9 +895,7 @@ defmodule ExSaml.Core.Saml do
   end
 
   @doc false
-  defp check_stale(%Assertion{} = a) do
-    now = :erlang.localtime() |> :erlang.localtime_to_universaltime()
-    now_secs = :calendar.datetime_to_gregorian_seconds(now)
+  defp check_stale(%Assertion{} = a, now_secs) do
     t = stale_time(a)
 
     if now_secs > t do
