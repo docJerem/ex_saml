@@ -11,7 +11,7 @@ defmodule ExSaml.AuthHandler do
 
   require Logger
   import Plug.Conn
-  alias ExSaml.{Assertion, Helper, IdpData, RelayStateCache, State, Subject}
+  alias ExSaml.{Assertion, Debug, Helper, IdpData, RelayStateCache, State, Subject}
 
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 6, redirect: 3]
 
@@ -33,27 +33,13 @@ defmodule ExSaml.AuthHandler do
     sp = ensure_sp_uris_set(sp_cfg, conn)
     assertion_key = get_session(conn, "ex_saml_assertion_key")
     relay_state = State.gen_id()
-    session_id = get_session(conn, :session_id)
     target_url = conn.private[:ex_saml_target_url] || "/"
-
-    RelayStateCache.put(
-      relay_state,
-      %{
-        relay_state: relay_state,
-        session_id: session_id,
-        saml_nonce: resolve_saml_nonce(conn),
-        idp_id: idp_id,
-        user_token: get_session(conn, :user_token),
-        redirect_uri: get_session(conn, :redirect_uri),
-        target_url: target_url
-      },
-      ttl: @relay_state_cache_ttl
-    )
 
     {idp_signin_url, req_xml_frag} =
       Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
 
     conn
+    |> put_relay_state(idp, relay_state, target_url, idp_signin_url)
     |> State.delete_assertion(assertion_key)
     # NOTE: conflict with the current Gateway User session ?
     # # if yes then we need to add an option to put back the user token session
@@ -91,26 +77,11 @@ defmodule ExSaml.AuthHandler do
       _ ->
         relay_state = State.gen_id()
 
-        session_id = get_session(conn, :session_id)
-
-        RelayStateCache.put(
-          relay_state,
-          %{
-            relay_state: relay_state,
-            session_id: session_id,
-            saml_nonce: resolve_saml_nonce(conn),
-            idp_id: idp_id,
-            target_url: target_url,
-            user_token: get_session(conn, :user_token),
-            redirect_uri: get_session(conn, :redirect_uri)
-          },
-          ttl: @relay_state_cache_ttl
-        )
-
         {idp_signin_url, req_xml_frag} =
           Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
 
         conn
+        |> put_relay_state(idp, relay_state, target_url, idp_signin_url)
         |> State.delete_assertion(assertion_key)
         |> configure_session(renew: true)
         |> put_session("relay_state", relay_state)
@@ -179,13 +150,65 @@ defmodule ExSaml.AuthHandler do
     #     conn |> send_resp(500, "request_failed")
   end
 
+  # Persists the server-side relay state shared by `request_idp/2` and
+  # `send_signin_req/1`, and traces the outgoing AuthnRequest in debug mode.
+  # The relay state doubles as the flow's `debug_id`.
+  defp put_relay_state(conn, %IdpData{id: idp_id} = idp, relay_state, target_url, idp_signin_url) do
+    {saml_nonce, nonce_source} = resolve_saml_nonce(conn)
+    session_id = get_session(conn, :session_id)
+
+    RelayStateCache.put(
+      relay_state,
+      %{
+        relay_state: relay_state,
+        session_id: session_id,
+        saml_nonce: saml_nonce,
+        idp_id: idp_id,
+        user_token: get_session(conn, :user_token),
+        redirect_uri: get_session(conn, :redirect_uri),
+        target_url: target_url
+      },
+      ttl: @relay_state_cache_ttl
+    )
+
+    Debug.put_context(idp_id, relay_state)
+
+    Debug.log(:authn_request, idp_id, fn ->
+      %{
+        idp_id: idp_id,
+        debug_id: relay_state,
+        relay_state: relay_state,
+        target_url: target_url,
+        saml_nonce: saml_nonce,
+        nonce_source: nonce_source,
+        session_id_present: not is_nil(session_id),
+        user_token_present: not is_nil(get_session(conn, :user_token)),
+        redirect_uri: get_session(conn, :redirect_uri),
+        binding: if(idp.use_redirect_for_req, do: :http_redirect, else: :http_post),
+        idp_signin_url: to_string(idp_signin_url),
+        relay_state_ttl: @relay_state_cache_ttl,
+        host: conn.host,
+        request_path: conn.request_path
+      }
+    end)
+
+    conn
+  end
+
   # Prefer a caller-assigned nonce so the SP can persist auxiliary state
   # (e.g. redirect_uri) under the same key the IdP response will resolve to
   # — `put_resp_cookie` does not populate `req_cookies`, so on the first
   # round-trip the cookie fallback can't see what we just set.
   defp resolve_saml_nonce(conn) do
-    conn.assigns[:saml_nonce] ||
-      fetch_cookies(conn, encrypted: ~w(saml_nonce)).cookies["saml_nonce"] ||
-      UUID.uuid4()
+    cond do
+      nonce = conn.assigns[:saml_nonce] ->
+        {nonce, :assigns}
+
+      nonce = fetch_cookies(conn, encrypted: ~w(saml_nonce)).cookies["saml_nonce"] ->
+        {nonce, :cookie}
+
+      true ->
+        {UUID.uuid4(), :generated}
+    end
   end
 end

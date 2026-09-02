@@ -107,10 +107,21 @@ defmodule ExSaml.Helper do
     end
   end
 
+  defp decode_saml_payload(_saml_encoding, nil), do: {:error, :missing_saml_response}
+
   defp decode_saml_payload(saml_encoding, saml_payload) do
     xml = Core.Binding.decode_response(saml_encoding, saml_payload)
     {:ok, xml}
   rescue
-    error -> {:error, {:invalid_response, "#{inspect(error)}"}}
+    error ->
+      ExSaml.Debug.log(:decode_payload_failed, fn ->
+        %{
+          saml_encoding: saml_encoding,
+          payload_bytes: byte_size(saml_payload),
+          error: Exception.format(:error, error, __STACKTRACE__)
+        }
+      end)
+
+      {:error, {:invalid_response, "#{inspect(error)}"}}
   end
 end

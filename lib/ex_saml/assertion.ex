@@ -11,7 +11,7 @@ defmodule ExSaml.Assertion do
   it will check in `attributes` next.
   """
 
-  alias ExSaml.Subject
+  alias ExSaml.{AssertionCache, AuthorizationCodeCache, Debug, Subject}
 
   require Logger
 
@@ -42,17 +42,50 @@ defmodule ExSaml.Assertion do
           idp_id: String.t()
         }
 
-  def get_from_code(code) do
-    case ExSaml.AuthorizationCodeCache.take(code) do
-      {idp_id, _} = key ->
-        case ExSaml.AssertionCache.get(key) do
-          %__MODULE__{attributes: assertion} -> {:ok, {idp_id, assertion}}
-          _ -> {:error, assertion: :not_found}
-        end
+  @doc """
+  Redeems an authorization code (single use) and returns `{:ok, {idp_id, attributes}}`.
 
-      _ ->
-        Logger.info("Authorization code expired")
+  Returns `{:error, :unauthorized}` when the code is unknown, expired or already
+  consumed, and `{:error, assertion: :not_found}` when the code was valid but the
+  assertion is no longer in the assertion store. Both cases are traced by
+  `ExSaml.Debug` when debug mode is on.
+  """
+  def get_from_code(code) do
+    ctx = Debug.code_context(code) || %{}
+
+    case AuthorizationCodeCache.take(code) do
+      {idp_id, _} = key ->
+        fetch_assertion(code, key, idp_id, ctx)
+
+      other ->
+        Logger.warning("[ExSaml] Authorization code not found or expired: #{inspect(code)}")
+
+        Debug.log(:code_redeemed, %{
+          code: code,
+          idp_id: ctx[:idp_id],
+          debug_id: ctx[:debug_id],
+          code_found: false,
+          cache_value: other
+        })
+
         {:error, :unauthorized}
+    end
+  end
+
+  defp fetch_assertion(code, key, idp_id, ctx) do
+    base = %{code: code, idp_id: idp_id, debug_id: ctx[:debug_id], assertion_key: key}
+
+    case AssertionCache.get(key) do
+      %__MODULE__{attributes: attributes} = assertion ->
+        Debug.log(:code_redeemed, fn ->
+          Map.merge(base, %{assertion_found: true, assertion: assertion})
+        end)
+
+        {:ok, {idp_id, attributes}}
+
+      other ->
+        Debug.log(:code_redeemed, Map.merge(base, %{assertion_found: false, cache_value: other}))
+        {:error, assertion: :not_found}
     end
   end
 
