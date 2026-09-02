@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - English consumer guide `guides/error_handling_and_debugging.md`: callback contract, `%ExSaml.Error{}` reference and catalogue of reasons, legacy session behaviour, debug mode, troubleshooting recipes (#54)
 - `ExSaml.ErrorMessages` (en/fr) now covers every reason produced on the sign-in path, every signature verification error and every second-level SAML status (#54)
 
+### Fixed
+
+- Signature verification no longer crashes with a `MatchError` when the IdP signs without embedding its X.509 certificate in `KeyInfo`: `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :missing_certificate}`, translated (en/fr) by `ExSaml.ErrorMessages` and surfaced through the `error_id` contract like every other signature reason (#51)
+
 ### Changed
 
 - `ExSaml.SPHandler.consume_signin_response/1` fails closed: an unknown `idp_id` yields `{:unknown_idp, idp_id}`, a missing `SAMLResponse` yields `:missing_saml_response`, and any exception raised while consuming the response is rescued, logged, and turned into an `error_id` redirect with reason `{:exception, message}` instead of a bare 500 (#54)
