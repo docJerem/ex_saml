@@ -217,5 +217,172 @@ defmodule ExSaml.SPHandlerTest do
       assert {:error, :invalid_idp_id} =
                SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
     end
+
+    test "traces the provenance of each value in debug mode" do
+      ExSaml.StubCache.install()
+      ExSaml.Debug.enable(idp_id: "idp-1")
+      Process.put(:stub_relay_cache_value, nil)
+      idp = %IdpData{id: "idp-1"}
+
+      conn = build_conn(%{"relay_state" => "rs-abc", "idp_id" => "idp-1"})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :sp_initiated, nil} =
+                   SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
+        end)
+
+      assert log =~ "[ExSaml.Debug] validate_authresp_result"
+      assert log =~ "relay_state_source: :session"
+      assert log =~ "saml_nonce_source: :none"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # consume_signin_response/1 — failure path issues an error_id
+  # ---------------------------------------------------------------------------
+
+  defp acs_conn(idp_id, body \\ %{}, session \\ %{}) do
+    secret = String.duplicate("a", 64)
+
+    opts =
+      Plug.Session.init(
+        store: :cookie,
+        key: "_test_session",
+        signing_salt: "salt",
+        encryption_salt: "esalt"
+      )
+
+    :post
+    |> conn("/sso/consume/#{idp_id}", body)
+    |> Map.update!(:params, &Map.put(&1, "idp_id", idp_id))
+    |> Map.put(:secret_key_base, secret)
+    |> Plug.Session.call(opts)
+    |> fetch_session()
+    |> then(fn c -> Enum.reduce(session, c, fn {k, v}, acc -> put_session(acc, k, v) end) end)
+  end
+
+  defp error_id_from(conn) do
+    [location] = get_resp_header(conn, "location")
+    %URI{query: query} = URI.parse(location)
+    {location, URI.decode_query(query)["error_id"]}
+  end
+
+  describe "consume_signin_response/1 failure path" do
+    alias ExSaml.{Core.SpConfig, Debug, Error}
+
+    setup do
+      ExSaml.StubCache.install()
+      Application.delete_env(:ex_saml, :debug)
+      Application.delete_env(:ex_saml, :debug_runtime)
+      previous_idps = Application.get_env(:ex_saml, :identity_providers)
+
+      idp = %IdpData{
+        id: "idp-1",
+        sp_config: %SpConfig{
+          metadata_uri: "https://sp.example.com/metadata",
+          consume_uri: "https://sp.example.com/consume"
+        }
+      }
+
+      Application.put_env(:ex_saml, :identity_providers, %{
+        "idp-1" => idp,
+        "broken" => %IdpData{id: "broken", sp_config: nil}
+      })
+
+      on_exit(fn ->
+        if previous_idps,
+          do: Application.put_env(:ex_saml, :identity_providers, previous_idps),
+          else: Application.delete_env(:ex_saml, :identity_providers)
+      end)
+
+      :ok
+    end
+
+    test "unknown idp_id -> redirect with a redeemable error_id, legacy session entry kept" do
+      conn = SPHandler.consume_signin_response(acs_conn("nope"))
+
+      assert conn.status == 302
+      {location, error_id} = error_id_from(conn)
+      assert location == "/?error_id=#{error_id}"
+      assert get_session(conn, "ex_saml_error") == {:error, {:unknown_idp, "nope"}}
+
+      assert {:ok, %Error{reason: {:unknown_idp, "nope"}, step: :idp_lookup, details: nil}} =
+               Error.get_from_id(error_id)
+
+      assert {:error, :not_found} = Error.get_from_id(error_id)
+    end
+
+    test "missing SAMLResponse -> :missing_saml_response with step :decode" do
+      conn = SPHandler.consume_signin_response(acs_conn("idp-1", %{"RelayState" => "rs-1"}))
+
+      {_location, error_id} = error_id_from(conn)
+
+      assert {:ok,
+              %Error{
+                reason: :missing_saml_response,
+                step: :decode,
+                idp_id: "idp-1",
+                relay_state: "rs-1"
+              }} =
+               Error.get_from_id(error_id)
+    end
+
+    test "target_url from session gets the error_id appended, preserving its query" do
+      conn =
+        SPHandler.consume_signin_response(
+          acs_conn("idp-1", %{}, %{"target_url" => "https://app.example.com/cb?x=1"})
+        )
+
+      {location, error_id} = error_id_from(conn)
+      assert location == "https://app.example.com/cb?error_id=#{error_id}&x=1"
+    end
+
+    test "an exception while consuming fails closed with an error_id (never a bare 500)" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = SPHandler.consume_signin_response(acs_conn("broken", %{"SAMLResponse" => "x"}))
+          assert conn.status == 302
+          {_, error_id} = error_id_from(conn)
+
+          assert {:ok, %Error{reason: {:exception, message}, step: :unexpected}} =
+                   Error.get_from_id(error_id)
+
+          assert is_binary(message)
+        end)
+
+      assert log =~ "consume_signin_response crashed"
+    end
+
+    test "in debug mode the error carries the flow report" do
+      Debug.enable(idp_id: "idp-1")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = SPHandler.consume_signin_response(acs_conn("idp-1", %{"RelayState" => "rs-2"}))
+          {_, error_id} = error_id_from(conn)
+
+          assert {:ok, %Error{details: details, debug_id: debug_id}} = Error.get_from_id(error_id)
+          assert is_binary(debug_id)
+
+          steps = Enum.map(details, &elem(&1, 0))
+          assert :response_received in steps
+          assert :decode_result in steps
+        end)
+
+      assert log =~ "[ExSaml.Debug] response_received"
+      assert log =~ "[ExSaml.Debug] error_issued"
+    end
+
+    test "without debug nothing is logged and details stay nil" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = SPHandler.consume_signin_response(acs_conn("idp-1"))
+          {_, error_id} = error_id_from(conn)
+          assert {:ok, %Error{details: nil, debug_id: nil}} = Error.get_from_id(error_id)
+        end)
+
+      refute log =~ "[ExSaml.Debug]"
+    end
   end
 end
