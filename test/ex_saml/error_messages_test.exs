@@ -55,7 +55,12 @@ defmodule ExSaml.ErrorMessagesTest do
       {:assertion, {:error, :unsupported_algorithm}},
       {:error, :bad_audience},
       [assertion: :not_found],
-      :unauthorized
+      :authorization_code_not_found,
+      :assertion_not_found,
+      :error_not_found,
+      %Error{reason: :bad_digest, scope: :envelope},
+      %Error{reason: :no_signature, scope: :assertion},
+      %Error{reason: :saml_error, saml_status: :responder}
     ]
 
     for reason <- reasons do
@@ -107,8 +112,19 @@ defmodule ExSaml.ErrorMessagesTest do
   end
 
   test "accepts %ExSaml.Error{} and uses its nested status when present" do
-    error = %Error{reason: {:saml_error, @responder, nil}, saml_sub_status: :unknown_principal}
+    error = %Error{
+      reason: :saml_error,
+      saml_status: :responder,
+      saml_sub_status: :unknown_principal
+    }
+
     assert ErrorMessages.get(error) =~ "UnknownPrincipal"
+
+    error = %Error{reason: :saml_error, saml_status: :responder}
+    assert ErrorMessages.get(error) == ErrorMessages.get(:status_responder)
+
+    error = %Error{reason: :no_signature, scope: :envelope}
+    assert ErrorMessages.get(error) == ErrorMessages.get(:missing_envelope_signature)
 
     error = %Error{reason: :bad_audience}
     assert ErrorMessages.get(error) == ErrorMessages.get(:bad_audience)

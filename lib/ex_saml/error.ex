@@ -1,119 +1,229 @@
 defmodule ExSaml.Error do
   @moduledoc """
-  A sign-in failure, redeemable once by `error_id`.
+  The single error shape exposed by the library.
 
-  This is the failure-side counterpart of the authorization `code`: when the
-  assertion consumer service cannot complete a sign-in, `ExSaml.SPHandler`
-  stores an `%ExSaml.Error{}` in `ExSaml.ErrorCache` and redirects to the target
-  URL with `?error_id=<id>`. The consumer redeems it with `get_from_id/1`:
+  Every public function that can fail returns `{:error, %ExSaml.Error{}}`:
+  `ExSaml.SPHandler.consume_signin_response/2`, `ExSaml.Error.get_from_id/1`
+  and `ExSaml.Assertion.get_from_code/1`. Internally, `ExSaml.Core.*` keep
+  returning plain tuples; `from_reason/2` is the one place where those tuples
+  are normalised, **without losing any of the information they carried**.
+
+  ## Looking up an error at the callback
+
+  When the assertion consumer service cannot complete a sign-in, the error is
+  stored under a random single-use `id` and the browser is redirected to the
+  target URL with `?error_id=<id>` (the failure-side counterpart of `?code=`):
 
       def callback(conn, %{"error_id" => error_id}) do
         case ExSaml.Error.get_from_id(error_id) do
           {:ok, %ExSaml.Error{} = error} ->
-            Logger.warning("SAML sign-in failed", reason: inspect(error.reason))
-            render(conn, "error.html", message: ExSaml.ErrorMessages.get(error))
+            Logger.warning("SAML sign-in failed", error_id: error.id, reason: error.reason)
+            render(conn, "error.html", message: ExSaml.ErrorMessages.get(error), error_id: error.id)
 
-          {:error, :not_found} ->
-            # expired or already consumed
+          {:error, %ExSaml.Error{reason: :error_not_found}} ->
             redirect(conn, to: "/")
         end
       end
 
   ## Fields
 
-    * `reason` — the error term produced by the library (unchanged public
-      vocabulary, e.g. `:bad_audience`, `{:assertion, {:error, :bad_digest}}`,
-      `{:saml_error, status_uri, message}`, `:invalid_relay_state`)
-    * `step` — where the flow stopped: `:idp_lookup`, `:decode`,
-      `:validate_authresp`, `:target_url` or `:unexpected` (an exception was rescued)
-    * `flow` — `:sp_initiated`, `:idp_initiated` or `nil` when unknown
+    * `id` — the error's own identifier, always set once issued (equal to the
+      `error_id` of the redirect). Show it to the end user and log it: it is the
+      key the support team needs.
+    * `reason` — **always an atom**, from a closed catalogue (see
+      `ExSaml.ErrorMessages.codes/0` and the guide)
+    * `scope` — `:envelope` or `:assertion` for signature failures (which
+      element failed), else `nil`
+    * `step` — `:idp_lookup`, `:decode`, `:validate_authresp`, `:target_url`,
+      `:code_exchange` (`ExSaml.Assertion.get_from_code/1`), `:error_lookup`
+      (`get_from_id/1`) or `:unexpected`
+    * `flow` — `:sp_initiated`, `:idp_initiated` or `nil`
     * `idp_id`, `relay_state`, `node`, `at` — correlation data
-    * `saml_status` / `saml_sub_status` — the IdP `StatusCode` atoms from
-      `ExSaml.Core.StatusCode` when `reason` is a `{:saml_error, _, _}`
-    * `debug_id` — key of the `ExSaml.Debug` report for this flow (when debug was on)
-    * `details` — the full `ExSaml.Debug.report/1` when debug was on, else `nil`
+    * `saml_status`, `saml_status_uri`, `saml_sub_status`, `saml_message` — the
+      IdP `Status` when `reason` is `:saml_error` (`ExSaml.Core.StatusCode` atoms,
+      the raw top-level URI, and the `StatusMessage` text)
+    * `detail` — free text carried by the original error: the exception message
+      for `:exception`, the decoding error for `:invalid_response`, …
+    * `debug_id` — internal correlation key of the `ExSaml.Debug` flow (nil when
+      debug was off); prefer `id`, which `ExSaml.Debug.report/1` also accepts
+    * `report` — the full `ExSaml.Debug` report when debug was on, else `nil`
+
+  ## Legacy tuples
+
+  `to_legacy/1` rebuilds the tuple the library returned before 2.0
+  (`{:envelope, {:error, :no_signature}}`, `{:saml_error, uri, message}`, …)
+  for consumers migrating incrementally.
   """
 
   alias ExSaml.{Core.StatusCode, Debug, ErrorCache, State}
 
-  defstruct reason: nil,
+  defstruct id: nil,
+            reason: nil,
+            scope: nil,
             step: nil,
             flow: nil,
             idp_id: nil,
             relay_state: nil,
             saml_status: nil,
+            saml_status_uri: nil,
             saml_sub_status: nil,
+            saml_message: nil,
+            detail: nil,
             debug_id: nil,
+            report: nil,
             node: nil,
-            at: nil,
-            details: nil
+            at: nil
 
-  @type step :: :idp_lookup | :decode | :validate_authresp | :target_url | :unexpected
+  @type step ::
+          :idp_lookup
+          | :decode
+          | :validate_authresp
+          | :target_url
+          | :code_exchange
+          | :error_lookup
+          | :unexpected
   @type t :: %__MODULE__{
-          reason: term(),
+          id: binary() | nil,
+          reason: atom(),
+          scope: :envelope | :assertion | nil,
           step: step() | nil,
           flow: :sp_initiated | :idp_initiated | nil,
           idp_id: binary() | nil,
           relay_state: binary() | nil,
           saml_status: StatusCode.t() | :unknown | nil,
+          saml_status_uri: binary() | nil,
           saml_sub_status: StatusCode.t() | :unknown | nil,
+          saml_message: binary() | nil,
+          detail: binary() | nil,
           debug_id: binary() | nil,
-          node: node(),
-          at: DateTime.t(),
-          details: Debug.report() | nil
+          report: Debug.report() | nil,
+          node: node() | nil,
+          at: DateTime.t() | nil
         }
 
-  @doc """
-  Builds an error from the given attributes, filling `node`, `at`, the SAML
-  status atoms and, when debug is enabled for the IdP, `details`.
-  """
-  @spec new(map() | keyword()) :: t()
-  def new(attrs) do
-    attrs = Map.new(attrs)
-    reason = Map.get(attrs, :reason)
-    idp_id = Map.get(attrs, :idp_id)
-    debug_id = Map.get(attrs, :debug_id)
+  # ---------------------------------------------------------------------------
+  # Building
+  # ---------------------------------------------------------------------------
 
-    {saml_status, saml_sub_status} = saml_statuses(reason)
+  @doc """
+  Normalises any error term produced by the library into an `%ExSaml.Error{}`,
+  merging `attrs` (step, flow, idp_id, relay_state, debug_id, …).
+
+  Nothing carried by the legacy tuples is dropped:
+
+      iex> ExSaml.Error.from_reason({:envelope, {:error, :no_signature}})
+      %ExSaml.Error{reason: :no_signature, scope: :envelope, ...}
+
+      iex> ExSaml.Error.from_reason({:saml_error, ~c"urn:oasis:names:tc:SAML:2.0:status:Responder", ~c"denied"})
+      %ExSaml.Error{reason: :saml_error, saml_status: :responder, saml_message: "denied", ...}
+
+      iex> ExSaml.Error.from_reason({:invalid_response, "%ArgumentError{...}"})
+      %ExSaml.Error{reason: :invalid_response, detail: "%ArgumentError{...}", ...}
+  """
+  @spec from_reason(term(), map() | keyword()) :: t()
+  def from_reason(reason, attrs \\ %{})
+
+  def from_reason(%__MODULE__{} = error, attrs), do: struct(error, Map.new(attrs))
+
+  def from_reason({:error, reason}, attrs), do: from_reason(reason, attrs)
+
+  def from_reason({scope, {:error, reason}}, attrs) when scope in [:envelope, :assertion] do
+    reason |> from_reason(attrs) |> Map.put(:scope, scope)
+  end
+
+  def from_reason({:saml_error, status, message}, attrs) do
+    {saml_message, detail} =
+      case message do
+        nil -> {nil, nil}
+        :malformed -> {nil, "malformed StatusMessage"}
+        m -> {to_string(m), nil}
+      end
+
+    base(:saml_error, attrs)
+    |> Map.merge(%{
+      saml_status: StatusCode.to_atom(status),
+      saml_status_uri: status && to_string(status),
+      saml_sub_status: Logger.metadata()[:ex_saml_saml_sub_status],
+      saml_message: saml_message,
+      detail: detail
+    })
+  end
+
+  def from_reason({:invalid_response, detail}, attrs),
+    do: base(:invalid_response, attrs) |> Map.put(:detail, to_string(detail))
+
+  def from_reason({:exception, detail}, attrs),
+    do: base(:exception, attrs) |> Map.put(:detail, to_string(detail))
+
+  def from_reason({:unknown_idp, idp_id}, attrs),
+    do: base(:unknown_idp, attrs) |> Map.put(:idp_id, idp_id)
+
+  def from_reason([assertion: :not_found], attrs), do: base(:assertion_not_found, attrs)
+
+  def from_reason(reason, attrs) when is_atom(reason) and not is_nil(reason),
+    do: base(reason, attrs)
+
+  def from_reason(other, attrs),
+    do: base(:unknown_error, attrs) |> Map.put(:detail, inspect(other))
+
+  defp base(reason, attrs) do
+    attrs = Map.new(attrs)
 
     %__MODULE__{
       reason: reason,
-      step: Map.get(attrs, :step),
-      flow: Map.get(attrs, :flow),
-      idp_id: idp_id,
-      relay_state: Map.get(attrs, :relay_state),
-      saml_status: saml_status,
-      saml_sub_status: saml_sub_status,
-      debug_id: debug_id,
       node: node(),
-      at: DateTime.utc_now(),
-      details: if(Debug.enabled?(idp_id), do: Debug.report(debug_id))
+      at: DateTime.utc_now()
     }
+    |> struct(Map.drop(attrs, [:reason]))
   end
 
   @doc """
-  Stores the error under a fresh random id and returns `{error_id, error}`.
+  Builds an error from attributes (`reason` may be a legacy tuple) and attaches
+  the `ExSaml.Debug` report when debug is enabled for the IdP.
   """
-  @spec issue(t()) :: {binary(), t()}
+  @spec new(t() | map() | keyword()) :: t()
+  def new(%__MODULE__{} = error), do: attach_report(error)
+
+  def new(attrs) do
+    attrs = Map.new(attrs)
+    attrs |> Map.get(:reason) |> from_reason(Map.delete(attrs, :reason)) |> attach_report()
+  end
+
+  defp attach_report(%__MODULE__{} = error) do
+    if Debug.enabled?(error.idp_id) and is_nil(error.report),
+      do: %{error | report: Debug.report(error.debug_id)},
+      else: error
+  end
+
+  @doc """
+  Stores the error under a fresh random id (single use) and returns it with
+  `id` set. Links the id to the debug flow so `ExSaml.Debug.report/1` and
+  `ExSaml.Debug.saml_response/1` accept it.
+  """
+  @spec issue(t()) :: t()
   def issue(%__MODULE__{} = error) do
-    error_id = State.gen_id()
-    ErrorCache.put_new!(error_id, error)
-    {error_id, error}
+    id = State.gen_id()
+    error = %{error | id: id}
+    ErrorCache.put_new!(id, error)
+    Debug.link_error(id, error.debug_id)
+    error
   end
 
   @doc """
-  Redeems an `error_id` (single use). Returns `{:error, :not_found}` when the
-  id is unknown, expired or already consumed.
+  Looks up an `error_id` and consumes it (single use). Returns
+  `{:error, %ExSaml.Error{reason: :error_not_found}}` when the id is unknown,
+  expired or already consumed.
   """
-  @spec get_from_id(binary()) :: {:ok, t()} | {:error, :not_found}
+  @spec get_from_id(term()) :: {:ok, t()} | {:error, t()}
   def get_from_id(error_id) when is_binary(error_id) do
     case ErrorCache.take(error_id) do
       %__MODULE__{} = error -> {:ok, error}
-      _ -> {:error, :not_found}
+      _ -> {:error, base(:error_not_found, %{step: :error_lookup, detail: error_id})}
     end
   end
 
-  def get_from_id(_), do: {:error, :not_found}
+  def get_from_id(other),
+    do: {:error, base(:error_not_found, %{step: :error_lookup, detail: inspect(other)})}
 
   @doc "Appends `error_id=<id>` to a URL, preserving any existing query string."
   @spec append_error_id(binary(), binary()) :: binary()
@@ -123,18 +233,30 @@ defmodule ExSaml.Error do
     URI.to_string(%{uri | query: URI.encode_query(Map.put(query, "error_id", error_id))})
   end
 
-  # `ExSaml.Core.Sp.check_status_value/4` records the nested StatusCode in the
-  # process Logger metadata so it can be surfaced here without changing the
-  # public `{:saml_error, status, message}` tuple.
-  defp saml_statuses({:saml_error, status, _message}) do
-    sub_status =
-      case Logger.metadata()[:ex_saml_saml_sub_status] do
-        nil -> nil
-        sub -> sub
-      end
+  # ---------------------------------------------------------------------------
+  # Legacy
+  # ---------------------------------------------------------------------------
 
-    {StatusCode.to_atom(status), sub_status}
+  @doc """
+  Rebuilds the pre-2.0 error term for consumers migrating incrementally.
+
+      iex> ExSaml.Error.to_legacy(%ExSaml.Error{reason: :bad_digest, scope: :assertion})
+      {:assertion, {:error, :bad_digest}}
+  """
+  @spec to_legacy(t()) :: term()
+  def to_legacy(%__MODULE__{reason: reason, scope: scope}) when scope in [:envelope, :assertion],
+    do: {scope, {:error, reason}}
+
+  def to_legacy(%__MODULE__{reason: :saml_error} = e) do
+    uri = e.saml_status_uri || (e.saml_status && StatusCode.to_uri(e.saml_status)) || ""
+    message = if e.saml_message, do: String.to_charlist(e.saml_message)
+    {:saml_error, String.to_charlist(uri), message}
   end
 
-  defp saml_statuses(_), do: {nil, nil}
+  def to_legacy(%__MODULE__{reason: :invalid_response, detail: d}), do: {:invalid_response, d}
+  def to_legacy(%__MODULE__{reason: :exception, detail: d}), do: {:exception, d}
+  def to_legacy(%__MODULE__{reason: :unknown_idp, idp_id: id}), do: {:unknown_idp, id}
+  def to_legacy(%__MODULE__{reason: :assertion_not_found}), do: [assertion: :not_found]
+  def to_legacy(%__MODULE__{reason: :authorization_code_not_found}), do: :unauthorized
+  def to_legacy(%__MODULE__{reason: reason}), do: reason
 end

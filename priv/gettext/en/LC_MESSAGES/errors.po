@@ -105,6 +105,15 @@ msgstr "An unexpected error occurred while processing the IdP response."
 msgid "access_denied"
 msgstr "Access denied."
 
+msgid "authorization_code_not_found"
+msgstr "The authorization code is unknown, expired or was already used. Please start the sign-in again."
+
+msgid "assertion_not_found"
+msgstr "The authorization code was valid but the authentication data has expired. Please start the sign-in again."
+
+msgid "error_not_found"
+msgstr "The error reference is unknown, expired or was already consulted."
+
 msgid "unknown_error"
 msgstr "An unknown SAML error occurred."
 

@@ -105,6 +105,15 @@ msgstr "Une erreur inattendue s'est produite lors du traitement de la réponse d
 msgid "access_denied"
 msgstr "Accès refusé."
 
+msgid "authorization_code_not_found"
+msgstr "Le code d'autorisation est inconnu, expiré ou a déjà été utilisé. Veuillez relancer la connexion."
+
+msgid "assertion_not_found"
+msgstr "Le code d'autorisation était valide mais les données d'authentification ont expiré. Veuillez relancer la connexion."
+
+msgid "error_not_found"
+msgstr "La référence d'erreur est inconnue, expirée ou a déjà été consultée."
+
 msgid "unknown_error"
 msgstr "Une erreur SAML inconnue s'est produite."
 
