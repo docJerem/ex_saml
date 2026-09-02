@@ -220,6 +220,27 @@ defmodule ExSaml.Core.Xml.DsigTest do
 
       assert :ok = Dsig.verify(signed_xml, [:crypto.hash(:sha, cert_bin)])
     end
+
+    test "signature without X509Certificate returns {:error, :missing_certificate}" do
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+      signed_xml = Dsig.sign(doc, key, cert_bin, :rsa_sha256)
+
+      # Drop KeyInfo from the serialized document: the enveloped-signature
+      # transform excludes ds:Signature from the digest, so it stays valid.
+      certless_doc =
+        [signed_xml]
+        |> :xmerl.export(:xmerl_xml)
+        |> List.flatten()
+        |> to_string()
+        |> String.replace(~r|<ds:KeyInfo>.*</ds:KeyInfo>|s, "")
+        |> parse_xml()
+
+      assert {:error, :missing_certificate} =
+               Dsig.verify(certless_doc, [:crypto.hash(:sha, cert_bin)])
+    end
   end
 
   describe "strip/1" do
