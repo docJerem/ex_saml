@@ -305,12 +305,22 @@ defmodule ExSaml.SPHandlerTest do
       assert conn.status == 302
       {location, error_id} = error_id_from(conn)
       assert location == "/?error_id=#{error_id}"
-      assert get_session(conn, "ex_saml_error") == {:error, {:unknown_idp, "nope"}}
 
-      assert {:ok, %Error{reason: {:unknown_idp, "nope"}, step: :idp_lookup, details: nil}} =
+      assert {:error, %Error{reason: :unknown_idp, idp_id: "nope", report: nil}} =
+               get_session(conn, "ex_saml_error")
+
+      assert {:ok,
+              %Error{
+                id: ^error_id,
+                reason: :unknown_idp,
+                idp_id: "nope",
+                step: :idp_lookup,
+                report: nil
+              } = error} =
                Error.get_from_id(error_id)
 
-      assert {:error, :not_found} = Error.get_from_id(error_id)
+      assert Error.to_legacy(error) == {:unknown_idp, "nope"}
+      assert {:error, %Error{reason: :error_not_found}} = Error.get_from_id(error_id)
     end
 
     test "missing SAMLResponse -> :missing_saml_response with step :decode" do
@@ -345,10 +355,11 @@ defmodule ExSaml.SPHandlerTest do
           assert conn.status == 302
           {_, error_id} = error_id_from(conn)
 
-          assert {:ok, %Error{reason: {:exception, message}, step: :unexpected}} =
+          assert {:ok, %Error{reason: :exception, step: :unexpected, detail: detail} = error} =
                    Error.get_from_id(error_id)
 
-          assert is_binary(message)
+          assert detail =~ "ensure_sp_uris_set"
+          assert Error.to_legacy(error) == {:exception, detail}
         end)
 
       assert log =~ "consume_signin_response crashed"
@@ -362,12 +373,20 @@ defmodule ExSaml.SPHandlerTest do
           conn = SPHandler.consume_signin_response(acs_conn("idp-1", %{"RelayState" => "rs-2"}))
           {_, error_id} = error_id_from(conn)
 
-          assert {:ok, %Error{details: details, debug_id: debug_id}} = Error.get_from_id(error_id)
+          assert {:ok, %Error{id: id, report: report, debug_id: debug_id}} =
+                   Error.get_from_id(error_id)
+
           assert is_binary(debug_id)
 
-          steps = Enum.map(details, &elem(&1, 0))
+          steps = Enum.map(report, &elem(&1, 0))
           assert :response_received in steps
           assert :decode_result in steps
+
+          # The error id alone is enough to reach the flow report, which keeps
+          # growing after the error was built (`:error_issued` is appended last).
+          full = Debug.report(id)
+          assert Enum.take(full, length(report)) == report
+          assert {:error_issued, %{error_id: ^id}} = List.last(full)
         end)
 
       assert log =~ "[ExSaml.Debug] response_received"
@@ -379,10 +398,55 @@ defmodule ExSaml.SPHandlerTest do
         ExUnit.CaptureLog.capture_log(fn ->
           conn = SPHandler.consume_signin_response(acs_conn("idp-1"))
           {_, error_id} = error_id_from(conn)
-          assert {:ok, %Error{details: nil, debug_id: nil}} = Error.get_from_id(error_id)
+          assert {:ok, %Error{report: nil, debug_id: nil}} = Error.get_from_id(error_id)
         end)
 
       refute log =~ "[ExSaml.Debug]"
+    end
+
+    test "capture: :on_error stores the raw SAMLResponse only when the flow fails" do
+      Debug.enable(idp_id: "idp-1", log: :silent)
+      body = %{"SAMLResponse" => Base.encode64("<not-saml/>"), "RelayState" => "rs-3"}
+
+      conn = SPHandler.consume_signin_response(acs_conn("idp-1", body))
+      {_, error_id} = error_id_from(conn)
+
+      # Valid base64 + XML but no <Status>: the flow fails at :bad_saml.
+      assert {:ok, %Error{id: id, reason: :bad_saml, step: :decode}} = Error.get_from_id(error_id)
+
+      assert %{
+               saml_response: saml_response,
+               xml: "<not-saml/>",
+               relay_state: "rs-3",
+               idp_id: "idp-1",
+               captured_on: :error
+             } = Debug.saml_response(id)
+
+      assert saml_response == body["SAMLResponse"]
+    end
+
+    test "capture: :none leaves no payload behind" do
+      Debug.enable(idp_id: "idp-1", capture: :none, log: :silent)
+      body = %{"SAMLResponse" => Base.encode64("<not-saml/>")}
+
+      conn = SPHandler.consume_signin_response(acs_conn("idp-1", body))
+      {_, error_id} = error_id_from(conn)
+      {:ok, %Error{id: id}} = Error.get_from_id(error_id)
+
+      assert Debug.saml_response(id) == nil
+    end
+
+    test "log: :steps never writes the payload to the logs" do
+      Debug.enable(idp_id: "idp-1")
+      payload = Base.encode64("<secret-assertion/>")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          SPHandler.consume_signin_response(acs_conn("idp-1", %{"SAMLResponse" => payload}))
+        end)
+
+      assert log =~ "[ExSaml.Debug] response_received"
+      refute log =~ payload
     end
   end
 end

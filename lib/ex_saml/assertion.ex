@@ -11,7 +11,7 @@ defmodule ExSaml.Assertion do
   it will check in `attributes` next.
   """
 
-  alias ExSaml.{AssertionCache, AuthorizationCodeCache, Debug, Subject}
+  alias ExSaml.{AssertionCache, AuthorizationCodeCache, Debug, Error, Subject}
 
   require Logger
 
@@ -43,13 +43,14 @@ defmodule ExSaml.Assertion do
         }
 
   @doc """
-  Redeems an authorization code (single use) and returns `{:ok, {idp_id, attributes}}`.
+  Exchanges an authorization code (single use) for `{:ok, {idp_id, attributes}}`.
 
-  Returns `{:error, :unauthorized}` when the code is unknown, expired or already
-  consumed, and `{:error, assertion: :not_found}` when the code was valid but the
-  assertion is no longer in the assertion store. Both cases are traced by
-  `ExSaml.Debug` when debug mode is on.
+  On failure returns `{:error, %ExSaml.Error{step: :code_exchange}}` with `reason`
+  `:authorization_code_not_found` (unknown, expired or already used code) or
+  `:assertion_not_found` (valid code, but the assertion is gone from the
+  assertion store). Both are traced by `ExSaml.Debug` when debug mode is on.
   """
+  @spec get_from_code(term()) :: {:ok, {binary(), map()}} | {:error, Error.t()}
   def get_from_code(code) do
     ctx = Debug.code_context(code) || %{}
 
@@ -60,7 +61,7 @@ defmodule ExSaml.Assertion do
       other ->
         Logger.warning("[ExSaml] Authorization code not found or expired: #{inspect(code)}")
 
-        Debug.log(:code_redeemed, %{
+        Debug.log(:code_exchanged, %{
           code: code,
           idp_id: ctx[:idp_id],
           debug_id: ctx[:debug_id],
@@ -68,7 +69,7 @@ defmodule ExSaml.Assertion do
           cache_value: other
         })
 
-        {:error, :unauthorized}
+        {:error, code_exchange_error(:authorization_code_not_found, ctx[:idp_id], ctx[:debug_id])}
     end
   end
 
@@ -77,16 +78,20 @@ defmodule ExSaml.Assertion do
 
     case AssertionCache.get(key) do
       %__MODULE__{attributes: attributes} = assertion ->
-        Debug.log(:code_redeemed, fn ->
+        Debug.log(:code_exchanged, fn ->
           Map.merge(base, %{assertion_found: true, assertion: assertion})
         end)
 
         {:ok, {idp_id, attributes}}
 
       other ->
-        Debug.log(:code_redeemed, Map.merge(base, %{assertion_found: false, cache_value: other}))
-        {:error, assertion: :not_found}
+        Debug.log(:code_exchanged, Map.merge(base, %{assertion_found: false, cache_value: other}))
+        {:error, code_exchange_error(:assertion_not_found, idp_id, ctx[:debug_id])}
     end
+  end
+
+  defp code_exchange_error(reason, idp_id, debug_id) do
+    Error.new(%{reason: reason, step: :code_exchange, idp_id: idp_id, debug_id: debug_id})
   end
 
   @doc false

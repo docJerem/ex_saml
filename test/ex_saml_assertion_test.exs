@@ -3,7 +3,15 @@ defmodule ExSaml.AssertionTest do
 
   import ExUnit.CaptureLog
 
-  alias ExSaml.{Assertion, AssertionCache, AuthorizationCodeCache, Debug, StubCache, Subject}
+  alias ExSaml.{
+    Assertion,
+    AssertionCache,
+    AuthorizationCodeCache,
+    Debug,
+    Error,
+    StubCache,
+    Subject
+  }
 
   setup do
     StubCache.install()
@@ -14,7 +22,7 @@ defmodule ExSaml.AssertionTest do
   end
 
   describe "get_from_code/1" do
-    test "returns the attributes when code and assertion are present" do
+    test "returns the attributes when code and assertion are present, single use" do
       key = {"acme", "user@example.com"}
 
       assertion = %Assertion{
@@ -27,7 +35,9 @@ defmodule ExSaml.AssertionTest do
       AuthorizationCodeCache.put_new!("c1", key)
 
       assert {:ok, {"acme", %{"email" => "user@example.com"}}} = Assertion.get_from_code("c1")
-      assert {:error, :unauthorized} = Assertion.get_from_code("c1")
+
+      assert {:error, %Error{reason: :authorization_code_not_found, step: :code_exchange}} =
+               Assertion.get_from_code("c1")
     end
 
     test "distinguishes a missing code from a missing assertion, and traces both in debug" do
@@ -37,20 +47,26 @@ defmodule ExSaml.AssertionTest do
 
       log =
         capture_log(fn ->
-          assert {:error, assertion: :not_found} = Assertion.get_from_code("c2")
-          assert {:error, :unauthorized} = Assertion.get_from_code("c2")
+          assert {:error,
+                  %Error{reason: :assertion_not_found, step: :code_exchange, idp_id: "acme"}} =
+                   Assertion.get_from_code("c2")
+
+          assert {:error, %Error{reason: :authorization_code_not_found}} =
+                   Assertion.get_from_code("c2")
         end)
 
-      assert log =~ "[ExSaml.Debug] code_redeemed"
+      assert log =~ "[ExSaml.Debug] code_exchanged"
       assert log =~ "Authorization code not found or expired"
 
-      steps = "flow-2" |> Debug.report() |> Enum.map(&elem(&1, 0))
-      assert :code_redeemed in steps
-
-      redeemed = for {:code_redeemed, meta} <- Debug.report("flow-2"), do: meta
+      exchanged = for {:code_exchanged, meta} <- Debug.report("flow-2"), do: meta
 
       assert [%{assertion_found: false, assertion_key: {"acme", "ghost"}}, %{code_found: false}] =
-               redeemed
+               exchanged
+    end
+
+    test "legacy shape is still reachable through Error.to_legacy/1" do
+      {:error, error} = Assertion.get_from_code("nope")
+      assert Error.to_legacy(error) == :unauthorized
     end
   end
 end
