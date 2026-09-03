@@ -429,6 +429,28 @@ defmodule ExSaml.DebugTest do
       assert Debug.saml_response("nope") == nil
     end
 
+    # Same decoding rules as Core.Binding: a DEFLATEd payload without the
+    # SAMLEncoding marker is still inflated, and a raw one is returned as is.
+    test "saml_response/2 decodes DEFLATEd payloads with or without the encoding marker" do
+      Debug.enable(idp_id: "acme", capture: :always)
+      deflated = "<deflated/>" |> :zlib.zip() |> Base.encode64()
+
+      Debug.stash_capture("acme", "t-plain", %{
+        @payload
+        | saml_response: deflated,
+          saml_encoding: nil
+      })
+
+      Debug.stash_capture("acme", "t-marked", %{
+        @payload
+        | saml_response: deflated,
+          saml_encoding: ExSaml.IdpData.oasis_redirect_flow_uri()
+      })
+
+      assert Debug.saml_response("t-plain", decode: true) == "<deflated/>"
+      assert Debug.saml_response("t-marked", decode: true) == "<deflated/>"
+    end
+
     test "failures are listed most recent first and capped per IdP, evicting old captures" do
       Application.put_env(:ex_saml, :max_failures_per_idp, 2)
       Debug.enable(idp_id: "acme")
