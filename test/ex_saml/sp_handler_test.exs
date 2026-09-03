@@ -351,7 +351,7 @@ defmodule ExSaml.SPHandlerTest do
         )
 
       {location, error_id} = error_id_from(conn)
-      assert location == "https://app.example.com/cb?error_id=#{error_id}&x=1"
+      assert location == "https://app.example.com/cb?x=1&error_id=#{error_id}"
     end
 
     test "an exception while consuming fails closed with an error_id (never a bare 500)" do

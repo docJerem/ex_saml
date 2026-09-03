@@ -219,7 +219,7 @@ defmodule ExSaml.ErrorTest do
     end
 
     test "preserves an existing query string" do
-      assert Error.append_error_id("/callback?foo=bar", "abc") == "/callback?error_id=abc&foo=bar"
+      assert Error.append_error_id("/callback?foo=bar", "abc") == "/callback?foo=bar&error_id=abc"
     end
   end
 end
