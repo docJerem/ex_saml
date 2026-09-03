@@ -267,6 +267,9 @@ defmodule ExSaml.Core.Sp do
     ns = @protocol_ns
     success_status = ~c"urn:oasis:names:tc:SAML:2.0:status:Success"
 
+    # The nested status of a previous response must never be read for this one.
+    Logger.metadata(ex_saml_saml_sub_status: nil)
+
     with :ok <- check_status_code(xml, ns, success_status),
          {:ok, assertion_xml} <- extract_assertion(xml, ns, sp),
          :ok <- verify_envelope_signature(xml, sp),

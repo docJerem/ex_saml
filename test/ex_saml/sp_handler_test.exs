@@ -475,6 +475,64 @@ defmodule ExSaml.SPHandlerTest do
       assert {:error, %Error{reason: :error_not_found}} = Error.get_from_id("rs-same")
     end
 
+    # Review point 2: Logger metadata is process-scoped and a Bandit connection
+    # process serves requests sequentially, so a request must never inherit the
+    # trace of the previous one, whatever step it fails at.
+    test "a request served by the same process never inherits the previous flow's trace" do
+      Debug.enable(idp_id: "idp-1", log: :silent)
+
+      # Flow of user A fails inside the library, its trace and capture exist.
+      conn_a =
+        SPHandler.consume_signin_response(
+          acs_conn(
+            "idp-1",
+            %{"SAMLResponse" => Base.encode64("<not-saml/>"), "RelayState" => "rs-A"},
+            %{
+              "relay_state" => "rs-A",
+              "idp_id" => "idp-1"
+            }
+          )
+        )
+
+      {_, "rs-A"} = error_id_from(conn_a)
+      assert Debug.trace("rs-A") != nil
+
+      # The context is gone once the request is over.
+      assert Debug.context() == {nil, nil}
+      assert Logger.metadata()[:ex_saml_saml_sub_status] == nil
+      assert Process.get(:ex_saml_debug_capture) == nil
+
+      # User B, same process, fails before the IdP is even resolved.
+      conn_b = SPHandler.consume_signin_response(acs_conn("nope"))
+      {_, id_b} = error_id_from(conn_b)
+
+      assert id_b != "rs-A"
+
+      assert {:ok, %Error{trace_id: ^id_b, reason: :unknown_idp, trace: nil}} =
+               Error.get_from_id(id_b)
+
+      # A's diagnostic data is untouched.
+      assert %{error: %{reason: :bad_saml}} = Debug.failure("rs-A")
+      assert Enum.map(Debug.failures("idp-1"), & &1.trace_id) == ["rs-A"]
+
+      # Same for a crash before the library clause.
+      conn_c = SPHandler.consume_signin_response(acs_conn("broken", %{"SAMLResponse" => "x"}))
+      {_, id_c} = error_id_from(conn_c)
+      assert id_c != "rs-A"
+      assert {:ok, %Error{reason: :exception, trace_id: ^id_c}} = Error.get_from_id(id_c)
+    end
+
+    test "consume_signin_response/2 used directly clears the process context too" do
+      Debug.enable(idp_id: "idp-1", log: :silent)
+      idp = Application.get_env(:ex_saml, :identity_providers)["idp-1"]
+
+      assert {:error, %Error{reason: :missing_saml_response, trace_id: trace_id}} =
+               SPHandler.consume_signin_response(acs_conn("idp-1"), idp)
+
+      assert is_binary(trace_id)
+      assert Debug.context() == {nil, nil}
+    end
+
     test "when even the error cannot be issued (cache down), the ACS fails closed with 403" do
       Application.put_env(:ex_saml, :cache, ExSaml.RaisingCache)
 
