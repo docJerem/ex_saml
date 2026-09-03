@@ -2,65 +2,101 @@ defmodule ExSaml.ErrorMessages do
   @moduledoc """
   Error messages
 
-  Provide explanation for an error from its error code
+  Provide a human-readable explanation for an error produced by the library.
+  Accepts an `%ExSaml.Error{}`, a bare reason atom, or any legacy error term
+  (`{:error, code}`, `{:envelope, {:error, :no_signature}}`,
+  `{:saml_error, status, message}`, …): everything is normalised through
+  `ExSaml.Error.from_reason/2` first.
 
   ## Example
 
       iex(2)> ExSaml.ErrorMessages.get(:bad_audience)
       "Make sure that the entity_id in configuration is correct"
 
-      iex(3)> ExSaml.ErrorMessages.get(:cert_no_accepted)
-      "Make sure the Identity Provider metadata XML file you are
-      using in the config setting is correct and corresponds to the
-      IdP you are attempting to talk to, you get this error if the
-      certificate used by the IdP to sign the SAML responses has
-      changed and you don't have the updated IdP metadata XML file"
+      iex(3)> ExSaml.ErrorMessages.get(%ExSaml.Error{reason: :no_signature, scope: :assertion})
+      "Missing signature. Please ensure that the assertions are properly signed."
 
+  Unknown codes never raise: they yield the generic `unknown_error` message and
+  are logged at `:warning` level so the raw code is not lost.
   """
-  @status_responder {:saml_error, ~c"urn:oasis:names:tc:SAML:2.0:status:Responder", :undefined}
-  @assertion_signature {:assertion, {:error, :no_signature}}
-  @assertion_cert_not_accepted {:assertion, {:error, :cert_not_accepted}}
-  @assertion_missing_certificate {:assertion, {:error, :missing_certificate}}
-  @envelop_signature {:envelope, {:error, :no_signature}}
-  @envelope_missing_certificate {:envelope, {:error, :missing_certificate}}
-  @name_id_errors {:saml_error, ~c"urn:oasis:names:tc:SAML:2.0:status:Requester", :undefined}
-  @errors ~w(bad_digest assertion_cert_not_accepted missing_assertion_key bad_audience cert_no_accepted invalid_nameid_policy invalid_nonce missing_assertion_signature missing_certificate missing_envelope_signature status_responder)a
 
-  @doc false
+  require Logger
+
+  alias ExSaml.Core.StatusCode
+  alias ExSaml.Error
+
+  @signature_errors ~w(no_signature bad_digest bad_signature cert_not_accepted missing_certificate multiple_signatures insecure_algorithm unsupported_algorithm)a
+
+  # Historical codes kept for compatibility with existing consumers.
+  @legacy_errors ~w(assertion_cert_not_accepted missing_assertion_key cert_no_accepted invalid_nameid_policy invalid_nonce missing_assertion_signature missing_envelope_signature status_responder)a
+
+  # Reasons produced by the library on the sign-in path.
+  @flow_errors ~w(bad_saml bad_assertion bad_version bad_recipient bad_audience too_early stale_assertion duplicate invalid_response missing_saml_response idp_initiated_not_allowed invalid_target_url invalid_relay_state invalid_idp_id unknown_idp exception access_denied authorization_code_not_found assertion_not_found error_not_found capture_not_found payload_not_captured unknown_error)a
+
+  @errors Enum.uniq(@legacy_errors ++ @flow_errors ++ @signature_errors)
+
+  # gettext msgids for second-level SAML statuses, e.g. `:saml_status_authn_failed`.
+  # Built once at compile time from the closed catalogue, so no atom is ever
+  # created from runtime input.
+  @status_msgid_by_atom Map.new(StatusCode.second_level(), &{&1, :"saml_status_#{&1}"})
+  @status_msgids Map.values(@status_msgid_by_atom)
+
+  @doc "Every error code that has a dedicated message."
+  @spec codes() :: [atom()]
+  def codes, do: @errors ++ @status_msgids
+
+  @doc "Returns the translated message for an error (struct, atom or legacy term)."
+  @spec get(term(), String.t()) :: String.t()
   def get(error, locale \\ "en")
 
-  def get({:error, error}, locale), do: get(error, locale)
+  def get(%Error{} = error, locale), do: message(error, locale)
 
-  def get(@status_responder, locale),
-    do: get(:status_responder, locale)
+  # Direct gettext ids (legacy codes, second-level status msgids) bypass the
+  # normalisation so historical callers keep the exact same output.
+  def get(code, locale) when is_atom(code) and code in @errors, do: translate(code, locale)
+  def get(code, locale) when is_atom(code) and code in @status_msgids, do: translate(code, locale)
 
-  def get(@assertion_signature, locale),
-    do: get(:missing_assertion_signature, locale)
+  def get(term, locale), do: term |> Error.from_reason() |> message(locale)
 
-  def get(@assertion_cert_not_accepted, locale),
-    do: get(:assertion_cert_not_accepted, locale)
+  # -- message selection ------------------------------------------------------
 
-  def get(@assertion_missing_certificate, locale),
-    do: get(:missing_certificate, locale)
+  # Signature failures keep their historical, element-specific wording.
+  defp message(%Error{reason: :no_signature, scope: :assertion}, locale),
+    do: translate(:missing_assertion_signature, locale)
 
-  def get(@envelop_signature, locale),
-    do: get(:missing_envelope_signature, locale)
+  defp message(%Error{reason: :no_signature, scope: :envelope}, locale),
+    do: translate(:missing_envelope_signature, locale)
 
-  def get(@envelope_missing_certificate, locale),
-    do: get(:missing_certificate, locale)
+  defp message(%Error{reason: :cert_not_accepted, scope: :assertion}, locale),
+    do: translate(:assertion_cert_not_accepted, locale)
 
-  def get(@name_id_errors, locale),
-    do: get(:invalid_nameid_policy, locale)
-
-  def get(error, locale) when error in @errors do
-    Gettext.with_locale(ExSaml.Gettext, locale, fn ->
-      Gettext.dgettext(ExSaml.Gettext, "errors", Atom.to_string(error))
-    end)
+  # IdP status: prefer the nested (second-level) code when the IdP sent one,
+  # else fall back to the top-level code.
+  defp message(%Error{reason: :saml_error} = e, locale) do
+    cond do
+      msgid = Map.get(@status_msgid_by_atom, e.saml_sub_status) -> translate(msgid, locale)
+      e.saml_status == :responder -> translate(:status_responder, locale)
+      e.saml_status == :requester -> translate(:invalid_nameid_policy, locale)
+      true -> unknown({:saml_error, e.saml_status_uri, e.saml_message}, locale)
+    end
   end
 
-  def get(error, _),
-    do:
-      raise(
-        "Invalid error message code, valid errors are #{inspect(@errors)} got '#{inspect(error)}'"
-      )
+  defp message(%Error{reason: reason} = e, locale) do
+    cond do
+      reason in @errors -> translate(reason, locale)
+      msgid = Map.get(@status_msgid_by_atom, reason) -> translate(msgid, locale)
+      true -> unknown(e.detail || reason, locale)
+    end
+  end
+
+  defp unknown(error, locale) do
+    Logger.warning("[ExSaml] No error message for code #{inspect(error)}")
+    translate(:unknown_error, locale)
+  end
+
+  defp translate(code, locale) do
+    Gettext.with_locale(ExSaml.Gettext, locale, fn ->
+      Gettext.dgettext(ExSaml.Gettext, "errors", Atom.to_string(code))
+    end)
+  end
 end

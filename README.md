@@ -108,6 +108,57 @@ Configure the Nebulex cache module used for assertions and relay state:
 config :ex_saml, cache: MyApp.Cache
 ```
 
+### Error handling
+
+The assertion consumer service always redirects to the target URL with either
+`?code=<authorization_code>` (success) or `?error_id=<trace_id>` (failure). Both
+are random, single-use and expire; consume them with `ExSaml.Assertion.get_from_code/1`
+and `ExSaml.Error.get_from_id/1`. Every failure is an `%ExSaml.Error{}` whose
+`reason` is always an atom and whose identifier is the flow's `trace_id`:
+
+```elixir
+def callback(conn, %{"error_id" => error_id}) do
+  case ExSaml.Error.get_from_id(error_id) do
+    {:ok, %ExSaml.Error{trace_id: trace_id} = error} ->
+      conn
+      |> put_flash(:error, "#{ExSaml.ErrorMessages.get(error)} (trace ID: #{trace_id})")
+      |> redirect(to: "/login")
+
+    {:error, %ExSaml.Error{reason: :error_not_found}} ->
+      redirect(conn, to: "/login")
+  end
+end
+```
+
+See the [error handling and debugging guide](guides/error_handling_and_debugging.md)
+for the full contract, the catalogue of reasons and the 2.0 migration notes.
+
+### Debug mode
+
+`ExSaml.Debug` records a trace of the whole sign-in flow (AuthnRequest, IdP
+response, decoding, validation, code issuance and exchange), keeps a capture of
+failed flows (error summary + raw `SAMLResponse`), lists them per IdP and can
+replay them against the current configuration. It is enabled **at runtime**,
+from a remote console, without a redeploy or a config change, globally or for
+one IdP, and always expires:
+
+```elixir
+ExSaml.Debug.enable(idp_id: "acme", ttl: :timer.minutes(30))
+ExSaml.Debug.enable(idp_id: "acme", capture: :always, log: :silent)
+ExSaml.Debug.status()
+ExSaml.Debug.failures("acme")
+ExSaml.Debug.trace(trace_id)
+ExSaml.Debug.saml_response(trace_id, decode: true)
+ExSaml.Debug.replay(trace_id)
+ExSaml.Debug.disable("acme")
+```
+
+By default the log lines redact the payload and the assertion (`log: :steps`)
+and the `SAMLResponse` is kept only for flows that fail (`capture: :on_error`),
+including flows whose authorization code is never exchanged. Use
+`config :ex_saml, debug_cache:` to keep debug data out of your main cache.
+Details in the [guide](guides/error_handling_and_debugging.md#4-debug-mode).
+
 ### Dynamic Provider Loading
 
 For loading providers from a database at runtime:
