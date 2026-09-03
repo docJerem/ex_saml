@@ -505,9 +505,103 @@ defmodule ExSaml.DebugTest do
       assert {:error, %Error{reason: :unknown_idp, idp_id: "ghost", step: :replay}} =
                Debug.replay("t3")
     end
+
+    test "a capture stashed without every key still replays" do
+      # `stash_capture/3` takes the keys it is given, so a caller that omitted
+      # `saml_encoding` leaves the key absent rather than nil.
+      Debug.stash_capture("acme", "t4", %{saml_response: Base.encode64("<not-saml/>")})
+
+      assert {:error, %Error{reason: :bad_saml}} = Debug.replay("t4")
+    end
   end
 
   # Review point 8: the debug machinery must cost nothing when debug is off.
+  describe "scope_status/1" do
+    test "reports one scope without scanning the cache" do
+      {:ok, _} = Debug.enable(idp_id: "acme", ttl: :timer.minutes(30), capture: :always)
+
+      assert %{
+               enabled: true,
+               static: false,
+               settings: %{capture: :always, log: :steps},
+               expires_in_ms: ttl
+             } = Debug.scope_status("acme")
+
+      assert ttl == :timer.minutes(30)
+    end
+
+    test "an IdP with no flag of its own reports the global one" do
+      {:ok, _} = Debug.enable(ttl: :timer.minutes(5))
+
+      assert %{enabled: true, settings: %{capture: :on_error}} = Debug.scope_status("acme")
+    end
+
+    test "is off, with no TTL, when nothing is enabled" do
+      assert %{enabled: false, static: false, settings: nil, expires_in_ms: nil} =
+               Debug.scope_status("acme")
+    end
+
+    test "degrades instead of raising when the cache is broken" do
+      Application.put_env(:ex_saml, :debug_cache, ExSaml.RaisingCache)
+
+      assert %{enabled: false, settings: nil} = Debug.scope_status("acme")
+    end
+  end
+
+  describe "config/0" do
+    test "resolves the retention defaults" do
+      assert %{
+               cache: ExSaml.StubCache,
+               trace_ttl: 900_000,
+               payload_ttl: 3_600_000,
+               provisional_ttl: 300_000,
+               error_ttl: 300_000,
+               max_failures_per_idp: 20,
+               debug_log_level: :warning
+             } = Debug.config()
+    end
+
+    test "reflects what is configured" do
+      Application.put_env(:ex_saml, :payload_ttl, 1_000)
+      Application.put_env(:ex_saml, :max_failures_per_idp, 3)
+
+      assert %{payload_ttl: 1_000, max_failures_per_idp: 3} = Debug.config()
+    end
+
+    test "reports a missing cache rather than assuming one" do
+      Application.delete_env(:ex_saml, :cache)
+
+      assert %{cache: nil} = Debug.config()
+    end
+  end
+
+  describe "redact_trace/1" do
+    test "masks every event, which redact/1 alone does not" do
+      {:ok, _} = Debug.enable(idp_id: "acme")
+
+      Debug.log(:code_issued, "acme", %{
+        trace_id: "t-redact",
+        code: "secret",
+        name_id: "jane@corp.com"
+      })
+
+      trace = Debug.trace("t-redact")
+
+      # The trap this function exists for: `redact/1` takes a map, so handing it
+      # a trace returns it verbatim, credentials and all.
+      assert Debug.redact(trace) == trace
+      assert [{:code_issued, %{code: "secret"}}] = trace
+
+      assert [{:code_issued, %{code: :redacted, name_id: "j***@corp.com"}}] =
+               Debug.redact_trace(trace)
+    end
+
+    test "passes anything that is not a trace through" do
+      assert Debug.redact_trace(nil) == nil
+      assert Debug.redact_trace(:whatever) == :whatever
+    end
+  end
+
   describe "cost when debug is off" do
     alias ExSaml.CountingCache
 
