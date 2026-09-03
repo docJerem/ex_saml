@@ -352,7 +352,25 @@ defmodule ExSaml.SPHandler do
         relay_state: relay_state
       })
 
-    redirect_with_error(conn, relay_state, error)
+    # Last resort: if issuing the error itself fails (cache down, session
+    # store failure), still fail closed with a 403 rather than a bare 500.
+    try do
+      redirect_with_error(conn, relay_state, error)
+    rescue
+      e -> access_denied(conn, Exception.format(:error, e, __STACKTRACE__))
+    catch
+      kind, value -> access_denied(conn, Exception.format(kind, value, __STACKTRACE__))
+    end
+  end
+
+  defp access_denied(%Plug.Conn{state: :sent} = conn, formatted) do
+    Logger.error("[ExSaml] could not issue error_id: #{formatted}")
+    conn
+  end
+
+  defp access_denied(conn, formatted) do
+    Logger.error("[ExSaml] could not issue error_id: #{formatted}")
+    conn |> send_resp(403, "access_denied") |> halt()
   end
 
   defp flow_for(:idp_initiated_not_allowed), do: :idp_initiated
