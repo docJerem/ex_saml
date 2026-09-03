@@ -643,12 +643,12 @@ defmodule ExSaml.Debug do
   (`now: received_at`, so time conditions behave as they did) — or at any
   instant given with `now:`.
 
-  Returns `{:ok, %ExSaml.Core.Assertion{}}` when the response now validates, or
+  Returns `{:ok, %ExSaml.Assertion{}}` when the response now validates, or
   `{:error, %ExSaml.Error{}}` with the same vocabulary as the live flow.
   Signatures are checked against the current IdP metadata: a rotated
   certificate shows up as `:cert_not_accepted`.
   """
-  @spec replay(binary(), keyword()) :: {:ok, ExSaml.Core.Assertion.t()} | {:error, Error.t()}
+  @spec replay(binary(), keyword()) :: {:ok, ExSaml.Assertion.t()} | {:error, Error.t()}
   def replay(trace_id, opts \\ []) do
     with %{} = capture <- capture(trace_id) || {:error, :capture_not_found},
          payload when is_binary(payload) <-
