@@ -76,6 +76,8 @@ defmodule ExSaml.AuthorizationCodeCacheTest do
     Debug.enable()
     log = capture_log(fn -> assert %{idp_id: "acme"} = AuthorizationCodeCache.take("c3") end)
     assert log =~ "[ExSaml.Debug] code_taken"
-    assert log =~ ~s(code: "c3")
+    # The code is a bearer credential: never in the logs in :steps mode.
+    assert log =~ "code: :redacted"
+    refute log =~ ~s(code: "c3")
   end
 end
