@@ -506,6 +506,18 @@ defmodule ExSaml.DebugTest do
                Debug.replay("t3")
     end
 
+    test "a payload that is not well-formed XML is an error, not a crash" do
+      # xmerl throws rather than returning an error, and a capture holds
+      # whatever the IdP posted.
+      Debug.stash_capture("acme", "t5", %{
+        @payload
+        | saml_response: Base.encode64("<samlp:Response/>")
+      })
+
+      assert {:error, %Error{reason: :exception, step: :decode, idp_id: "acme"}} =
+               Debug.replay("t5")
+    end
+
     test "a capture stashed without every key still replays" do
       # `stash_capture/3` takes the keys it is given, so a caller that omitted
       # `saml_encoding` leaves the key absent rather than nil.

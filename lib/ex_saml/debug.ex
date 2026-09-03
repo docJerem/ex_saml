@@ -664,7 +664,7 @@ defmodule ExSaml.Debug do
       now = Keyword.get(opts, :now, capture[:received_at])
       put_context(capture[:idp_id], nil)
 
-      case Helper.decode_idp_auth_resp(sp, capture[:saml_encoding], payload, now: now) do
+      case decode_for_replay(sp, capture, payload, now) do
         {:ok, assertion} ->
           {:ok, assertion}
 
@@ -675,6 +675,18 @@ defmodule ExSaml.Debug do
       {:error, reason} ->
         {:error, Error.from_reason(reason, %{trace_id: trace_id, step: :replay})}
     end
+  end
+
+  # A capture holds whatever the IdP posted, so decoding it can raise or throw —
+  # xmerl throws on malformed XML. `consume_signin_response/2` already wraps its
+  # decode for exactly this reason; replaying the same bytes has to as well, or
+  # a capture that is not well-formed takes the caller down with it.
+  defp decode_for_replay(sp, capture, payload, now) do
+    Helper.decode_idp_auth_resp(sp, capture[:saml_encoding], payload, now: now)
+  rescue
+    error -> {:error, {:exception, Exception.format(:error, error, __STACKTRACE__)}}
+  catch
+    kind, value -> {:error, {:exception, Exception.format(kind, value, __STACKTRACE__)}}
   end
 
   defp replay_attrs(capture) do
