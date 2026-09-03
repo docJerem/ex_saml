@@ -43,9 +43,12 @@ defmodule ExSaml.Debug do
       library, or later when the authorization code cannot be exchanged. With
       `:none` a failure still leaves a capture, without the payload.
     * `log:` — what goes to `Logger` (level `debug_log_level`, default
-      `:warning`): `:steps` (default) logs every event but **redacts** the
-      payload, the assertion and the NameID from the message (they stay in the
-      trace); `:full` logs everything; `:silent` logs nothing.
+      `:warning`): `:steps` (default) logs every event but **redacts** from the
+      message the payloads and assertions (PII) and the credentials
+      (authorization code, nonces, user token), and **partially masks** NameIDs
+      (`jane@corp.com` -> `j***@corp.com`) so a user stays recognisable —
+      everything stays intact in the trace; `:full` logs everything; `:silent`
+      logs nothing.
 
   `config :ex_saml, debug: true` (or a keyword list of the options above) is a
   static override meant for dev/test. When no cache is configured, `enable/1`
@@ -77,17 +80,29 @@ defmodule ExSaml.Debug do
   @log_modes [:steps, :full, :silent]
   @defaults %{capture: :on_error, log: :steps}
 
-  # Keys stripped from the log message in `log: :steps` mode (kept in the trace).
-  @pii_keys [
+  # `log: :steps` redaction (the trace keeps everything).
+  #
+  # Fully redacted: payloads and assertions (PII), and credentials — the
+  # authorization code is a bearer credential exchangeable for the user's
+  # assertion during its TTL, nonces are bound to sessions.
+  @redacted_keys [
     :saml_response,
     :saml_request,
     :assertion,
     :attributes,
-    :assertion_key,
-    :value,
-    :relay_cache_entry,
-    :cache_value
+    :code,
+    :nonce,
+    :saml_nonce,
+    :saml_nonce_candidate,
+    :user_token
   ]
+
+  # Partially masked so an operator can still recognise a user in the logs:
+  # `jane@corp.com` -> `j***@corp.com`, `ab12345` -> `ab***(7)`.
+  @name_id_keys [:assertion_key, :ex_saml_assertion_key, :name_id, :nameid]
+
+  # Containers whose content is redacted recursively with the rules above.
+  @nested_keys [:payload, :value, :cache_value, :relay_cache_entry]
 
   @type scope :: :global | {:idp, binary()}
   @type event :: atom()
@@ -300,13 +315,40 @@ defmodule ExSaml.Debug do
     Logger.log(log_level(), "[ExSaml.Debug] #{event} #{inspect(entry, inspect_opts())}")
   end
 
-  defp redact(entry) do
-    Enum.reduce(@pii_keys, entry, fn key, acc ->
-      if Map.has_key?(acc, key) and not is_nil(acc[key]),
-        do: Map.put(acc, key, :redacted),
-        else: acc
+  @doc false
+  # Applies the `log: :steps` redaction rules to a map (recursively for the
+  # nested containers). Public for tests only.
+  @spec redact(map()) :: map()
+  def redact(entry) when is_map(entry) and not is_struct(entry) do
+    Map.new(entry, fn
+      {key, nil} -> {key, nil}
+      {key, _} when key in @redacted_keys -> {key, :redacted}
+      {key, value} when key in @name_id_keys -> {key, mask_name_id(value)}
+      {key, value} when key in @nested_keys -> {key, redact_nested(value)}
+      pair -> pair
     end)
   end
+
+  def redact(other), do: other
+
+  defp redact_nested(%{} = map) when not is_struct(map), do: redact(map)
+  # `{idp_id, name_id}` assertion keys stored as bare values.
+  defp redact_nested({idp_id, name_id}) when is_binary(name_id),
+    do: {idp_id, mask_name_id(name_id)}
+
+  defp redact_nested(list) when is_list(list), do: Enum.map(list, &redact_nested/1)
+  defp redact_nested(other), do: other
+
+  defp mask_name_id({idp_id, name_id}), do: {idp_id, mask_name_id(name_id)}
+
+  defp mask_name_id(name_id) when is_binary(name_id) do
+    case String.split(name_id, "@", parts: 2) do
+      [local, domain] -> String.slice(local, 0, 1) <> "***@" <> domain
+      _ -> String.slice(name_id, 0, 2) <> "***(#{String.length(name_id)})"
+    end
+  end
+
+  defp mask_name_id(other), do: other
 
   @doc "Appends `{event, meta}` to the trace identified by `trace_id`."
   @spec record(binary(), event(), map()) :: :ok

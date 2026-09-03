@@ -206,7 +206,7 @@ defmodule ExSaml.DebugTest do
         end)
 
       assert log =~ "saml_response: :redacted"
-      assert log =~ "assertion_key: :redacted"
+      assert log =~ ~s(assertion_key: {"acme", "u***@example.com"})
       refute log =~ "user@example.com"
       assert log =~ ~s(host: "sp.example.com")
 
@@ -214,6 +214,54 @@ defmodule ExSaml.DebugTest do
                {:response_received,
                 %{saml_response: "PHNhbWw+", assertion_key: {"acme", "user@example.com"}}}
              ] = Debug.trace("t1")
+    end
+
+    # Review points 5 and 6: credentials are fully redacted, NameIDs partially
+    # masked (recognisable, not disclosed), and nested containers follow the
+    # same rules.
+    test "redact/1 rules: credentials, name ids, nested containers" do
+      redacted =
+        Debug.redact(%{
+          code: "abc123",
+          nonce: "n1",
+          saml_nonce: "n2",
+          assertion_key: {"acme", "jane@corp.com"},
+          value: %{
+            ex_saml_assertion_key: {"acme", "employee-42"},
+            saml_nonce_candidate: "n3",
+            trace_id: "t1"
+          },
+          payload: %{ex_saml_assertion_key: {"acme", "jane@corp.com"}},
+          cache_value: {"acme", "jane@corp.com"},
+          relay_cache_entry: %{saml_nonce: "n4", user_token: "tok", target_url: "/cb"},
+          assertion: %{attributes: %{}},
+          trace_id: "t1",
+          empty: nil
+        })
+
+      assert redacted.code == :redacted
+      assert redacted.nonce == :redacted
+      assert redacted.saml_nonce == :redacted
+      assert redacted.assertion_key == {"acme", "j***@corp.com"}
+
+      assert redacted.value == %{
+               ex_saml_assertion_key: {"acme", "em***(11)"},
+               saml_nonce_candidate: :redacted,
+               trace_id: "t1"
+             }
+
+      assert redacted.payload == %{ex_saml_assertion_key: {"acme", "j***@corp.com"}}
+      assert redacted.cache_value == {"acme", "j***@corp.com"}
+
+      assert redacted.relay_cache_entry == %{
+               saml_nonce: :redacted,
+               user_token: :redacted,
+               target_url: "/cb"
+             }
+
+      assert redacted.assertion == :redacted
+      assert redacted.trace_id == "t1"
+      assert redacted.empty == nil
     end
 
     test "log: :full keeps everything in the log message" do
