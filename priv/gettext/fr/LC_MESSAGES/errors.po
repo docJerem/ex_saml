@@ -123,6 +123,23 @@ msgstr "La capture de ce flux ne contient pas de SAMLResponse (capture: :none é
 msgid "unknown_error"
 msgstr "Une erreur SAML inconnue s'est produite."
 
+## Validation de la réponse (SAML 2.0 Core / Profiles)
+
+msgid "bad_issuer"
+msgstr "Le fournisseur d'identité ayant émis cette réponse n'est pas celui configuré pour cette connexion. Vérifiez que les métadonnées de l'IdP (entityID) sont à jour."
+
+msgid "bad_in_response_to"
+msgstr "Cette réponse ne correspond pas à la requête d'authentification envoyée. Veuillez recommencer la connexion."
+
+msgid "bad_destination"
+msgstr "Cette réponse était adressée à une autre URL de consommation d'assertions que celle de ce service. Vérifiez l'URL ACS configurée sur votre IdP."
+
+msgid "bad_subject_confirmation"
+msgstr "L'assertion n'utilise pas la méthode de confirmation « bearer » requise pour le SSO navigateur."
+
+msgid "session_expired"
+msgstr "La session établie par le fournisseur d'identité a expiré. Veuillez vous reconnecter."
+
 ## StatusCode de second niveau de l'IdP (SAML 2.0 Core §3.2.2.2)
 
 msgid "saml_status_authn_failed"

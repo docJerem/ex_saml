@@ -138,9 +138,12 @@ Step `:decode` (payload and XML)
 | `:bad_assertion` | | Not exactly one readable `Assertion` (missing, multiple, or decryption failed) |
 | `:no_signature`, `:missing_certificate`, `:bad_digest`, `:bad_signature`, `:cert_not_accepted`, `:multiple_signatures`, `:insecure_algorithm`, `:unsupported_algorithm` | `scope` | Signature verification failed on the `Response` (`scope: :envelope`) or the `Assertion` (`scope: :assertion`) |
 | `:bad_version` | | Not SAML 2.0 |
+| `:bad_issuer` | | `Response/Issuer` or `Assertion/Issuer` ≠ the IdP `entityID` from its metadata (Core §2.2.3, Profiles §4.1.4.2). Enforced by default, see [Response validation checks](#response-validation-checks) |
 | `:bad_recipient` | | `SubjectConfirmationData/@Recipient` ≠ ACS URL |
 | `:bad_audience` | | `AudienceRestriction` ≠ SP entity id |
+| `:bad_subject_confirmation` | | `SubjectConfirmation/@Method` is stated and is not bearer (Profiles §4.1.4.2). Enforced by default |
 | `:too_early` | | `NotBefore` in the future (5 s skew tolerated) |
+| `:session_expired` | | `AuthnStatement/@SessionNotOnOrAfter` in the past (Core §2.7.2): the IdP session ended, the user must sign in again. Enforced by default; an unparsable value only warns |
 | `:stale_assertion` | | `NotOnOrAfter` in the past |
 | `:duplicate` | | Rejected by the configured duplicate-detection function |
 
@@ -151,6 +154,7 @@ Step `:validate_authresp` (flow)
 | `:idp_initiated_not_allowed` | Empty `InResponseTo` but `allow_idp_initiated_flow` is off |
 | `:invalid_relay_state` | The `RelayState` does not match what the SP issued (session or relay-state cache) |
 | `:invalid_idp_id` | The IdP that answered is not the one that was asked |
+| `:bad_in_response_to` | `SubjectConfirmationData/@InResponseTo` ≠ the ID of the AuthnRequest the SP sent (Profiles §4.1.4.3). Skipped when no AuthnRequest ID was stored (relay state written before this check existed, or a consumer driving `validate_authresp/4` itself). Enforced by default, see [Response validation checks](#response-validation-checks) |
 
 Step `:target_url`
 
@@ -315,6 +319,7 @@ trace, readable with `ExSaml.Debug.trace(trace_id)` and embedded in
 | `:code_stored` / `:code_taken` | `ExSaml.AuthorizationCodeCache` | code, hit / miss, value, remaining TTL. This is where a double use of the code shows up |
 | `:code_exchanged` | `ExSaml.Assertion.get_from_code/1` | code found?, assertion found?, assertion |
 | `:relay_state_taken` / `:relay_state_deleted` | `ExSaml.RelayStateCache` | key, hit / miss |
+| `:validation_check` | response validation | check, whether it was enforced, expected / actual values — one event per verdict, warn or reject (see [Response validation checks](#response-validation-checks)) |
 | `:error_issued` | failure | trace_id, reason, scope, step, detail, target URL and its source, session snapshot |
 | `:unexpected_error` | rescued exception | formatted exception with its stack trace |
 | `:logout_response_failed` / `:logout_request_failed` | single logout | error, size of the payload, session snapshot |
@@ -381,6 +386,72 @@ ExSaml.Debug.replay(trace_id)
 Signatures are checked against the current IdP metadata: a rotated certificate
 shows up as `:cert_not_accepted`, which is itself the diagnosis. Replay never
 emits an authorization code or touches any session.
+
+## Response validation checks
+
+Beyond signatures, recipient, audience and time conditions, the library
+enforces the checks SAML 2.0 Core / Profiles require of a web browser SSO
+response. Each one is a `reason` of its own:
+
+| Check | Reason | Spec | Default |
+|---|---|---|---|
+| `Response/Issuer` and `Assertion/Issuer` match the IdP `entityID` from its metadata | `:bad_issuer` | Core §2.2.3, Profiles §4.1.4.2 | enforced |
+| `SubjectConfirmationData/@InResponseTo` matches the ID of the AuthnRequest we sent | `:bad_in_response_to` | Profiles §4.1.4.3 | enforced |
+| `AuthnStatement/@SessionNotOnOrAfter` has not passed | `:session_expired` | Core §2.7.2 | enforced |
+| `SubjectConfirmation/@Method` is bearer | `:bad_subject_confirmation` | Profiles §4.1.4.2 | enforced |
+| `Response/@Destination` matches the ACS URL | `:bad_destination` | Core §3.2.2, Bindings §3.5.5.2 | not yet evaluated |
+| The assertion has not been seen before | `:duplicate` | Profiles §4.1.4.5 | not yet evaluated |
+
+### Enforce or warn
+
+`config :ex_saml, :enforced_response_checks` lists the checks that reject a
+response. A check absent from the list is still evaluated: a failure emits one
+grep-able log line and the sign-in goes on.
+
+```elixir
+config :ex_saml, enforced_response_checks: [:bad_issuer, :bad_in_response_to, :session_expired, :bad_subject_confirmation]  # default
+config :ex_saml, enforced_response_checks: []      # everything log-only: the rollback lever
+config :ex_saml, enforced_response_checks: :all
+```
+
+```
+[ExSaml] saml_validation check=:bad_issuer enforced=false idp_id="acme" expected="https://idp.example.com" actual="https://idp.example.com/"
+```
+
+`expected` / `actual` are logged verbatim, unnormalised: the false positives
+to expect are cosmetic (scheme, trailing slash, port) and the raw pair is
+what lets you classify them. After a check is switched on it stops emitting
+this line, so a non-zero count afterwards means the switch did not take.
+
+Every verdict, enforced or not, is also recorded as a `:validation_check`
+event in the debug trace, so a warning shows up in `ExSaml.Debug.failure/1`
+next to whatever did reject the response.
+
+The defaults enforce the four checks that cannot reject a conformant response.
+`:bad_destination` (our ACS URL must match byte for byte what the IdP was
+configured with) and `:duplicate` (changes what a replayed callback does) will
+ship log-only first, and be turned on once the warn logs show a clean
+population.
+
+### Deliberate failure modes
+
+- A **missing stored AuthnRequest ID** skips the `InResponseTo` check rather
+  than rejecting: relay-state entries written before the check existed carry
+  no ID, and so does a consumer that drives `validate_authresp/4` without
+  going through `ExSaml.AuthHandler`.
+- An **unparsable `SessionNotOnOrAfter`** warns and passes, even when the check
+  is enforced: an IdP formatting bug must not become a rejected login.
+- An **absent `Response/Issuer`** is not a failure and does not warn: the
+  element is optional on a `StatusResponseType`.
+- The response-level checks run **after signature verification**, so forged
+  traffic the signature check rejects anyway does not pollute the warn logs.
+- **Known limitation**: a missing `SubjectConfirmation/@Method` is decoded as
+  bearer, so `:bad_subject_confirmation` only catches an explicitly non-bearer
+  method.
+
+Consumers do not have to supply anything: the IdP `entityID` and id come from
+`%ExSaml.IdpData{}`, the AuthnRequest ID is stored in the relay state and
+mirrored in the session by `ExSaml.AuthHandler`.
 
 ## 5. Troubleshooting recipes
 

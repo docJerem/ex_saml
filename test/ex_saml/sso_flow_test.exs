@@ -152,13 +152,19 @@ defmodule ExSaml.SsoFlowTest do
     {conn, relay_state}
   end
 
+  defp authn_request_id(relay_state), do: RelayStateCache.get(relay_state)[:authn_request_id]
+
+  # The response answers the AuthnRequest we actually sent (InResponseTo check).
+  defp response_payload(relay_state), do: saml_response(authn_request_id(relay_state))
+
   defp post_response(relay_state) do
-    body = %{"SAMLResponse" => saml_response("_req-1"), "RelayState" => relay_state}
+    body = %{"SAMLResponse" => response_payload(relay_state), "RelayState" => relay_state}
 
     session = %{
       "relay_state" => relay_state,
       "idp_id" => @idp_id,
-      "target_url" => @target_url
+      "target_url" => @target_url,
+      "authn_request_id" => authn_request_id(relay_state)
     }
 
     conn = SPHandler.consume_signin_response(acs_conn(body, session))
@@ -190,11 +196,12 @@ defmodule ExSaml.SsoFlowTest do
 
   test "full SP-initiated flow with per-IdP debug: one trace, a provisional capture, redacted logs, a promoted capture on replay" do
     Debug.enable(idp_id: @idp_id)
-    payload = saml_response("_req-1")
 
     log =
       capture_log(fn ->
         {_conn, relay_state} = start_sso()
+        payload = response_payload(relay_state)
+        Process.put(:sso_flow_payload, payload)
 
         assert [{:authn_request, authn}] = Debug.trace(relay_state)
 
@@ -251,6 +258,7 @@ defmodule ExSaml.SsoFlowTest do
       end)
 
     code = Process.get(:sso_flow_code)
+    payload = Process.get(:sso_flow_payload)
 
     # :steps mode: the payload, the code and the full NameID never reach the logs.
     assert log =~ "[ExSaml.Debug] code_issued"
@@ -258,5 +266,79 @@ defmodule ExSaml.SsoFlowTest do
     refute log =~ code
     refute log =~ "jane@corp.com"
     assert log =~ "j***@corp.com"
+  end
+
+  # #55 (first half): the AuthnRequest id minted by AuthHandler is stored in the
+  # relay state and matched against the response's InResponseTo. A response for
+  # a request we never sent is rejected when the check is enforced (default),
+  # only logged and traced when it is not.
+  describe "InResponseTo check end to end" do
+    setup do
+      previous = Application.get_env(:ex_saml, :enforced_response_checks)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:ex_saml, :enforced_response_checks, previous),
+          else: Application.delete_env(:ex_saml, :enforced_response_checks)
+      end)
+
+      :ok
+    end
+
+    defp post_forged_response(relay_state) do
+      body = %{"SAMLResponse" => saml_response("_not-our-request"), "RelayState" => relay_state}
+
+      session = %{
+        "relay_state" => relay_state,
+        "idp_id" => @idp_id,
+        "target_url" => @target_url,
+        "authn_request_id" => authn_request_id(relay_state)
+      }
+
+      SPHandler.consume_signin_response(acs_conn(body, session))
+    end
+
+    test "the AuthnRequest id is minted, stored and matched" do
+      {conn, relay_state} = start_sso()
+      id = authn_request_id(relay_state)
+      assert is_binary(id) and id != ""
+      assert get_session(conn, "authn_request_id") == id
+
+      # A response to the request we actually sent passes.
+      body = %{"SAMLResponse" => saml_response(id), "RelayState" => relay_state}
+      session = %{"relay_state" => relay_state, "idp_id" => @idp_id, "authn_request_id" => id}
+      conn = SPHandler.consume_signin_response(acs_conn(body, session))
+      assert conn.status == 302
+      assert [location] = get_resp_header(conn, "location")
+      assert location =~ "code="
+    end
+
+    test "a response to a request we never sent is rejected (enforced by default)" do
+      {_conn, relay_state} = start_sso()
+      conn = post_forged_response(relay_state)
+
+      [location] = get_resp_header(conn, "location")
+      assert location =~ "error_id="
+
+      assert {:ok,
+              %Error{reason: :bad_in_response_to, step: :validate_authresp, flow: :sp_initiated}} =
+               Error.get_from_id(relay_state)
+    end
+
+    test "with the check in warn mode the sign-in succeeds, the warning is logged and traced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      Debug.enable(idp_id: @idp_id, log: :silent)
+      {_conn, relay_state} = start_sso()
+
+      log = capture_log(fn -> assert post_forged_response(relay_state).status == 302 end)
+
+      assert log =~ "saml_validation check=:bad_in_response_to enforced=false"
+
+      assert {:validation_check,
+              %{check: :bad_in_response_to, enforced: false, actual: "_not-our-request"}} =
+               List.keyfind(Debug.trace(relay_state), :validation_check, 0)
+
+      assert {:code_issued, _} = List.keyfind(Debug.trace(relay_state), :code_issued, 0)
+    end
   end
 end
