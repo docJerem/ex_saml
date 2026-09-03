@@ -38,7 +38,7 @@ defmodule ExSaml.Debug do
 
     * `capture:` — when to keep the raw `SAMLResponse`: `:on_error` (default),
       `:always` or `:none`. With `:on_error` the payload is written at receipt
-      with a short TTL (`provisional_ttl`, default 2 min) and **promoted**
+      with a short TTL (`provisional_ttl`, default 5 min) and **promoted**
       (`payload_ttl`, default 1 h, indexed per IdP) when the flow fails — in the
       library, or later when the authorization code cannot be exchanged. With
       `:none` a failure still leaves a capture, without the payload.
@@ -70,7 +70,9 @@ defmodule ExSaml.Debug do
   @default_ttl :timer.hours(1)
   @default_trace_ttl :timer.minutes(15)
   @default_payload_ttl :timer.hours(1)
-  @default_provisional_ttl :timer.minutes(2)
+  # Must outlive the whole exchange window: the authorization code TTL (30 s)
+  # plus a late or retried consumer callback. Aligned on the relay-state TTL.
+  @default_provisional_ttl :timer.minutes(5)
   @default_max_failures 20
   @default_log_level :warning
   @runtime_env :debug_runtime

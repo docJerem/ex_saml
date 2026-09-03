@@ -288,7 +288,7 @@ Configuration keys:
 | `debug_log_level:` | `:warning` | Logger level of the `[ExSaml.Debug]` lines |
 | `trace_ttl:` | 15 min | TTL of a trace |
 | `payload_ttl:` | 1 h | TTL of a promoted capture and of the per-IdP failure list |
-| `provisional_ttl:` | 2 min | TTL of a capture written at receipt with `capture: :on_error`, before the flow is known to have failed |
+| `provisional_ttl:` | 5 min | TTL of a capture written at receipt with `capture: :on_error`, before the flow is known to have failed. Must outlive the whole exchange window (code TTL plus a late or retried consumer callback); aligned on the relay-state TTL |
 | `max_failures_per_idp:` | 20 | Captures kept per IdP; older ones are evicted |
 
 > **PII warning.** Traces and captures hold the raw `SAMLResponse`, the NameID
@@ -334,7 +334,7 @@ and the raw `SAMLResponse`, kept together under the `trace_id`.
 
 How it is written, per `capture:` mode:
 
-- `:on_error` (default): written at receipt with `provisional_ttl` (2 min),
+- `:on_error` (default): written at receipt with `provisional_ttl` (5 min),
   never deleted explicitly, and **promoted** — full `payload_ttl`, error
   summary, added to the IdP's failure list — when the flow fails: in the
   library (`:error`), or later when the authorization code cannot be exchanged
