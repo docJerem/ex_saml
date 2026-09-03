@@ -222,6 +222,18 @@ defmodule ExSaml.Debug do
     Logger.metadata(ex_saml_idp_id: idp_id, ex_saml_trace_id: trace_id)
   end
 
+  @doc """
+  Clears the process context set by `put_context/2` (Logger metadata and the
+  pending capture), so that a process serving several requests never leaks a
+  flow into the next one. Called by `ExSaml.SPHandler` on the way out.
+  """
+  @spec clear_context() :: :ok
+  def clear_context do
+    Logger.metadata(ex_saml_idp_id: nil, ex_saml_trace_id: nil, ex_saml_saml_sub_status: nil)
+    Process.delete(@stash_key)
+    :ok
+  end
+
   @doc "Returns `{idp_id, trace_id}` from the process context (either may be nil)."
   @spec context() :: {binary() | nil, binary() | nil}
   def context do

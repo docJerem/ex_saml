@@ -91,21 +91,44 @@ defmodule ExSaml.SPHandler do
     rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
     relay_state = safe_decode_www_form(rls)
 
+    # The trace id is established before anything can fail, and the process
+    # context is cleared on the way out: a request must never inherit the
+    # trace of the previous one served by the same process.
+    trace_id = trace_id(conn, relay_state)
+    Debug.put_context(idp_id, trace_id)
+
     try do
-      do_consume_signin_response(conn, idp_id, rls, relay_state)
+      do_consume_signin_response(conn, idp_id, rls, relay_state, trace_id)
     rescue
       e ->
-        unexpected_error(conn, idp_id, relay_state, :error, e, __STACKTRACE__)
+        unexpected_error(conn, idp_id, relay_state, trace_id, :error, e, __STACKTRACE__)
     catch
       kind, value ->
-        unexpected_error(conn, idp_id, relay_state, kind, value, __STACKTRACE__)
+        unexpected_error(conn, idp_id, relay_state, trace_id, kind, value, __STACKTRACE__)
+    after
+      Debug.clear_context()
     end
   end
 
   # Library-facing clause: pure decode+validate. Returns the assertion data
   # as a tuple — caller is responsible for any conn handling. Useful when
   # an app wants to drive the post-consume flow itself.
-  def consume_signin_response(conn, %IdpData{id: idp_id, sp_config: sp_cfg} = idp_data) do
+  def consume_signin_response(conn, %IdpData{id: idp_id} = idp_data) do
+    rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
+    trace_id = trace_id(conn, safe_decode_www_form(rls))
+    Debug.put_context(idp_id, trace_id)
+
+    try do
+      consume_response(conn, idp_data, trace_id)
+    after
+      Debug.clear_context()
+    end
+  end
+
+  # Shared by both public clauses; `trace_id` is the flow's identifier,
+  # established by the caller (the router clause computes it before anything
+  # can fail so that every error, however early, is filed under it).
+  defp consume_response(conn, %IdpData{id: idp_id, sp_config: sp_cfg} = idp_data, trace_id) do
     sp = ensure_sp_uris_set(sp_cfg, conn)
 
     saml_encoding = conn.body_params["SAMLEncoding"]
@@ -116,10 +139,6 @@ defmodule ExSaml.SPHandler do
     relay_entry = RelayStateCache.get(relay_state)
     user_token = relay_entry[:user_token]
     redirect_uri = relay_entry[:redirect_uri]
-
-    # Every flow has a trace id, debug on or off; it is the error's identifier.
-    trace_id = trace_id(conn, relay_state)
-    Debug.put_context(idp_id, trace_id)
 
     Debug.stash_capture(idp_id, trace_id, %{
       saml_response: saml_response,
@@ -185,11 +204,11 @@ defmodule ExSaml.SPHandler do
     end
   end
 
-  defp do_consume_signin_response(conn, idp_id, rls, relay_state) do
-    with {:ok, idp_data} <- fetch_idp(idp_id, relay_state),
+  defp do_consume_signin_response(conn, idp_id, rls, relay_state, trace_id) do
+    with {:ok, idp_data} <- fetch_idp(idp_id, relay_state, trace_id),
          :ok <- maybe_redirect_to_start_url(conn, rls),
-         {:ok, %{assertion: assertion, nonce: nonce, flow: flow, trace_id: trace_id}} <-
-           consume_signin_response(conn, idp_data) do
+         {:ok, %{assertion: assertion, nonce: nonce, flow: flow}} <-
+           consume_response(conn, idp_data, trace_id) do
       nameid = assertion.subject.name
       assertion_key = {idp_data.id, maybe_idp_user_id(assertion) || nameid}
       conn = State.put_assertion(conn, assertion_key, assertion)
@@ -223,14 +242,18 @@ defmodule ExSaml.SPHandler do
     end
   end
 
-  defp fetch_idp(idp_id, relay_state) do
+  defp fetch_idp(idp_id, relay_state, trace_id) do
     case get_idp(idp_id) do
       %IdpData{} = idp ->
         {:ok, idp}
 
       _ ->
         {:error,
-         Error.from_reason({:unknown_idp, idp_id}, %{step: :idp_lookup, relay_state: relay_state})}
+         Error.from_reason({:unknown_idp, idp_id}, %{
+           step: :idp_lookup,
+           relay_state: relay_state,
+           trace_id: trace_id
+         })}
     end
   end
 
@@ -294,16 +317,13 @@ defmodule ExSaml.SPHandler do
         _ -> target_url_with_source(conn, relay_state)
       end
 
-    {ctx_idp_id, ctx_trace_id} = Debug.context()
-    idp_id = error.idp_id || ctx_idp_id
+    # The error carries its own trace_id and idp_id (set by `step/3`,
+    # `fetch_idp/3` or `unexpected_error/7`); the process context is never
+    # read here, so nothing can leak from a previous request.
+    idp_id = error.idp_id
 
     error =
-      %{
-        error
-        | idp_id: idp_id,
-          trace_id: error.trace_id || ctx_trace_id,
-          relay_state: error.relay_state || relay_state
-      }
+      %{error | relay_state: error.relay_state || relay_state}
       |> Error.new()
       |> Error.issue()
 
@@ -329,12 +349,13 @@ defmodule ExSaml.SPHandler do
     |> redirect(302, Error.append_error_id(target_url, error.trace_id))
   end
 
-  defp unexpected_error(conn, idp_id, relay_state, kind, value, stacktrace) do
+  defp unexpected_error(conn, idp_id, relay_state, trace_id, kind, value, stacktrace) do
     formatted = Exception.format(kind, value, stacktrace)
     Logger.error("[ExSaml] consume_signin_response crashed: #{formatted}")
 
     Debug.log(:unexpected_error, idp_id, %{
       idp_id: idp_id,
+      trace_id: trace_id,
       relay_state: relay_state,
       stacktrace: formatted
     })
@@ -349,7 +370,8 @@ defmodule ExSaml.SPHandler do
       Error.from_reason({:exception, message}, %{
         step: :unexpected,
         idp_id: idp_id,
-        relay_state: relay_state
+        relay_state: relay_state,
+        trace_id: trace_id
       })
 
     # Last resort: if issuing the error itself fails (cache down, session
