@@ -59,13 +59,14 @@ defmodule ExSaml.Assertion do
       {idp_id, _} = key ->
         fetch_assertion(code, key, idp_id, ctx)
 
-      # `take/1` already promoted the capture for this miss.
-      %{ex_saml_assertion_key: key, trace_id: trace_id} = payload ->
+      # Map minted by `ExSaml.SPHandler`; `trace_id` is optional so that codes
+      # written by an older node during a rolling deploy are still honoured.
+      %{ex_saml_assertion_key: {idp_id, _} = key} = payload ->
         fetch_assertion(
           code,
           key,
-          elem(key, 0),
-          Map.merge(ctx, %{trace_id: trace_id || ctx[:trace_id]}),
+          idp_id,
+          Map.merge(ctx, %{trace_id: payload[:trace_id] || ctx[:trace_id]}),
           payload
         )
 
