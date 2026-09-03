@@ -444,5 +444,49 @@ defmodule ExSaml.SPHandlerTest do
       assert %{saml_response: nil, error: %{reason: :bad_saml}} = Debug.failure(trace_id)
       assert Debug.saml_response(trace_id) == nil
     end
+
+    # Review point 1: "back" + re-submit of the IdP form replays the same
+    # RelayState, hence the same trace_id. The second failure must overwrite the
+    # first, never raise on the error store.
+    test "two failures under the same RelayState share the trace_id, the latest error wins" do
+      session = %{"relay_state" => "rs-same", "idp_id" => "idp-1"}
+
+      conn1 =
+        SPHandler.consume_signin_response(
+          acs_conn("idp-1", %{"RelayState" => "rs-same"}, session)
+        )
+
+      conn2 =
+        SPHandler.consume_signin_response(
+          acs_conn(
+            "idp-1",
+            %{"RelayState" => "rs-same", "SAMLResponse" => Base.encode64("<not-saml/>")},
+            session
+          )
+        )
+
+      assert conn1.status == 302 and conn2.status == 302
+      {_, id1} = error_id_from(conn1)
+      {_, id2} = error_id_from(conn2)
+      assert id1 == "rs-same" and id2 == "rs-same"
+
+      # Nobody consulted the first error: the second one replaced it.
+      assert {:ok, %Error{reason: :bad_saml, trace_id: "rs-same"}} = Error.get_from_id("rs-same")
+      assert {:error, %Error{reason: :error_not_found}} = Error.get_from_id("rs-same")
+    end
+
+    test "when even the error cannot be issued (cache down), the ACS fails closed with 403" do
+      Application.put_env(:ex_saml, :cache, ExSaml.RaisingCache)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = SPHandler.consume_signin_response(acs_conn("idp-1"))
+          assert conn.status == 403
+          assert conn.resp_body == "access_denied"
+          assert conn.halted
+        end)
+
+      assert log =~ "could not issue error_id"
+    end
   end
 end

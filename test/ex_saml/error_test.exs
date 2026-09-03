@@ -159,6 +159,14 @@ defmodule ExSaml.ErrorTest do
                Error.get_from_id("t1")
     end
 
+    test "issuing twice under the same trace_id overwrites instead of raising" do
+      Error.issue(Error.new(%{reason: :bad_recipient, trace_id: "rs-1"}))
+      Error.issue(Error.new(%{reason: :bad_audience, trace_id: "rs-1"}))
+
+      assert {:ok, %Error{reason: :bad_audience}} = Error.get_from_id("rs-1")
+      assert {:error, %Error{reason: :error_not_found}} = Error.get_from_id("rs-1")
+    end
+
     test "generates a trace_id when the error has none" do
       %Error{trace_id: trace_id} = Error.issue(Error.new(%{reason: :bad_recipient}))
       assert is_binary(trace_id)
