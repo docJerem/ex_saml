@@ -228,6 +228,35 @@ defmodule ExSaml.Error do
   def get_from_id(other),
     do: {:error, base(:error_not_found, %{step: :error_lookup, detail: inspect(other)})}
 
+  @session_text_limit 512
+
+  @doc """
+  The copy of the error written to the legacy `ex_saml_error` session entry:
+  without the trace, and with the free-text fields (`detail`, `saml_message`)
+  capped at #{@session_text_limit} bytes so the cookie session can never
+  overflow. The full error stays available through `get_from_id/1`.
+  """
+  @spec for_session(t()) :: t()
+  def for_session(%__MODULE__{} = error) do
+    %{
+      error
+      | trace: nil,
+        detail: truncate(error.detail),
+        saml_message: truncate(error.saml_message)
+    }
+  end
+
+  defp truncate(nil), do: nil
+
+  defp truncate(text) when byte_size(text) <= @session_text_limit, do: text
+  defp truncate(text) when is_binary(text), do: cut(text, @session_text_limit) <> "…"
+
+  # Cuts at a byte limit without splitting a UTF-8 character.
+  defp cut(text, limit) do
+    head = binary_part(text, 0, limit)
+    if String.valid?(head), do: head, else: cut(text, limit - 1)
+  end
+
   @doc "Appends `error_id=<trace_id>` to a URL, preserving any existing query string."
   @spec append_error_id(binary(), binary()) :: binary()
   def append_error_id(url, trace_id) do
