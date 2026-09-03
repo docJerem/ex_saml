@@ -433,6 +433,27 @@ defmodule ExSaml.SPHandlerTest do
       refute log =~ "[ExSaml.Debug]"
     end
 
+    test "an undecodable payload is :invalid_response, with the exception in the trace" do
+      Debug.enable(idp_id: "idp-1", log: :silent)
+
+      conn =
+        SPHandler.consume_signin_response(acs_conn("idp-1", %{"SAMLResponse" => "not base64!!"}))
+
+      {_, error_id} = error_id_from(conn)
+
+      assert {:ok, %Error{reason: :invalid_response, step: :decode, detail: detail, trace: trace}} =
+               Error.get_from_id(error_id)
+
+      # The exception class depends on the OTP release (:badarg wrapped one way
+      # or another); what matters is that the cause is kept.
+      assert is_binary(detail) and detail =~ "Error"
+
+      assert {:decode_payload_failed, %{payload_bytes: 12, error: formatted}} =
+               List.keyfind(trace, :decode_payload_failed, 0)
+
+      assert formatted =~ "** ("
+    end
+
     test "capture: :none leaves a failure record without the payload" do
       Debug.enable(idp_id: "idp-1", capture: :none, log: :silent)
       body = %{"SAMLResponse" => Base.encode64("<not-saml/>")}

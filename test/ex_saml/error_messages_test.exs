@@ -92,6 +92,16 @@ defmodule ExSaml.ErrorMessagesTest do
                ErrorMessages.get(:invalid_nameid_policy)
     end
 
+    test "an IdP status outside the catalogue falls back to unknown_error, logging the raw URI" do
+      log =
+        capture_log(fn ->
+          assert ErrorMessages.get({:saml_error, ~c"urn:example:custom", ~c"weird"}) ==
+                   @unknown_en
+        end)
+
+      assert log =~ "urn:example:custom"
+    end
+
     test "prefers the nested status recorded by Core.Sp" do
       Logger.metadata(ex_saml_saml_sub_status: :authn_failed)
       assert ErrorMessages.get({:saml_error, @responder, nil}) =~ "AuthnFailed"
