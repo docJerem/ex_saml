@@ -364,6 +364,14 @@ defmodule ExSaml.DebugTest do
                Debug.failures("acme")
     end
 
+    # Review point 9: the provisional capture must outlive the whole code
+    # exchange window (30 s code TTL + a late or retried consumer callback).
+    test "the default provisional TTL is 5 minutes" do
+      Debug.enable(idp_id: "acme")
+      Debug.stash_capture("acme", "t1", @payload)
+      assert StubCache.ttl({ExSaml.Debug, {:capture, "t1"}}) == :timer.minutes(5)
+    end
+
     test "capture: :always persists immediately with the full TTL" do
       Application.put_env(:ex_saml, :payload_ttl, 3333)
       Debug.enable(idp_id: "acme", capture: :always)
