@@ -19,6 +19,9 @@ the target URL with **exactly one** of these query parameters:
 | Success | `<target_url>?code=<authorization_code>` | `ExSaml.Assertion.get_from_code/1` |
 | Failure | `<target_url>?error_id=<trace_id>` | `ExSaml.Error.get_from_id/1` |
 
+A `target_url` that already carries a query string keeps it: `/cb?x=1`
+becomes `/cb?x=1&code=…` or `/cb?x=1&error_id=…` (`ExSaml.RouterUtil.append_query/3`).
+
 Both identifiers are random, **single-use** (the first lookup deletes the
 entry) and **expire**:
 
