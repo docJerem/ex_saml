@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Stacked PRs target feature branches; they need checks too.
+    branches: [main, "feature/**"]
 
 env:
   MIX_ENV: test

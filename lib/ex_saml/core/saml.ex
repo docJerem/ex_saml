@@ -36,8 +36,12 @@ defmodule ExSaml.Core.Saml do
     SpMetadata,
     StatusCode,
     Subject,
-    Util
+    Util,
+    ValidationContext
   }
+
+  # 5-second clock skew tolerance, shared by every time-based check.
+  @clock_skew_secs 5
 
   # ---------------------------------------------------------------------------
   # SAML namespace definitions
@@ -799,55 +803,129 @@ defmodule ExSaml.Core.Saml do
   end
 
   @doc """
-  Validates a SAML assertion XML element.
+  Validates a SAML assertion XML element against a `ValidationContext`.
 
-  Decodes the assertion and validates:
-  - Version is "2.0"
-  - Recipient matches the expected value
-  - Audience matches (if present in conditions)
-  - Assertion is not stale
+  Decodes the assertion and validates, in order: version, `Issuer` against the
+  IdP `entityID` (Core §2.2.3, Profiles §4.1.4.2), `Recipient`, `Audience`,
+  `SubjectConfirmation/@Method` is bearer (Profiles §4.1.4.2), `NotBefore` has
+  passed within the clock-skew tolerance, `SessionNotOnOrAfter` has not passed
+  (Core §2.7.2), and the assertion is not stale. Time conditions are evaluated
+  at `ctx.now` (see `ExSaml.Core.ValidationContext`).
+
+  Whether a failed check rejects or only logs is decided by
+  `ExSaml.Core.ValidationContext.verdict/3`.
   """
-  @spec validate_assertion(tuple(), String.t(), String.t(), keyword()) ::
+  @spec validate_assertion(tuple(), ValidationContext.t()) ::
           {:ok, Assertion.t()} | {:error, term()}
-  def validate_assertion(assertion_xml, recipient, audience, opts \\ []) do
+  def validate_assertion(assertion_xml, %ValidationContext{} = ctx) do
     case decode_assertion(assertion_xml) do
       {:error, reason} ->
         {:error, reason}
 
       {:ok, assertion} ->
-        now = now_secs(opts)
+        now = ValidationContext.now_secs(ctx)
 
         with :ok <- validate_version(assertion),
-             :ok <- validate_recipient(assertion, recipient),
-             :ok <- validate_audience(assertion, audience),
+             :ok <- validate_issuer(assertion, ctx),
+             :ok <- validate_recipient(assertion, ctx.recipient),
+             :ok <- validate_audience(assertion, ctx.audience),
+             :ok <- validate_subject_confirmation(assertion, ctx),
              :ok <- check_not_before(assertion, now),
+             :ok <- check_session_expiry(assertion, ctx, now),
              :ok <- check_stale(assertion, now) do
           {:ok, assertion}
         end
     end
   end
 
-  # Time conditions are evaluated against `opts[:now]` when given (a `DateTime`
-  # or an Erlang `{{y, m, d}, {h, mi, s}}` UTC datetime), so a captured response
-  # can be replayed as of the instant it was received. Defaults to the current
-  # UTC time.
-  defp now_secs(opts) do
-    case Keyword.get(opts, :now) do
-      nil ->
-        :erlang.localtime()
-        |> :erlang.localtime_to_universaltime()
-        |> :calendar.datetime_to_gregorian_seconds()
+  @doc """
+  Validates a SAML assertion with only a recipient and an audience.
 
-      %DateTime{} = dt ->
-        dt
-        |> DateTime.to_naive()
-        |> NaiveDateTime.to_erl()
-        |> :calendar.datetime_to_gregorian_seconds()
+  Kept for callers that have no `SpConfig` to build a context from; the checks
+  that need one are skipped, the rest behave identically. `opts` accepts `:now`.
+  """
+  @spec validate_assertion(tuple(), String.t(), String.t(), keyword()) ::
+          {:ok, Assertion.t()} | {:error, term()}
+  def validate_assertion(assertion_xml, recipient, audience, opts \\ []) do
+    validate_assertion(assertion_xml, %ValidationContext{
+      recipient: recipient,
+      audience: audience,
+      now: Keyword.get(opts, :now)
+    })
+  end
 
-      {{_, _, _}, {_, _, _}} = erl ->
-        :calendar.datetime_to_gregorian_seconds(erl)
+  # Identity of the speaker, before anything the speaker says is believed.
+  # Skipped when the IdP entityID is unknown, which is the case for callers
+  # that build a `%SpConfig{}` by hand.
+  defp validate_issuer(%Assertion{issuer: issuer}, %ValidationContext{} = ctx) do
+    expected = trimmed(ctx.idp_entity_id)
+
+    cond do
+      expected == "" ->
+        :ok
+
+      trimmed(issuer) == expected ->
+        :ok
+
+      true ->
+        ValidationContext.verdict(ctx, {:error, :bad_issuer},
+          expected: expected,
+          actual: trimmed(issuer)
+        )
     end
   end
+
+  # Profiles §4.1.4.2 requires the bearer method for web browser SSO. A missing
+  # `@Method` decodes to `:bearer` (see `subject_method_map/1`), so this only
+  # rejects a method the IdP stated and that is not bearer.
+  defp validate_subject_confirmation(%Assertion{subject: subject}, %ValidationContext{} = ctx) do
+    case subject.confirmation_method do
+      :bearer ->
+        :ok
+
+      method ->
+        ValidationContext.verdict(ctx, {:error, :bad_subject_confirmation}, method: method)
+    end
+  end
+
+  # Core §2.7.2. Distinct from `check_stale/2`: `SessionNotOnOrAfter` bounds the
+  # session the IdP established, not the validity of the assertion, and carries
+  # its own error so a consumer can tell "log in again" from "this assertion is
+  # too old".
+  defp check_session_expiry(%Assertion{authn: authn}, %ValidationContext{} = ctx, now_secs) do
+    case Keyword.get(authn, :session_not_on_or_after) do
+      nil -> :ok
+      stamp -> check_session_stamp(stamp, safe_to_secs(stamp), ctx, now_secs)
+    end
+  end
+
+  # Fail open on a value we cannot parse, whatever the policy says: the
+  # alternative is turning an IdP formatting bug into a rejected login on the
+  # day this check ships.
+  defp check_session_stamp(stamp, :error, ctx, _now_secs),
+    do: ValidationContext.warn(ctx, :session_expired, reason: :unparsable, actual: stamp)
+
+  defp check_session_stamp(stamp, {:ok, session_secs}, ctx, now_secs) do
+    # NotOnOrAfter is an exclusive bound.
+    if now_secs - @clock_skew_secs >= session_secs do
+      ValidationContext.verdict(ctx, {:error, :session_expired}, actual: stamp)
+    else
+      :ok
+    end
+  end
+
+  # `Util.saml_to_datetime/1` raises on a malformed timestamp. Callers that
+  # reach a value the SP never validated before need the failure as data.
+  defp safe_to_secs(stamp) do
+    {:ok, stamp |> Util.saml_to_datetime() |> :calendar.datetime_to_gregorian_seconds()}
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp trimmed(nil), do: ""
+  defp trimmed(value), do: value |> to_string() |> String.trim()
 
   defp validate_version(%Assertion{version: "2.0"}), do: :ok
   defp validate_version(_), do: {:error, :bad_version}
@@ -871,9 +949,6 @@ defmodule ExSaml.Core.Saml do
     end
   end
 
-  # 5-second clock skew tolerance for NotBefore validation
-  @not_before_skew_secs 5
-
   @doc false
   defp check_not_before(%Assertion{conditions: conditions}, now_secs) do
     case Keyword.get(conditions, :not_before) do
@@ -886,7 +961,7 @@ defmodule ExSaml.Core.Saml do
           |> Util.saml_to_datetime()
           |> :calendar.datetime_to_gregorian_seconds()
 
-        if now_secs >= nb_secs - @not_before_skew_secs do
+        if now_secs >= nb_secs - @clock_skew_secs do
           :ok
         else
           {:error, :too_early}
