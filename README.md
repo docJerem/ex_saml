@@ -168,6 +168,18 @@ including flows whose authorization code is never exchanged. Use
 `config :ex_saml, debug_cache:` to keep debug data out of your main cache.
 Details in the [guide](guides/error_handling_and_debugging.md#4-debug-mode).
 
+All of that is also reachable over HTTP, so support can diagnose a failed
+sign-in without a remote console. `ExSaml.DebugRouter` is a `Plug.Router` you
+mount behind your own admin pipeline — it does no authentication of its own and
+refuses to start without an explicit access rule:
+
+```elixir
+forward "/", ExSaml.DebugRouter, authorize: {MyApp.Saml.Debug, :authorize}
+```
+
+`authorize` may return `{:ok, [idp_id]}` to scope every route to one tenant's
+IdPs. See the [debug API guide](guides/debug_api.md).
+
 ### Dynamic Provider Loading
 
 For loading providers from a database at runtime:
@@ -204,6 +216,9 @@ This exposes:
 - `POST /sso/csp-report` - CSP violation report endpoint
 
 SP endpoints (metadata, ACS, SLO) are configured via `ExSaml.Helper` URI builders and handled by `ExSaml.SPHandler`.
+
+`ExSaml.DebugRouter` is mounted separately, behind your admin pipeline — see
+[Debug mode](#debug-mode).
 
 ## Usage
 

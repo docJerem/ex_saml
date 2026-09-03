@@ -1,8 +1,8 @@
 defmodule ExSaml.Debug.ViewTest do
   use ExUnit.Case, async: false
 
-  alias ExSaml.Core.Assertion, as: CoreAssertion
-  alias ExSaml.Core.Subject
+  alias ExSaml.Assertion
+  alias ExSaml.Subject
   alias ExSaml.Debug.View
   alias ExSaml.Error
   alias ExSaml.StubCache
@@ -188,11 +188,13 @@ defmodule ExSaml.Debug.ViewTest do
 
   describe "replay" do
     test "summarises a successful assertion without returning it whole" do
-      assertion = %CoreAssertion{
-        issuer: ~c"https://idp.example.com",
-        recipient: ~c"https://sp.example.com/consume",
+      # The shape `ExSaml.Debug.replay/2` actually returns: the public
+      # assertion, whose attributes are a map with string keys.
+      assertion = %Assertion{
+        issuer: "https://idp.example.com",
+        recipient: "https://sp.example.com/consume",
         subject: %Subject{name: "jane@corp.com"},
-        attributes: [email: ~c"jane@corp.com", groups: [~c"admins"]]
+        attributes: %{"email" => "jane@corp.com", "groups" => ["admins"]}
       }
 
       assert %{

@@ -3,14 +3,11 @@ defmodule ExSaml.Debug.View do
 
   # Turns what `ExSaml.Debug` returns into the maps the API sends.
   #
-  # Kept free of `Plug.Conn` so the shapes can be tested without HTTP, which is
-  # where the sharp edges are: `status/0` keys its maps by the scope *term*
-  # (`:global`, `{:idp, "acme"}`), captures are built with `Map.take/2` so their
-  # keys can be absent rather than nil, and a trace is a list of
-  # `{event, meta}` tuples whose meta carries fields that belong at the top of
-  # an event rather than inside its data.
+  # Free of `Plug.Conn`, so the shapes can be tested without HTTP — which is
+  # where the sharp edges are: scope-term keys, captures whose keys may be
+  # absent rather than nil, and traces as `{event, meta}` tuples.
 
-  alias ExSaml.Core.Assertion, as: CoreAssertion
+  alias ExSaml.Assertion
   alias ExSaml.Core.ValidationContext
   alias ExSaml.Debug
   alias ExSaml.Debug.JSON
@@ -139,7 +136,7 @@ defmodule ExSaml.Debug.View do
   end
 
   @doc "`POST /failures/:trace_id/replay`, when the response now validates."
-  def replay_ok(trace_id, evaluated_at, %CoreAssertion{} = assertion) do
+  def replay_ok(trace_id, evaluated_at, %Assertion{} = assertion) do
     %{
       "trace_id" => trace_id,
       "evaluated_at" => JSON.normalize(evaluated_at),
@@ -199,8 +196,8 @@ defmodule ExSaml.Debug.View do
     %{
       "idp_id" => id,
       "enabled" => enabled?,
-      # `Debug.settings/1` falls back to the global flag, so this is what
-      # applies to the IdP, not necessarily a flag of its own — hence the name.
+      # `Debug.settings/1` falls back to the global flag, so this is what applies
+      # to the IdP, not necessarily a flag of its own — hence the name.
       "effective_settings" => settings_json(settings),
       "expires_in_ms" => ttl
     }
@@ -222,17 +219,15 @@ defmodule ExSaml.Debug.View do
     }
   end
 
-  # The capture holds an error summary map, not an `%ExSaml.Error{}`, and
-  # `ErrorMessages.get/2` matches the bare reason atom against its catalogue.
+  # A capture holds an error summary map, not an `%ExSaml.Error{}`.
   defp message(%{reason: reason}, locale) when is_atom(reason),
     do: ErrorMessages.get(reason, locale)
 
   defp message(_error, _locale), do: nil
 
   defp event({name, meta}) do
-    # `:at`, `:node` and `:idp_id` are stamped on every event by `Debug.log/3`;
-    # they describe the event rather than the step, so they belong at the top.
-    # `:trace_id` is dropped: it is always the one in the URL.
+    # `Debug.log/3` stamps these on every event; they describe the event rather
+    # than the step. `:trace_id` is dropped, being the one in the URL.
     {lifted, data} = Map.split(meta, [:at, :node, :trace_id, :idp_id])
 
     %{
@@ -244,9 +239,8 @@ defmodule ExSaml.Debug.View do
     }
   end
 
-  # Summarised, never returned whole: the subject is masked the way the logs
-  # mask it, and only attribute names are listed.
-  defp assertion_summary(%CoreAssertion{} = assertion) do
+  # Summarised, never whole: masked subject, attribute names only.
+  defp assertion_summary(%Assertion{} = assertion) do
     %{
       "issuer" => JSON.normalize(assertion.issuer),
       "recipient" => JSON.normalize(assertion.recipient),
@@ -256,7 +250,6 @@ defmodule ExSaml.Debug.View do
   end
 
   defp masked_subject(%{name: name}) when is_binary(name) or is_list(name) do
-    # Reuses the library's own masking rather than restating it.
     %{name_id: JSON.normalize(name)} |> Debug.redact() |> Map.get(:name_id)
   end
 

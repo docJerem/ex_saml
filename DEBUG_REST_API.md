@@ -1,6 +1,42 @@
 # Proposal — REST API over the ex_saml debug and error tooling
 
-Status: **proposal**, not implemented. Companion to `guides/error_handling_and_debugging.md`.
+Status: **implemented** as `ExSaml.DebugRouter`. The living documentation is
+`guides/debug_api.md`; this file is kept as the design record.
+
+What the implementation does differently, and why:
+
+- **The config keys have no `_ms` suffix** (`:trace_ttl`, `:payload_ttl`,
+  `:provisional_ttl`). §3.1 below reads as if they did. The JSON *fields* do.
+- **`GET /debug` returns `idps` as an array of objects**, not three parallel
+  maps. `settings` keyed by name collides when an `idp_id` is literally
+  `"global"`, and `Debug.status/0`'s per-IdP `settings` falls back to the global
+  flag while its TTL does not — so the per-IdP one is `effective_settings`.
+- **A replay that still fails is a 200** with `"result": "error"`. `replay/2`
+  returns `{:error, %Error{}}` for two unrelated situations and the
+  discriminator is `step`: only `:replay` (could not be attempted) is a 4xx.
+- **`GET …/saml_response` has a third outcome**, 409 `payload_not_decodable`:
+  the payload is present but does not inflate or decode to text.
+- **`message` is a string** selected by `?locale=`, not an object keyed by
+  locale as §7's example implies.
+- **Redaction goes through `Debug.redact_trace/1`**, added for this: `redact/1`
+  takes a single map and returns a whole trace unredacted.
+- **`?redact=false` needs `allow_unredacted: true`**, separately from mounting:
+  an unredacted trace carries the authorization code, a live bearer credential.
+- **The router refuses to start without `:authorize`.** §6.1's "shipped
+  unauthenticated by design" plus a root-path startup warning is not
+  implementable — `init/1` cannot know its mount path — and the doc concedes it
+  protects nothing.
+- **Identifiers are syntax-checked**, since `trace_id` reaches a
+  `Content-Disposition` filename.
+- **Writes with no cache configured are 409**, not a silent node-local success.
+- **The encoder is hand-rolled**; only the decoder is detected. OTP 26 is in the
+  CI matrix, and `:json` renders `nil` as `"nil"`.
+- File paths follow the repo: `lib/ex_saml/routers/debug_router.ex`, plus
+  `lib/ex_saml/debug/{access,view,json,audit}.ex`.
+
+Original proposal follows.
+
+Companion to `guides/error_handling_and_debugging.md`.
 Everything below maps one-to-one onto functions that already exist in the library
 (`ExSaml.Debug`, `ExSaml.Error`, `ExSaml.ErrorMessages` for the per-failure message);
 the API adds transport, serialisation and access control, nothing else.
