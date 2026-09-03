@@ -117,7 +117,7 @@ defmodule ExSaml.IdpData do
     idp_data
   end
 
-  defp save_idp_config(idp_data, %{id: id, sp_id: sp_id} = opts_map)
+  defp save_idp_config(%IdpData{} = idp_data, %{id: id, sp_id: sp_id} = opts_map)
        when is_binary(id) and is_binary(sp_id) do
     %IdpData{
       idp_data
@@ -167,7 +167,7 @@ defmodule ExSaml.IdpData do
   end
 
   @spec update_core_configs(%IdpData{}, %{required(id()) => %SpData{}}, map()) :: %IdpData{}
-  defp update_core_configs(idp_data, service_providers, opts_map) do
+  defp update_core_configs(%IdpData{} = idp_data, service_providers, opts_map) do
     case Map.get(service_providers, idp_data.sp_id) do
       %SpData{} = sp ->
         idp_data = %IdpData{idp_data | idp_metadata: build_idp_metadata(idp_data, opts_map)}
@@ -286,7 +286,7 @@ defmodule ExSaml.IdpData do
   end
 
   @spec from_xml(binary, %IdpData{}) :: %IdpData{}
-  defp from_xml(metadata_xml, idp_data) when is_binary(metadata_xml) do
+  defp from_xml(metadata_xml, %IdpData{} = idp_data) when is_binary(metadata_xml) do
     xml_opts = [
       space: :normalize,
       namespace_conformant: true,
