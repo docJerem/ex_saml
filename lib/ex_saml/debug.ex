@@ -76,6 +76,15 @@ defmodule ExSaml.Debug do
   @runtime_env :debug_runtime
   @stash_key :ex_saml_debug_capture
 
+  # Zero-cost when off: `enable/1` sets a single "something is active" marker
+  # in the cache; while it is absent every scope check short-circuits without
+  # reading the per-scope flags. Reads of the marker and of the flags are
+  # memoised per process for a short window, so a request performs at most one
+  # cache read for the debug machinery, and a long-lived connection process
+  # one per second.
+  @memo_key :ex_saml_debug_memo
+  @memo_ttl_ms 1_000
+
   @capture_modes [:none, :on_error, :always]
   @log_modes [:steps, :full, :silent]
   @defaults %{capture: :on_error, log: :steps}
@@ -145,10 +154,15 @@ defmodule ExSaml.Debug do
     expires_at = DateTime.add(DateTime.utc_now(), ttl, :millisecond)
 
     case debug_cache() do
-      nil -> runtime_put(scope, {settings, expires_at})
-      cache -> cache.put(flag_key(scope), settings, ttl: ttl)
+      nil ->
+        runtime_put(scope, {settings, expires_at})
+
+      cache ->
+        cache.put(flag_key(scope), settings, ttl: ttl)
+        mark_active(cache, ttl)
     end
 
+    invalidate_memo()
     {:ok, %{scope: scope, expires_at: expires_at, settings: settings}}
   end
 
@@ -158,6 +172,7 @@ defmodule ExSaml.Debug do
     scope = scope(idp_id)
     runtime_delete(scope)
     if cache = debug_cache(), do: cache.delete(flag_key(scope))
+    invalidate_memo()
     :ok
   end
 
@@ -216,7 +231,8 @@ defmodule ExSaml.Debug do
   """
   @spec settings(binary() | nil) :: settings() | nil
   def settings(idp_id \\ nil) do
-    static_settings() || runtime_settings(idp_id) || cache_settings(idp_id)
+    static_settings() || runtime_settings(idp_id) ||
+      if active_hint?(), do: memo({:settings, idp_id}, fn -> cache_settings(idp_id) end)
   rescue
     _ -> nil
   catch
@@ -439,13 +455,20 @@ defmodule ExSaml.Debug do
   def promote(nil, _error, _captured_on), do: :ok
 
   def promote(trace_id, error, captured_on) do
-    summary = error_summary(error, trace_id)
-    stashed = Process.get(@stash_key)
+    # Nothing to promote unless debug is (or recently was) active: this check
+    # is memoised and keeps the failure path free of cache reads when off.
+    if active_hint?() or static_enabled?() or runtime_enabled?(),
+      do: do_promote(trace_id, error_summary(error, trace_id), captured_on),
+      else: :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
 
+  defp do_promote(trace_id, summary, captured_on) do
     existing =
-      read_capture(trace_id) ||
-        (stashed && stashed.trace_id == trace_id && stashed) ||
-        %{trace_id: trace_id, idp_id: summary[:idp_id], received_at: nil, saml_response: nil}
+      read_capture(trace_id) || stashed_capture(trace_id) || minimal_capture(trace_id, summary)
 
     idp_id = existing[:idp_id] || summary[:idp_id]
 
@@ -453,11 +476,17 @@ defmodule ExSaml.Debug do
       nil -> :ok
       %{capture: mode} -> finish_promotion(existing, mode, summary, idp_id, captured_on)
     end
-  rescue
-    _ -> :ok
-  catch
-    _, _ -> :ok
   end
+
+  defp stashed_capture(trace_id) do
+    case Process.get(@stash_key) do
+      %{trace_id: ^trace_id} = stashed -> stashed
+      _ -> nil
+    end
+  end
+
+  defp minimal_capture(trace_id, summary),
+    do: %{trace_id: trace_id, idp_id: summary[:idp_id], received_at: nil, saml_response: nil}
 
   defp finish_promotion(existing, mode, summary, idp_id, captured_on) do
     capture = Map.merge(existing, %{captured_on: captured_on, error: summary, idp_id: idp_id})
@@ -608,7 +637,10 @@ defmodule ExSaml.Debug do
   @doc "Returns `%{trace_id: _, idp_id: _}` linked to the code, or `nil`."
   @spec code_context(term()) :: %{trace_id: binary(), idp_id: binary() | nil} | nil
   def code_context(code) do
-    if cache = debug_cache(), do: cache.get(code_key(code))
+    # Links only exist while debug is (or recently was) active: skip the read
+    # otherwise so code exchanges cost nothing when debug is off.
+    cache = debug_cache()
+    if cache && active_hint?(), do: cache.get(code_key(code))
   rescue
     _ -> nil
   catch
@@ -618,6 +650,50 @@ defmodule ExSaml.Debug do
   # ---------------------------------------------------------------------------
   # Internals
   # ---------------------------------------------------------------------------
+
+  # -- zero-cost-when-off machinery --------------------------------------------
+
+  defp active_key, do: {__MODULE__, :active}
+
+  # The marker lives as long as the longest active flag.
+  defp mark_active(cache, ttl) do
+    remaining =
+      case cache.ttl(active_key()) do
+        r when is_integer(r) -> r
+        _ -> 0
+      end
+
+    cache.put(active_key(), true, ttl: max(ttl, remaining))
+  end
+
+  defp active_hint? do
+    case debug_cache() do
+      nil -> false
+      cache -> memo(:active, fn -> cache.get(active_key()) == true end)
+    end
+  end
+
+  defp memo(key, fun) do
+    now = System.monotonic_time(:millisecond)
+    memo = Process.get(@memo_key, %{})
+
+    case Map.get(memo, key) do
+      {value, at} when now - at < @memo_ttl_ms ->
+        value
+
+      _ ->
+        value = fun.()
+        Process.put(@memo_key, Map.put(memo, key, {value, now}))
+        value
+    end
+  end
+
+  @doc false
+  # Drops the per-process memo (called on enable/disable; public for tests).
+  def invalidate_memo do
+    Process.delete(@memo_key)
+    :ok
+  end
 
   defp scope(nil), do: :global
   defp scope(idp_id), do: {:idp, idp_id}
@@ -736,6 +812,11 @@ defmodule ExSaml.Debug do
     map = runtime_map()
     idp = if is_binary(idp_id), do: active(map, {:idp, idp_id})
     idp || active(map, :global)
+  end
+
+  # Any live node-local toggle (cache-less fallback), whatever its scope.
+  defp runtime_enabled? do
+    Enum.any?(runtime_map(), fn {_scope, {_settings, expires_at}} -> not expired?(expires_at) end)
   end
 
   defp active(map, scope) do
