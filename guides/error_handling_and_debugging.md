@@ -264,6 +264,11 @@ ExSaml.Debug.disable()
 - **Auto-expiry**: the flag always expires, default 1 hour.
 - Debug can never break a sign-in: every cache failure inside `ExSaml.Debug`
   degrades to "disabled".
+- Debug costs nothing when off: `enable/1` sets one "active" marker in the
+  cache, and while it is absent every check short-circuits. Reads of the marker
+  and of the flags are memoised per process for one second, so an ACS request
+  performs at most one debug-related cache read, and a long-lived connection
+  process one per second.
 - `config :ex_saml, debug: true` (or `[capture: …, log: …]`) is a static
   override for dev/test only. Without a configured cache, `enable/1` falls back
   to a node-local toggle with the same TTL.

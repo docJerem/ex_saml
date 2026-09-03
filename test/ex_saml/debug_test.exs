@@ -477,10 +477,68 @@ defmodule ExSaml.DebugTest do
     end
   end
 
+  # Review point 8: the debug machinery must cost nothing when debug is off.
+  describe "cost when debug is off" do
+    alias ExSaml.CountingCache
+
+    test "scope checks and code lookups do not touch the cache beyond one memoised marker read" do
+      CountingCache.install()
+
+      for _ <- 1..5 do
+        refute Debug.enabled?("acme")
+        refute Debug.enabled?()
+        assert Debug.log(:event, %{idp_id: "acme", trace_id: "t"}) == :ok
+        assert Debug.log(:event, "acme", fn -> flunk("not evaluated") end) == :ok
+        assert Debug.stash_capture("acme", "t", @payload) == :ok
+        assert Debug.code_context("code") == nil
+      end
+
+      assert CountingCache.debug_reads() == 1
+      assert [{:get, {ExSaml.Debug, :active}}] = CountingCache.calls()
+    end
+
+    test "enable/1 sets the active marker with the longest TTL and invalidates the memo" do
+      CountingCache.install()
+      refute Debug.enabled?("acme")
+
+      Debug.enable(idp_id: "acme", ttl: :timer.minutes(10))
+      assert Debug.enabled?("acme")
+      assert StubCache.ttl({ExSaml.Debug, :active}) == :timer.minutes(10)
+
+      Debug.enable(ttl: :timer.minutes(2))
+      assert StubCache.ttl({ExSaml.Debug, :active}) == :timer.minutes(10)
+
+      Debug.disable("acme")
+      Debug.disable()
+      refute Debug.enabled?("acme")
+    end
+
+    test "flag reads are memoised per process while debug is on" do
+      CountingCache.install()
+      Debug.enable(idp_id: "acme")
+      CountingCache.reset()
+
+      for _ <- 1..10, do: assert(Debug.enabled?("acme"))
+
+      # one marker read + one pair of flag reads (idp, then global fallback is
+      # not needed since the idp flag exists)
+      assert CountingCache.debug_reads() <= 3
+    end
+
+    test "static and runtime overrides never touch the cache" do
+      CountingCache.install()
+      Application.put_env(:ex_saml, :debug, true)
+      assert Debug.enabled?("acme")
+      assert CountingCache.debug_reads() == 0
+    end
+  end
+
   describe "code correlation" do
     test "link_code/3 and code_context/1" do
       assert Debug.code_context("code-1") == nil
 
+      # Links are only written (and read) while debug is active.
+      Debug.enable(idp_id: "acme")
       Debug.link_code("code-1", "t1", "acme")
       assert Debug.code_context("code-1") == %{trace_id: "t1", idp_id: "acme"}
 
