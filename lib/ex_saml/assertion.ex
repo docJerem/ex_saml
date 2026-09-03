@@ -97,7 +97,9 @@ defmodule ExSaml.Assertion do
 
     case AssertionCache.get(key) do
       %__MODULE__{attributes: attributes} = assertion ->
-        Debug.log(:code_exchanged, fn ->
+        # The consumer's process has no debug context: pass the IdP explicitly
+        # so per-IdP debug also records successful exchanges.
+        Debug.log(:code_exchanged, idp_id, fn ->
           Map.merge(base, %{assertion_found: true, assertion: assertion})
         end)
 
