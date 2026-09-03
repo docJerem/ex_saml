@@ -187,6 +187,31 @@ defmodule ExSaml.ErrorTest do
     end
   end
 
+  # Review point 4: the session copy must never push the cookie over 4 KB.
+  describe "for_session/1" do
+    test "drops the trace and caps the free-text fields at 512 bytes, keeping UTF-8 valid" do
+      long = String.duplicate("é", 1000)
+
+      error = %Error{
+        reason: :exception,
+        detail: long,
+        saml_message: long,
+        trace: [{:event, %{}}]
+      }
+
+      session = Error.for_session(error)
+
+      assert session.trace == nil
+      assert String.valid?(session.detail)
+      assert byte_size(session.detail) <= 512 + byte_size("…")
+      assert String.ends_with?(session.detail, "…")
+      assert byte_size(session.saml_message) <= 512 + byte_size("…")
+
+      short = %Error{reason: :bad_audience, detail: "short", saml_message: nil}
+      assert Error.for_session(short) == %{short | trace: nil}
+    end
+  end
+
   describe "append_error_id/2" do
     test "adds the query param to a bare URL" do
       assert Error.append_error_id("https://app.example.com/callback", "abc") ==

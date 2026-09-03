@@ -345,7 +345,7 @@ defmodule ExSaml.SPHandler do
     end)
 
     conn
-    |> put_session("ex_saml_error", {:error, %{error | trace: nil}})
+    |> put_session("ex_saml_error", {:error, Error.for_session(error)})
     |> redirect(302, Error.append_error_id(target_url, error.trace_id))
   end
 
