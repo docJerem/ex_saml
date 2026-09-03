@@ -533,6 +533,26 @@ defmodule ExSaml.SPHandlerTest do
       assert Debug.context() == {nil, nil}
     end
 
+    # Review point 8: with debug off, a whole ACS request (failure path, which
+    # exercises every instrumentation point) must not read the cache for the
+    # debug machinery beyond the single memoised "active" marker.
+    test "an ACS request with debug off performs a single debug-related cache read" do
+      ExSaml.CountingCache.install()
+      Debug.invalidate_memo()
+
+      conn = SPHandler.consume_signin_response(acs_conn("idp-1", %{"RelayState" => "rs-9"}))
+      assert conn.status == 302
+
+      assert ExSaml.CountingCache.debug_reads() == 1
+
+      debug_writes =
+        Enum.count(ExSaml.CountingCache.calls(), fn {op, key} ->
+          op in [:put, :put_new!] and match?({ExSaml.Debug, _}, key)
+        end)
+
+      assert debug_writes == 0
+    end
+
     test "when even the error cannot be issued (cache down), the ACS fails closed with 403" do
       Application.put_env(:ex_saml, :cache, ExSaml.RaisingCache)
 
