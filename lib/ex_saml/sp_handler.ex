@@ -189,7 +189,7 @@ defmodule ExSaml.SPHandler do
 
     context = %{idp_id: idp_id, relay_state: relay_state, trace_id: trace_id}
 
-    with {:ok, assertion} <- step(decoded, :decode, context),
+    with {:ok, %Assertion{} = assertion} <- step(decoded, :decode, context),
          {:ok, flow, nonce} <-
            step(
              validate_authresp(conn, idp_data, assertion, relay_state),

@@ -2,10 +2,10 @@ defmodule ExSaml.Debug.ViewTest do
   use ExUnit.Case, async: false
 
   alias ExSaml.Assertion
-  alias ExSaml.Subject
   alias ExSaml.Debug.View
   alias ExSaml.Error
   alias ExSaml.StubCache
+  alias ExSaml.Subject
 
   setup do
     StubCache.install()
