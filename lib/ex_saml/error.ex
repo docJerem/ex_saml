@@ -200,11 +200,15 @@ defmodule ExSaml.Error do
   @doc """
   Stores the error under its `trace_id` (single use) so the consumer can look
   it up with `get_from_id/1`. Generates a `trace_id` when the error has none.
+
+  A flow can fail more than once under the same `trace_id` — the browser
+  re-submitting the IdP form after "back" replays the same `RelayState` — so
+  the latest failure overwrites the previous one instead of raising.
   """
   @spec issue(t()) :: t()
   def issue(%__MODULE__{} = error) do
     error = %{error | trace_id: error.trace_id || State.gen_id()}
-    ErrorCache.put_new!(error.trace_id, error)
+    ErrorCache.put(error.trace_id, error)
     error
   end
 
