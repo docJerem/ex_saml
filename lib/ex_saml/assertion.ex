@@ -71,7 +71,9 @@ defmodule ExSaml.Assertion do
         )
 
       other ->
-        Logger.warning("[ExSaml] Authorization code not found or expired: #{inspect(code)}")
+        # A missed code is worthless as a credential, but keep logs consistent
+        # with the :steps redaction: only a prefix, enough to correlate.
+        Logger.warning("[ExSaml] Authorization code not found or expired: #{code_prefix(code)}")
 
         Debug.log(:code_exchanged, %{
           code: code,
@@ -120,6 +122,9 @@ defmodule ExSaml.Assertion do
         {:error, error}
     end
   end
+
+  defp code_prefix(code) when is_binary(code), do: String.slice(code, 0, 6) <> "…"
+  defp code_prefix(code), do: inspect(code)
 
   @doc false
   def from_core(%ExSaml.Core.Assertion{} = core) do
