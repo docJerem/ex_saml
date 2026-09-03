@@ -133,6 +133,15 @@ end
 See the [error handling and debugging guide](guides/error_handling_and_debugging.md)
 for the full contract, the catalogue of reasons and the 2.0 migration notes.
 
+### Response validation checks
+
+Beyond signatures, recipient, audience and time conditions, the ACS checks the
+`Issuer`, the `InResponseTo`, the `SessionNotOnOrAfter` and the bearer
+confirmation method of every response (SAML 2.0 Core / Profiles). Each check
+can reject or only log, per `config :ex_saml, enforced_response_checks:`;
+`[]` turns everything log-only. Details and defaults in the
+[guide](guides/error_handling_and_debugging.md#response-validation-checks).
+
 ### Debug mode
 
 `ExSaml.Debug` records a trace of the whole sign-in flow (AuthnRequest, IdP

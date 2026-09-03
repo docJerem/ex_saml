@@ -40,6 +40,8 @@ defmodule ExSaml.SPHandler do
     Subject
   }
 
+  alias ExSaml.Core.ValidationContext
+
   import ExSaml.Helper, only: [get_idp: 1]
 
   import ExSaml.RouterUtil,
@@ -401,6 +403,7 @@ defmodule ExSaml.SPHandler do
   defp flow_for(:invalid_target_url), do: :idp_initiated
   defp flow_for(:invalid_relay_state), do: :sp_initiated
   defp flow_for(:invalid_idp_id), do: :sp_initiated
+  defp flow_for(:bad_in_response_to), do: :sp_initiated
   defp flow_for(_), do: nil
 
   defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, ""), do: {"/", :default}
@@ -470,7 +473,7 @@ defmodule ExSaml.SPHandler do
   end
 
   # SP-initiated flow auth response.
-  def validate_authresp(conn, %IdpData{id: idp_id}, _assertion, relay_state) do
+  def validate_authresp(conn, %IdpData{id: idp_id}, assertion, relay_state) do
     cached = RelayStateCache.get(relay_state)
 
     {rs_in_session, rs_source} =
@@ -481,6 +484,9 @@ defmodule ExSaml.SPHandler do
     {saml_nonce_in_session, nonce_source} =
       with_source(get_session(conn, "saml_nonce"), cached[:saml_nonce])
 
+    {authn_request_id, request_id_source} =
+      with_source(get_session(conn, "authn_request_id"), cached[:authn_request_id])
+
     result =
       cond do
         rs_in_session == nil || rs_in_session != relay_state ->
@@ -488,6 +494,9 @@ defmodule ExSaml.SPHandler do
 
         idp_id_in_session == nil || idp_id_in_session != idp_id ->
           {:error, :invalid_idp_id}
+
+        not in_response_to_ok?(authn_request_id, assertion, idp_id) ->
+          {:error, :bad_in_response_to}
 
         true ->
           {:ok, :sp_initiated, saml_nonce_in_session}
@@ -505,11 +514,36 @@ defmodule ExSaml.SPHandler do
         idp_id_expected: idp_id_in_session,
         idp_id_source: idp_source,
         saml_nonce: saml_nonce_in_session,
-        saml_nonce_source: nonce_source
+        saml_nonce_source: nonce_source,
+        authn_request_id: authn_request_id,
+        authn_request_id_source: request_id_source,
+        in_response_to: assertion.subject.in_response_to
       }
     end)
 
     result
+  end
+
+  # Profiles §4.1.4.3. A stored `nil` means the relay-state entry predates
+  # AuthnRequest-id tracking — a rolling deploy, or a consumer driving
+  # `validate_authresp/4` without going through `ExSaml.AuthHandler` — so it
+  # skips rather than rejects. An empty `InResponseTo` is an unsolicited
+  # response and is handled by the IdP-initiated clause above, never here.
+  # The enforce / warn policy applies like for the other checks.
+  defp in_response_to_ok?(nil, _assertion, _idp_id), do: true
+  defp in_response_to_ok?(_expected, %{subject: %{in_response_to: ""}}, _idp_id), do: true
+
+  defp in_response_to_ok?(expected, %{subject: %{in_response_to: actual}}, idp_id) do
+    if to_string(expected) == to_string(actual) do
+      true
+    else
+      ctx = %ValidationContext{idp_id: idp_id}
+
+      ValidationContext.verdict(ctx, {:error, :bad_in_response_to},
+        expected: expected,
+        actual: actual
+      ) == :ok
+    end
   end
 
   defp with_source(nil, nil), do: {nil, :none}

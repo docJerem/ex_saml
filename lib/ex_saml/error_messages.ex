@@ -31,7 +31,7 @@ defmodule ExSaml.ErrorMessages do
   @legacy_errors ~w(assertion_cert_not_accepted missing_assertion_key cert_no_accepted invalid_nameid_policy invalid_nonce missing_assertion_signature missing_envelope_signature status_responder)a
 
   # Reasons produced by the library on the sign-in path.
-  @flow_errors ~w(bad_saml bad_assertion bad_version bad_recipient bad_audience too_early stale_assertion duplicate invalid_response missing_saml_response idp_initiated_not_allowed invalid_target_url invalid_relay_state invalid_idp_id unknown_idp exception access_denied authorization_code_not_found assertion_not_found error_not_found capture_not_found payload_not_captured unknown_error)a
+  @flow_errors ~w(bad_saml bad_assertion bad_version bad_recipient bad_audience too_early stale_assertion duplicate invalid_response missing_saml_response idp_initiated_not_allowed invalid_target_url invalid_relay_state invalid_idp_id unknown_idp exception access_denied authorization_code_not_found assertion_not_found error_not_found capture_not_found payload_not_captured bad_issuer bad_in_response_to bad_destination session_expired bad_subject_confirmation unknown_error)a
 
   @errors Enum.uniq(@legacy_errors ++ @flow_errors ++ @signature_errors)
 

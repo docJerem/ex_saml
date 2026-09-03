@@ -395,7 +395,12 @@ defmodule ExSaml.IdpData do
       metadata_uri: Helper.get_metadata_uri(idp_data.base_url, path_segment_idp_id),
       consume_uri: Helper.get_consume_uri(idp_data.base_url, path_segment_idp_id),
       logout_uri: Helper.get_logout_uri(idp_data.base_url, path_segment_idp_id),
-      entity_id: sp_entity_id
+      entity_id: sp_entity_id,
+      # Both come from data already on `%IdpData{}` — the entityID parsed out of
+      # the IdP metadata, and our own identifier for it — so no consumer has to
+      # supply anything new for the Issuer check to work.
+      idp_entity_id: idp_data.entity_id,
+      idp_id: idp_data.id
     }
   end
 
