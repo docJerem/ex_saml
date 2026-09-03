@@ -107,6 +107,23 @@ defmodule ExSaml.AssertionTest do
       assert [%{trace_id: "flow-2"}] = Debug.failures("acme")
     end
 
+    # Review point 10: the consumer's process has no debug context, so the
+    # success branch must pass the IdP explicitly for per-IdP debug to record it.
+    test "a successful exchange is traced under per-IdP debug from a context-less process" do
+      Debug.enable(idp_id: "acme")
+      key = {"acme", "user@example.com"}
+      AssertionCache.put(key, %Assertion{idp_id: "acme", attributes: %{"a" => "1"}}, ttl: 1000)
+      Debug.link_code("c-ok", "flow-ok", "acme")
+      AuthorizationCodeCache.put_new!("c-ok", %{ex_saml_assertion_key: key, trace_id: "flow-ok"})
+
+      assert Debug.context() == {nil, nil}
+
+      capture_log(fn -> assert {:ok, _} = Assertion.get_from_code("c-ok") end)
+
+      assert [%{assertion_found: true}] =
+               for({:code_exchanged, meta} <- Debug.trace("flow-ok"), do: meta)
+    end
+
     test "legacy shape is still reachable through Error.to_legacy/1" do
       {:error, error} = Assertion.get_from_code("nope")
       assert Error.to_legacy(error) == :unauthorized

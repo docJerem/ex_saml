@@ -744,17 +744,29 @@ defmodule ExSaml.Debug do
     |> Map.put_new(:scope, nil)
   end
 
+  # Mirrors `ExSaml.Core.Binding.decode_response/2`: DEFLATE when the encoding
+  # says so, otherwise try to inflate and fall back to the raw bytes.
   defp decode_payload(encoding, payload) do
+    raw = :base64.decode(payload)
+
     decoded =
       if encoding == IdpData.oasis_redirect_flow_uri(),
-        do: payload |> :base64.decode() |> :zlib.unzip(),
-        else: :base64.decode(payload)
+        do: :zlib.unzip(raw),
+        else: inflate_or_raw(raw)
 
     if String.valid?(decoded), do: decoded, else: nil
   rescue
     _ -> nil
   catch
     _, _ -> nil
+  end
+
+  defp inflate_or_raw(raw) do
+    :zlib.unzip(raw)
+  rescue
+    _ -> raw
+  catch
+    _, _ -> raw
   end
 
   defp debug_cache,
