@@ -270,7 +270,7 @@ ExSaml.Debug.disable()
 | Option | Values | Default | Effect |
 |---|---|---|---|
 | `capture:` | `:on_error`, `:always`, `:none` | `:on_error` | When to keep the raw `SAMLResponse` (see "Captures") |
-| `log:` | `:steps`, `:full`, `:silent` | `:steps` | `:steps` logs every event but **redacts** the payload, the assertion, the NameID and cache values from the log message (they stay in the trace). `:full` logs everything. `:silent` logs nothing and only feeds the trace and the capture |
+| `log:` | `:steps`, `:full`, `:silent` | `:steps` | `:steps` logs every event but **redacts** from the log message the payloads and assertions (PII) and the credentials — authorization code, nonces, user token — and **partially masks** NameIDs so a user stays recognisable (`jane@corp.com` → `j***@corp.com`, `employee-42` → `em***(11)`); nested values (`payload`, `value`, `relay_cache_entry`, …) follow the same rules. Everything stays intact in the trace. `:full` logs everything. `:silent` logs nothing and only feeds the trace and the capture |
 
 Configuration keys:
 
