@@ -53,6 +53,23 @@ defmodule ExSaml.AssertionTest do
       assert {:ok, {"acme", %{"a" => "1"}}} = Assertion.get_from_code("c-map")
     end
 
+    # Review point 3: a code minted by an older node (no trace_id key) during a
+    # rolling deploy must still be exchanged, not burnt as "not found".
+    test "accepts the map payload without a trace_id key" do
+      key = {"acme", "user@example.com"}
+      AssertionCache.put(key, %Assertion{idp_id: "acme", attributes: %{"a" => "2"}}, ttl: 1000)
+
+      AuthorizationCodeCache.put_new!("c-old", %{
+        ex_saml_assertion_key: key,
+        saml_nonce_candidate: "n"
+      })
+
+      assert {:ok, {"acme", %{"a" => "2"}}} = Assertion.get_from_code("c-old")
+
+      assert {:error, %Error{reason: :authorization_code_not_found}} =
+               Assertion.get_from_code("c-old")
+    end
+
     test "distinguishes a missing code from a missing assertion, traces both and promotes the capture" do
       Debug.enable(idp_id: "acme")
       Debug.link_code("c2", "flow-2", "acme")
