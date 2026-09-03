@@ -259,11 +259,8 @@ defmodule ExSaml.Error do
 
   @doc "Appends `error_id=<trace_id>` to a URL, preserving any existing query string."
   @spec append_error_id(binary(), binary()) :: binary()
-  def append_error_id(url, trace_id) do
-    uri = URI.parse(url)
-    query = (uri.query && URI.decode_query(uri.query)) || %{}
-    URI.to_string(%{uri | query: URI.encode_query(Map.put(query, "error_id", trace_id))})
-  end
+  def append_error_id(url, trace_id),
+    do: ExSaml.RouterUtil.append_query(url, "error_id", trace_id)
 
   # ---------------------------------------------------------------------------
   # Legacy

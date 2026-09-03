@@ -41,7 +41,9 @@ defmodule ExSaml.SPHandler do
   }
 
   import ExSaml.Helper, only: [get_idp: 1]
-  import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
+
+  import ExSaml.RouterUtil,
+    only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3, append_query: 3]
 
   @doc "Returns the SP metadata XML for the IdP in `conn.private[:ex_saml_idp]`."
   # metadata is generated from SP config by Helper.sp_metadata/1, not from user input.
@@ -304,7 +306,7 @@ defmodule ExSaml.SPHandler do
       }
     end)
 
-    redirect(conn, 302, "#{ctx.target_url}?code=#{code}")
+    redirect(conn, 302, append_query(ctx.target_url, "code", code))
   end
 
   # Failure path, symmetric with the success path: the error is stored under
