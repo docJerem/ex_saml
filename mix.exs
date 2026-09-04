@@ -11,6 +11,7 @@ defmodule ExSaml.MixProject do
       deps: deps(),
       description: description(),
       dialyzer: [ignore_warnings: ".dialyzer_ignore.exs"],
+      docs: docs(),
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       package: package(),
@@ -42,11 +43,29 @@ defmodule ExSaml.MixProject do
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false},
       {:gettext, ">= 0.26.0"},
+      # Only for decoding debug-API request bodies. Optional: the encoder is
+      # hand-rolled, OTP 27+ has `:json`, and under Phoenix `Plug.Parsers` has
+      # already decoded the body before the router sees it.
+      {:jason, "~> 1.0", optional: true},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:nebulex, "~> 2.6"},
       {:plug, "~> 1.18"},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
       {:sweet_xml, "~> 0.7"}
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "guides/error_handling_and_debugging.md",
+        "guides/debug_api.md",
+        "guides/migrating_from_samly.md"
+      ],
+      groups_for_extras: [Guides: ~r/guides\//]
     ]
   end
 

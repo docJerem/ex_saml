@@ -65,7 +65,7 @@ defmodule ExSaml.Debug do
 
   require Logger
 
-  alias ExSaml.{Error, Helper, IdpData}
+  alias ExSaml.{Error, ErrorCache, Helper, IdpData}
 
   @default_ttl :timer.hours(1)
   @default_trace_ttl :timer.minutes(15)
@@ -219,6 +219,64 @@ defmodule ExSaml.Debug do
   end
 
   @doc """
+  The activation state of a single scope, without scanning the cache keyspace.
+
+  `status/0` lists every IdP that has a flag, which costs a full `all/2` over
+  the configured cache. When the caller already knows which IdP it cares about
+  — an admin API scoped to one tenant, say — this answers the same question for
+  that scope alone.
+  """
+  @spec scope_status(binary() | nil) :: %{
+          enabled: boolean(),
+          static: boolean(),
+          settings: settings() | nil,
+          expires_in_ms: non_neg_integer() | nil
+        }
+  def scope_status(idp_id \\ nil) do
+    %{
+      enabled: enabled?(idp_id),
+      static: static_enabled?(),
+      settings: settings(idp_id),
+      expires_in_ms: remaining_ttl(scope(idp_id))
+    }
+  rescue
+    _ -> %{enabled: false, static: false, settings: nil, expires_in_ms: nil}
+  catch
+    _, _ -> %{enabled: false, static: false, settings: nil, expires_in_ms: nil}
+  end
+
+  @doc """
+  The retention settings currently in effect.
+
+  The values behind `config :ex_saml, :trace_ttl` and friends, resolved with
+  their defaults. Exposed so that anything reporting the debug configuration
+  reads it from here rather than restating the defaults and drifting from them.
+
+  `cache` is `nil` when no cache is configured, in which case debug mode
+  degrades to a node-local flag and nothing is recorded.
+  """
+  @spec config() :: %{
+          cache: module() | nil,
+          trace_ttl: non_neg_integer(),
+          payload_ttl: non_neg_integer(),
+          provisional_ttl: non_neg_integer(),
+          error_ttl: non_neg_integer(),
+          max_failures_per_idp: non_neg_integer(),
+          debug_log_level: Logger.level()
+        }
+  def config do
+    %{
+      cache: debug_cache(),
+      trace_ttl: trace_ttl(),
+      payload_ttl: payload_ttl(),
+      provisional_ttl: provisional_ttl(),
+      error_ttl: ErrorCache.ttl(),
+      max_failures_per_idp: max_failures(),
+      debug_log_level: log_level()
+    }
+  end
+
+  @doc """
   Whether debug mode is active, globally or for the given `idp_id`.
 
   Never raises: any cache failure yields `false` so the auth flow is never
@@ -348,6 +406,21 @@ defmodule ExSaml.Debug do
   end
 
   def redact(other), do: other
+
+  @doc """
+  Applies the `log: :steps` redaction rules to every event of a trace.
+
+  `redact/1` deliberately takes a single map, so mapping it over a trace is not
+  something a caller can be trusted to remember: `redact(trace)` on the list
+  returns it untouched. Anything exposing a trace outside the logs should go
+  through this, which also keeps the API and the `:steps` logs masking the same
+  keys the same way.
+  """
+  @spec redact_trace(trace() | nil) :: trace() | nil
+  def redact_trace(trace) when is_list(trace),
+    do: Enum.map(trace, fn {event, meta} -> {event, redact(meta)} end)
+
+  def redact_trace(other), do: other
 
   defp redact_nested(%{} = map) when not is_struct(map), do: redact(map)
   # `{idp_id, name_id}` assertion keys stored as bare values.
@@ -570,28 +643,28 @@ defmodule ExSaml.Debug do
   (`now: received_at`, so time conditions behave as they did) — or at any
   instant given with `now:`.
 
-  Returns `{:ok, %ExSaml.Core.Assertion{}}` when the response now validates, or
+  Returns `{:ok, %ExSaml.Assertion{}}` when the response now validates, or
   `{:error, %ExSaml.Error{}}` with the same vocabulary as the live flow.
   Signatures are checked against the current IdP metadata: a rotated
   certificate shows up as `:cert_not_accepted`.
   """
-  @spec replay(binary(), keyword()) :: {:ok, ExSaml.Core.Assertion.t()} | {:error, Error.t()}
+  @spec replay(binary(), keyword()) :: {:ok, ExSaml.Assertion.t()} | {:error, Error.t()}
   def replay(trace_id, opts \\ []) do
     with %{} = capture <- capture(trace_id) || {:error, :capture_not_found},
          payload when is_binary(payload) <-
-           capture.saml_response || {:error, :payload_not_captured},
+           capture[:saml_response] || {:error, :payload_not_captured},
          %IdpData{sp_config: sp_cfg} <-
-           Helper.get_idp(capture.idp_id) || {:error, {:unknown_idp, capture.idp_id}} do
+           Helper.get_idp(capture[:idp_id]) || {:error, {:unknown_idp, capture[:idp_id]}} do
       sp = %{
         sp_cfg
         | consume_uri: capture[:consume_uri] || sp_cfg.consume_uri,
           entity_id: capture[:entity_id] || sp_cfg.entity_id
       }
 
-      now = Keyword.get(opts, :now, capture.received_at)
-      put_context(capture.idp_id, nil)
+      now = Keyword.get(opts, :now, capture[:received_at])
+      put_context(capture[:idp_id], nil)
 
-      case Helper.decode_idp_auth_resp(sp, capture.saml_encoding, payload, now: now) do
+      case decode_for_replay(sp, capture, payload, now) do
         {:ok, assertion} ->
           {:ok, assertion}
 
@@ -604,10 +677,22 @@ defmodule ExSaml.Debug do
     end
   end
 
+  # A capture holds whatever the IdP posted, so decoding it can raise or throw —
+  # xmerl throws on malformed XML. `consume_signin_response/2` already wraps its
+  # decode for exactly this reason; replaying the same bytes has to as well, or
+  # a capture that is not well-formed takes the caller down with it.
+  defp decode_for_replay(sp, capture, payload, now) do
+    Helper.decode_idp_auth_resp(sp, capture[:saml_encoding], payload, now: now)
+  rescue
+    error -> {:error, {:exception, Exception.format(:error, error, __STACKTRACE__)}}
+  catch
+    kind, value -> {:error, {:exception, Exception.format(kind, value, __STACKTRACE__)}}
+  end
+
   defp replay_attrs(capture) do
     %{
-      trace_id: capture.trace_id,
-      idp_id: capture.idp_id,
+      trace_id: capture[:trace_id],
+      idp_id: capture[:idp_id],
       relay_state: capture[:relay_state],
       step: :decode
     }
