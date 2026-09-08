@@ -32,6 +32,7 @@ defmodule ExSaml.Metadata do
   See `ExSaml.Metadata.ValidationResult` for the shape of the returned struct.
   """
 
+  alias ExSaml.Core.Xml.SafeXml
   alias ExSaml.Metadata.ValidationResult
 
   require Record
@@ -100,26 +101,16 @@ defmodule ExSaml.Metadata do
   # ---------------------------------------------------------------------------
 
   defp parse(xml) do
-    charlist = :binary.bin_to_list(xml)
+    case SafeXml.scan(xml) do
+      {:ok, root} ->
+        if Record.is_record(root, :xmlElement) do
+          {:ok, root}
+        else
+          {:error, invalid_xml_violation()}
+        end
 
-    try do
-      {root, _rest} =
-        :xmerl_scan.string(
-          charlist,
-          namespace_conformant: true,
-          allow_entities: false,
-          quiet: true
-        )
-
-      if Record.is_record(root, :xmlElement) do
-        {:ok, root}
-      else
+      {:error, _} ->
         {:error, invalid_xml_violation()}
-      end
-    rescue
-      _ -> {:error, invalid_xml_violation()}
-    catch
-      _kind, _reason -> {:error, invalid_xml_violation()}
     end
   end
 

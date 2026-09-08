@@ -101,7 +101,7 @@ defmodule ExSaml.Core.BindingTest do
       [_, b64_payload] = Regex.run(~r/name="SAMLRequest" value="([^"]+)"/, html)
 
       # decode_response with nil encoding (non-deflate path) should parse it
-      decoded = Binding.decode_response("", b64_payload)
+      {:ok, decoded} = Binding.decode_response("", b64_payload)
       assert Record.is_record(decoded, :xmlElement)
       assert xmlElement(decoded, :name) == :AuthnRequest
     end
@@ -170,7 +170,7 @@ defmodule ExSaml.Core.BindingTest do
       compressed = :zlib.zip(xml_str)
       b64 = Base.encode64(compressed)
 
-      decoded =
+      {:ok, decoded} =
         Binding.decode_response(
           "urn:oasis:names:tc:SAML:2.0:bindings:URL-Encoding:DEFLATE",
           b64
@@ -184,7 +184,7 @@ defmodule ExSaml.Core.BindingTest do
       xml_str = "<Response>hello</Response>"
       b64 = Base.encode64(xml_str)
 
-      decoded = Binding.decode_response("", b64)
+      {:ok, decoded} = Binding.decode_response("", b64)
 
       assert Record.is_record(decoded, :xmlElement)
       assert xmlElement(decoded, :name) == :Response
@@ -234,7 +234,7 @@ defmodule ExSaml.Core.BindingTest do
         xml = "<Response><Name>" <> sample <> "</Name></Response>"
         b64 = Base.encode64(xml)
 
-        decoded = Binding.decode_response("", b64)
+        {:ok, decoded} = Binding.decode_response("", b64)
 
         assert Record.is_record(decoded, :xmlElement)
         assert xmlElement(decoded, :name) == :Response
@@ -248,7 +248,7 @@ defmodule ExSaml.Core.BindingTest do
         xml = "<Response label=\"" <> attr <> "\"><Name>x</Name></Response>"
         b64 = Base.encode64(xml)
 
-        decoded = Binding.decode_response("", b64)
+        {:ok, decoded} = Binding.decode_response("", b64)
 
         assert Record.is_record(decoded, :xmlElement)
         assert attribute_value(decoded, :label) == unquote(expected)
@@ -261,7 +261,7 @@ defmodule ExSaml.Core.BindingTest do
         xml = "<Response><Name>" <> sample <> "</Name></Response>"
         b64 = xml |> :zlib.zip() |> Base.encode64()
 
-        decoded =
+        {:ok, decoded} =
           Binding.decode_response(
             "urn:oasis:names:tc:SAML:2.0:bindings:URL-Encoding:DEFLATE",
             b64
@@ -283,7 +283,7 @@ defmodule ExSaml.Core.BindingTest do
           "</AttributeStatement></Assertion></samlp:Response>"
 
       b64 = Base.encode64(xml)
-      decoded = Binding.decode_response("", b64)
+      {:ok, decoded} = Binding.decode_response("", b64)
 
       assert Record.is_record(decoded, :xmlElement)
       assert xmlElement(decoded, :name) == :"samlp:Response"

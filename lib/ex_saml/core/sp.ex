@@ -32,7 +32,8 @@ defmodule ExSaml.Core.Sp do
     SpMetadata,
     Subject,
     Util,
-    Xml.Dsig
+    Xml.Dsig,
+    Xml.SafeXml
   }
 
   @type xml :: record(:xmlElement)
@@ -298,18 +299,13 @@ defmodule ExSaml.Core.Sp do
            [{:namespace, ns}]
          ) do
       [encrypted] when Record.is_record(encrypted, :xmlElement) ->
-        try do
-          decrypted = decrypt_assertion(encrypted, sp)
-          true = Record.is_record(decrypted, :xmlElement)
-
-          case :xmerl_xpath.string(~c"/saml:Assertion", decrypted, [{:namespace, ns}]) do
-            [a] -> {:ok, a}
-            _ -> {:error, :bad_assertion}
-          end
-        rescue
+        with {:ok, decrypted} <- decrypt_assertion(encrypted, sp),
+             true <- Record.is_record(decrypted, :xmlElement),
+             [assertion] <-
+               :xmerl_xpath.string(~c"/saml:Assertion", decrypted, [{:namespace, ns}]) do
+          {:ok, assertion}
+        else
           _ -> {:error, :bad_assertion}
-        catch
-          _, _ -> {:error, :bad_assertion}
         end
 
       _ ->
@@ -516,13 +512,11 @@ defmodule ExSaml.Core.Sp do
 
     assertion_xml = block_decrypt(to_string(algorithm), symmetric_key, cipher_value)
 
-    {assertion, _} =
-      :xmerl_scan.string(:binary.bin_to_list(assertion_xml),
-        namespace_conformant: true,
-        allow_entities: false
-      )
-
-    assertion
+    SafeXml.scan(assertion_xml)
+  rescue
+    _ -> {:error, :decrypt_failed}
+  catch
+    _, _ -> {:error, :decrypt_failed}
   end
 
   defp decrypt_key_info(encrypted_data, key) do
