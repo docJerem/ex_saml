@@ -99,6 +99,14 @@ defmodule ExSaml.UI do
     ]
   end
 
+  def labels(:"saml.shibboleth") do
+    [
+      entity_id: ["Entity ID"],
+      acs_url: ["Assertion Consumer Service URL"],
+      sp_metadata_url: ["SP Metadata URL"]
+    ]
+  end
+
   def labels(_provider_type) do
     [
       entity_id: ["Entity ID"],
