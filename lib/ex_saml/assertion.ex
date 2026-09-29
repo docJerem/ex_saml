@@ -80,6 +80,11 @@ defmodule ExSaml.Assertion do
       {k, []} ->
         {to_string(k), ""}
 
+      # Multi-valued attribute already decoded to binaries: keep the list as-is,
+      # otherwise `List.to_string/1` below would concatenate the values together.
+      {k, values} when is_list(values) and is_binary(hd(values)) ->
+        {to_string(k), values}
+
       {k, values} when is_list(values) and is_list(hd(values)) ->
         {to_string(k), Enum.map(values, fn v -> List.to_string(v) end)}
 
