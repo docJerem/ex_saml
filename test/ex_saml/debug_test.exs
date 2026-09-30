@@ -22,6 +22,7 @@ defmodule ExSaml.DebugTest do
       Application.delete_env(:ex_saml, :debug_log_level)
       Application.delete_env(:ex_saml, :max_failures_per_idp)
       Application.delete_env(:ex_saml, :max_captures_per_idp)
+      Application.delete_env(:ex_saml, :max_capture_bytes)
       Application.delete_env(:ex_saml, :payload_ttl)
       Application.delete_env(:ex_saml, :provisional_ttl)
 
@@ -531,6 +532,41 @@ defmodule ExSaml.DebugTest do
 
       assert Debug.capture("o1") == nil
       assert %{captured_on: :error} = Debug.capture("o3")
+    end
+
+    test "a payload above max_capture_bytes is dropped, its size kept" do
+      Application.put_env(:ex_saml, :max_capture_bytes, 4096)
+      Debug.enable(idp_id: "acme")
+      big = Base.encode64(:binary.copy("x", 8192))
+
+      Debug.stash_capture("acme", "big", %{@payload | saml_response: big})
+      Debug.stash_capture("acme", "small", @payload)
+
+      assert %{saml_response: nil, saml_response_dropped_bytes: dropped} = Debug.capture("big")
+      assert dropped == byte_size(big)
+      assert %{saml_response: small} = Debug.capture("small")
+      assert small == @payload.saml_response
+    end
+
+    test "the budget holds when a capture is promoted from the process stash" do
+      Application.put_env(:ex_saml, :max_capture_bytes, 4096)
+      Debug.enable(idp_id: "acme")
+      big = Base.encode64(:binary.copy("x", 8192))
+
+      Debug.stash_capture("acme", "t1", %{@payload | saml_response: big})
+      # Gone from the cache (expired, evicted): promotion falls back to the stash.
+      StubCache.delete({ExSaml.Debug, {:capture, "t1"}})
+      Debug.promote("t1", %{reason: :bad_saml, step: :decode, idp_id: "acme"})
+
+      assert %{captured_on: :error, saml_response: nil, saml_response_dropped_bytes: _} =
+               Debug.failure("t1")
+    end
+
+    test "a RelayState far above the 80 bytes of the spec is truncated" do
+      Debug.enable(idp_id: "acme")
+      Debug.stash_capture("acme", "t1", %{@payload | relay_state: :binary.copy("r", 10_000)})
+
+      assert byte_size(Debug.capture("t1").relay_state) == 1024
     end
   end
 

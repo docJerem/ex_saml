@@ -389,6 +389,24 @@ defmodule ExSaml.DebugRouterTest do
       assert error_code(call(:get, "/failures/t2/saml_response")) == "payload_not_captured"
     end
 
+    test "a payload dropped for its size says so, with the size" do
+      Application.put_env(:ex_saml, :max_capture_bytes, 4096)
+      on_exit(fn -> Application.delete_env(:ex_saml, :max_capture_bytes) end)
+
+      Debug.enable(idp_id: "acme", capture: :always, log: :silent)
+      Debug.invalidate_memo()
+      big = Base.encode64(:binary.copy("x", 8192))
+      Debug.stash_capture("acme", "t-big", %{@payload | saml_response: big})
+
+      conn = call(:get, "/failures/t-big/saml_response")
+      assert conn.status == 404
+      assert %{"code" => "payload_too_large", "bytes" => bytes} = json(conn)["error"]
+      assert bytes == byte_size(big)
+
+      assert %{"present" => false, "dropped_bytes" => ^bytes} =
+               json(call(:get, "/failures/t-big"))["saml_response"]
+    end
+
     test "a payload that cannot be decoded is distinct from one that is missing" do
       Debug.enable(idp_id: "acme", capture: :always, log: :silent)
       Debug.invalidate_memo()

@@ -345,9 +345,18 @@ defmodule ExSaml.DebugRouter do
   end
 
   defp payload(conn, capture) do
-    case capture[:saml_response] do
-      payload when is_binary(payload) ->
+    case capture do
+      %{saml_response: payload} when is_binary(payload) ->
         {:ok, payload}
+
+      %{saml_response_dropped_bytes: bytes} when is_integer(bytes) ->
+        send_error(
+          conn,
+          404,
+          :payload_too_large,
+          "This SAMLResponse was larger than max_capture_bytes and was not kept.",
+          %{"bytes" => bytes}
+        )
 
       _ ->
         send_error(

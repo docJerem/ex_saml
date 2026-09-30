@@ -78,6 +78,13 @@ defmodule ExSaml.Debug do
   # Bounded separately from the failures so a burst of responses can only
   # evict other pending captures, never a promoted failure.
   @default_max_captures 50
+  # Per-capture budget, measured as the stored term (`:erlang.external_size/1`).
+  # A real signed response is a few KB to a few tens of KB; above the budget
+  # the payload is dropped and its size kept.
+  @default_max_capture_bytes 256 * 1024
+  # RelayState is limited to 80 bytes by SAML Bindings §3.4.3 and is sender
+  # controlled: anything longer is not something a support engineer needs whole.
+  @max_relay_state_bytes 1024
   @default_log_level :warning
   @runtime_env :debug_runtime
   @stash_key :ex_saml_debug_capture
@@ -131,6 +138,7 @@ defmodule ExSaml.Debug do
             :pending | :always | :error | :authorization_code_not_found | :assertion_not_found,
           error: map() | nil,
           saml_response: binary() | nil,
+          saml_response_dropped_bytes: non_neg_integer() | nil,
           saml_encoding: binary() | nil,
           relay_state: binary() | nil,
           consume_uri: binary() | nil,
@@ -267,6 +275,7 @@ defmodule ExSaml.Debug do
           error_ttl: non_neg_integer(),
           max_failures_per_idp: non_neg_integer(),
           max_captures_per_idp: non_neg_integer(),
+          max_capture_bytes: non_neg_integer(),
           debug_log_level: Logger.level()
         }
   def config do
@@ -278,6 +287,7 @@ defmodule ExSaml.Debug do
       error_ttl: ErrorCache.ttl(),
       max_failures_per_idp: max_failures(),
       max_captures_per_idp: max_captures(),
+      max_capture_bytes: max_capture_bytes(),
       debug_log_level: log_level()
     }
   end
@@ -813,11 +823,36 @@ defmodule ExSaml.Debug do
   defp read_capture(_), do: nil
 
   defp write_capture(%{trace_id: trace_id} = capture, ttl) when is_binary(trace_id) do
-    if cache = debug_cache(), do: cache.put(capture_key(trace_id), capture, ttl: ttl)
+    if cache = debug_cache(),
+      do: cache.put(capture_key(trace_id), within_budget(capture), ttl: ttl)
+
     :ok
   end
 
   defp write_capture(_, _), do: :ok
+
+  # Applied on every write, so a capture promoted from the process stash is
+  # held to the same budget as one written at receipt.
+  defp within_budget(capture) do
+    capture = Map.update(capture, :relay_state, nil, &cap_binary(&1, @max_relay_state_bytes))
+
+    case capture do
+      %{saml_response: payload} when is_binary(payload) ->
+        if :erlang.external_size(capture) > max_capture_bytes(),
+          do:
+            %{capture | saml_response: nil}
+            |> Map.put(:saml_response_dropped_bytes, byte_size(payload)),
+          else: capture
+
+      _ ->
+        capture
+    end
+  end
+
+  defp cap_binary(value, max) when is_binary(value) and byte_size(value) > max,
+    do: binary_part(value, 0, max)
+
+  defp cap_binary(value, _max), do: value
 
   # Two indexes per IdP, newest first, each bounded, disjoint: a capture is
   # pending from receipt until it is promoted, then a failure. Together they
@@ -920,6 +955,9 @@ defmodule ExSaml.Debug do
 
   defp max_captures,
     do: Application.get_env(:ex_saml, :max_captures_per_idp, @default_max_captures)
+
+  defp max_capture_bytes,
+    do: Application.get_env(:ex_saml, :max_capture_bytes, @default_max_capture_bytes)
 
   defp log_level, do: Application.get_env(:ex_saml, :debug_log_level, @default_log_level)
 
