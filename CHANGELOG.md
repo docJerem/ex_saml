@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-09-30
+
 ### Fixed
 
 - Multi-valued SAML attributes are no longer concatenated into a single unseparated string. `ExSaml.Assertion.from_core/1` turned a `group` attribute carrying `Admins` / `Developers` / `Finance` into `"AdminsDevelopersFinance"`. The "list of values" clause in `stringize/1` guards on `is_list(hd(values))`, which only held while attribute values were charlists (Erlang esaml); since the `ExSaml.Core` fork (#8) the decoder emits binaries, so a list of values fell through to `List.to_string/1`, which concatenates iodata. Such attributes are now exposed as a list of strings, as `Core.Saml.decode_assertion/1` always decoded them (#64)
@@ -86,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unused routes and pre-session create pipeline from Samly
 - Hardcoded Nebulex cache — replaced with delegate pattern
 
+[1.1.3]: https://github.com/docJerem/ex_saml/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/docJerem/ex_saml/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/docJerem/ex_saml/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/docJerem/ex_saml/compare/v1.0.2...v1.1.0
