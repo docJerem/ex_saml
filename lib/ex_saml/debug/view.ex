@@ -272,6 +272,7 @@ defmodule ExSaml.Debug.View do
       "provisional_ttl_ms" => config.provisional_ttl,
       "error_ttl_ms" => config.error_ttl,
       "max_failures_per_idp" => config.max_failures_per_idp,
+      "max_captures_per_idp" => config.max_captures_per_idp,
       "debug_log_level" => JSON.normalize(config.debug_log_level),
       "enforced_response_checks" =>
         Enum.map(ValidationContext.enforced_checks(), &JSON.normalize/1)

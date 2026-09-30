@@ -21,6 +21,7 @@ defmodule ExSaml.DebugTest do
       Application.delete_env(:ex_saml, :debug_cache)
       Application.delete_env(:ex_saml, :debug_log_level)
       Application.delete_env(:ex_saml, :max_failures_per_idp)
+      Application.delete_env(:ex_saml, :max_captures_per_idp)
       Application.delete_env(:ex_saml, :payload_ttl)
       Application.delete_env(:ex_saml, :provisional_ttl)
 
@@ -463,6 +464,73 @@ defmodule ExSaml.DebugTest do
       assert ["t3", "t2"] = Enum.map(Debug.failures("acme"), & &1.trace_id)
       assert Debug.capture("t1") == nil
       assert Debug.failures("globex") == []
+    end
+  end
+
+  # The captures written at receipt are what an unauthenticated sender of
+  # SAMLResponses controls: they must be bounded before anyone knows whether
+  # the flow fails, not only once it has.
+  describe "capture bounds" do
+    setup do
+      Application.put_env(:ex_saml, :max_captures_per_idp, 2)
+      :ok
+    end
+
+    for mode <- [:on_error, :always] do
+      test "pending captures are capped per IdP, oldest evicted (capture: #{mode})" do
+        Debug.enable(idp_id: "acme", capture: unquote(mode))
+
+        for id <- ["t1", "t2", "t3"], do: Debug.stash_capture("acme", id, @payload)
+
+        assert Debug.capture("t1") == nil
+        assert %{trace_id: "t2"} = Debug.capture("t2")
+        assert %{trace_id: "t3"} = Debug.capture("t3")
+      end
+    end
+
+    test "the cap is per IdP" do
+      Debug.enable(idp_id: "acme")
+      Debug.enable(idp_id: "globex")
+
+      for id <- ["a1", "a2", "a3"], do: Debug.stash_capture("acme", id, @payload)
+      Debug.stash_capture("globex", "g1", @payload)
+
+      assert Debug.capture("a1") == nil
+      assert %{idp_id: "globex"} = Debug.capture("g1")
+    end
+
+    test "a burst of responses never evicts a promoted failure" do
+      Debug.enable(idp_id: "acme")
+
+      Debug.stash_capture("acme", "failed", @payload)
+      Debug.promote("failed", %{reason: :bad_digest, step: :decode, idp_id: "acme"})
+
+      for n <- 1..10, do: Debug.stash_capture("acme", "burst-#{n}", @payload)
+
+      assert %{captured_on: :error} = Debug.failure("failed")
+      assert ["failed"] = Enum.map(Debug.failures("acme"), & &1.trace_id)
+      assert Debug.capture("burst-8") == nil
+      assert %{} = Debug.capture("burst-10")
+    end
+
+    test "a promoted capture leaves the pending index" do
+      Debug.enable(idp_id: "acme")
+
+      Debug.stash_capture("acme", "t1", @payload)
+      Debug.promote("t1", %{reason: :bad_saml, step: :decode, idp_id: "acme"})
+
+      assert StubCache.get({ExSaml.Debug, {:pending, "acme"}}) == []
+    end
+
+    test "captures that cannot be attributed to an IdP are bounded too" do
+      Application.put_env(:ex_saml, :max_failures_per_idp, 2)
+      Debug.enable(log: :silent)
+
+      for id <- ["o1", "o2", "o3"],
+          do: Debug.promote(id, %{reason: :missing_saml_response, step: :acs})
+
+      assert Debug.capture("o1") == nil
+      assert %{captured_on: :error} = Debug.capture("o3")
     end
   end
 

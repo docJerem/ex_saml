@@ -74,6 +74,10 @@ defmodule ExSaml.Debug do
   # plus a late or retried consumer callback. Aligned on the relay-state TTL.
   @default_provisional_ttl :timer.minutes(5)
   @default_max_failures 20
+  # Captures written at receipt, before anyone knows whether the flow fails.
+  # Bounded separately from the failures so a burst of responses can only
+  # evict other pending captures, never a promoted failure.
+  @default_max_captures 50
   @default_log_level :warning
   @runtime_env :debug_runtime
   @stash_key :ex_saml_debug_capture
@@ -262,6 +266,7 @@ defmodule ExSaml.Debug do
           provisional_ttl: non_neg_integer(),
           error_ttl: non_neg_integer(),
           max_failures_per_idp: non_neg_integer(),
+          max_captures_per_idp: non_neg_integer(),
           debug_log_level: Logger.level()
         }
   def config do
@@ -272,6 +277,7 @@ defmodule ExSaml.Debug do
       provisional_ttl: provisional_ttl(),
       error_ttl: ErrorCache.ttl(),
       max_failures_per_idp: max_failures(),
+      max_captures_per_idp: max_captures(),
       debug_log_level: log_level()
     }
   end
@@ -506,9 +512,16 @@ defmodule ExSaml.Debug do
         Process.put(@stash_key, capture)
 
         case mode do
-          :always -> write_capture(%{capture | captured_on: :always}, payload_ttl())
-          :on_error -> write_capture(capture, provisional_ttl())
-          :none -> :ok
+          :always ->
+            write_capture(%{capture | captured_on: :always}, payload_ttl())
+            index_pending(idp_id, trace_id)
+
+          :on_error ->
+            write_capture(capture, provisional_ttl())
+            index_pending(idp_id, trace_id)
+
+          :none ->
+            :ok
         end
     end
   rescue
@@ -568,6 +581,7 @@ defmodule ExSaml.Debug do
     capture = if mode == :none, do: %{capture | saml_response: nil}, else: capture
 
     write_capture(capture, payload_ttl())
+    unindex_pending(existing[:idp_id], capture.trace_id)
     index_failure(idp_id, capture.trace_id)
     :ok
   end
@@ -789,6 +803,7 @@ defmodule ExSaml.Debug do
   defp trace_key(trace_id), do: {__MODULE__, {:trace, trace_id}}
   defp capture_key(trace_id), do: {__MODULE__, {:capture, trace_id}}
   defp failures_key(idp_id), do: {__MODULE__, {:failures, idp_id}}
+  defp pending_key(idp_id), do: {__MODULE__, {:pending, idp_id}}
   defp code_key(code), do: {__MODULE__, {:code, code}}
 
   defp read_capture(trace_id) when is_binary(trace_id) do
@@ -804,16 +819,53 @@ defmodule ExSaml.Debug do
 
   defp write_capture(_, _), do: :ok
 
-  # Newest first, bounded; evicted captures are deleted.
-  defp index_failure(nil, _trace_id), do: :ok
-
+  # Two indexes per IdP, newest first, each bounded, disjoint: a capture is
+  # pending from receipt until it is promoted, then a failure. Together they
+  # make the number of captures a function of the configuration:
+  # `IdPs with debug on × (max_captures_per_idp + max_failures_per_idp)`.
+  # A nil IdP (a flow that failed before IdP lookup) is a bucket like another,
+  # so an unattributable capture is bounded too.
+  #
+  # The indexes are read-modify-write on a shared cache, not atomic: two nodes
+  # indexing at the same instant can each drop the other's id. The capture
+  # then lives out its TTL unindexed. That loosens the bound by the number of
+  # concurrent writers, it does not remove it, and no lock is worth that.
   defp index_failure(idp_id, trace_id) do
+    push_index(failures_key(idp_id), trace_id, max_failures(), fn _capture -> true end)
+  end
+
+  # A pending id may have been promoted by another process (code exchange)
+  # without this index hearing of it yet: only a capture still pending is
+  # deleted on eviction, so a burst of responses never erases a failure.
+  defp index_pending(idp_id, trace_id) do
+    push_index(pending_key(idp_id), trace_id, max_captures(), fn capture ->
+      match?(%{captured_on: on} when on in [:pending, :always], capture)
+    end)
+  end
+
+  defp unindex_pending(idp_id, trace_id) do
     if cache = debug_cache() do
-      key = failures_key(idp_id)
+      key = pending_key(idp_id)
+
+      case cache.get(key) do
+        ids when is_list(ids) ->
+          if trace_id in ids, do: cache.put(key, List.delete(ids, trace_id), ttl: payload_ttl())
+
+        _ ->
+          :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp push_index(key, trace_id, max, evictable?) do
+    if cache = debug_cache() do
       current = (cache.get(key) || []) |> List.delete(trace_id)
-      {kept, evicted} = Enum.split([trace_id | current], max_failures())
-      Enum.each(evicted, &cache.delete(capture_key(&1)))
+      {kept, evicted} = Enum.split([trace_id | current], max)
       cache.put(key, kept, ttl: payload_ttl())
+
+      for id <- evicted, evictable?.(read_capture(id)), do: cache.delete(capture_key(id))
     end
 
     :ok
@@ -865,6 +917,9 @@ defmodule ExSaml.Debug do
 
   defp max_failures,
     do: Application.get_env(:ex_saml, :max_failures_per_idp, @default_max_failures)
+
+  defp max_captures,
+    do: Application.get_env(:ex_saml, :max_captures_per_idp, @default_max_captures)
 
   defp log_level, do: Application.get_env(:ex_saml, :debug_log_level, @default_log_level)
 
