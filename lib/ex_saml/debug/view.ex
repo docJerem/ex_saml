@@ -284,6 +284,10 @@ defmodule ExSaml.Debug.View do
       "max_failures_per_idp" => config.max_failures_per_idp,
       "max_captures_per_idp" => config.max_captures_per_idp,
       "max_capture_bytes" => config.max_capture_bytes,
+      "max_traces_per_idp" => config.max_traces_per_idp,
+      "max_trace_events" => config.max_trace_events,
+      "max_trace_bytes" => config.max_trace_bytes,
+      "max_event_bytes" => config.max_event_bytes,
       "debug_log_level" => JSON.normalize(config.debug_log_level),
       "enforced_response_checks" =>
         Enum.map(ValidationContext.enforced_checks(), &JSON.normalize/1)

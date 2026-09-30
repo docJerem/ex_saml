@@ -23,6 +23,10 @@ defmodule ExSaml.DebugTest do
       Application.delete_env(:ex_saml, :max_failures_per_idp)
       Application.delete_env(:ex_saml, :max_captures_per_idp)
       Application.delete_env(:ex_saml, :max_capture_bytes)
+
+      for key <- [:max_traces_per_idp, :max_trace_events, :max_trace_bytes, :max_event_bytes],
+          do: Application.delete_env(:ex_saml, key)
+
       Application.delete_env(:ex_saml, :payload_ttl)
       Application.delete_env(:ex_saml, :provisional_ttl)
 
@@ -567,6 +571,72 @@ defmodule ExSaml.DebugTest do
       Debug.stash_capture("acme", "t1", %{@payload | relay_state: :binary.copy("r", 10_000)})
 
       assert byte_size(Debug.capture("t1").relay_state) == 1024
+    end
+  end
+
+  describe "trace bounds" do
+    setup do
+      Debug.enable(idp_id: "acme", log: :silent)
+      :ok
+    end
+
+    defp event(trace_id, name, extra \\ %{}),
+      do: Debug.log(name, Map.merge(%{idp_id: "acme", trace_id: trace_id}, extra))
+
+    test "a trace stops at max_trace_events with one truncation marker" do
+      Application.put_env(:ex_saml, :max_trace_events, 4)
+
+      for n <- 1..10, do: event("t1", :"e#{n}")
+
+      assert [:e1, :e2, :e3, :trace_truncated] = Enum.map(Debug.trace("t1"), &elem(&1, 0))
+
+      assert {:trace_truncated, %{events: 3, first_dropped: :e4, idp_id: "acme"}} =
+               List.last(Debug.trace("t1"))
+    end
+
+    test "a trace stops at max_trace_bytes" do
+      Application.put_env(:ex_saml, :max_trace_bytes, 4096)
+
+      for n <- 1..10, do: event("t1", :"e#{n}", %{blob: :binary.copy("x", 1024)})
+
+      trace = Debug.trace("t1")
+      assert {:trace_truncated, _} = List.last(trace)
+      assert length(trace) < 10
+    end
+
+    test "an event above max_event_bytes is kept as a summary, its stamps intact" do
+      Application.put_env(:ex_saml, :max_event_bytes, 1024)
+
+      event("t1", :decode_result, %{assertion: %{attributes: :binary.copy("g", 4096)}})
+      event("t1", :small, %{ok: true})
+
+      assert [{:decode_result, cut}, {:small, %{ok: true}}] = Debug.trace("t1")
+
+      assert %{truncated: true, keys: [:assertion], idp_id: "acme", trace_id: "t1"} = cut
+      assert cut.bytes > 1024
+      refute Map.has_key?(cut, :assertion)
+    end
+
+    test "traces are capped per IdP, oldest evicted" do
+      Application.put_env(:ex_saml, :max_traces_per_idp, 2)
+
+      for id <- ["t1", "t2", "t3"], do: event(id, :authn_request)
+
+      assert Debug.trace("t1") == nil
+      assert [_] = Debug.trace("t2")
+      assert [_] = Debug.trace("t3")
+    end
+
+    test "the trace of a failed flow is not evicted by newer flows" do
+      Application.put_env(:ex_saml, :max_traces_per_idp, 2)
+
+      event("failed", :response_received)
+      Debug.promote("failed", %{reason: :bad_digest, step: :decode, idp_id: "acme"})
+
+      for n <- 1..5, do: event("t#{n}", :authn_request)
+
+      assert [{:response_received, _}] = Debug.trace("failed")
+      assert Debug.trace("t1") == nil
     end
   end
 
