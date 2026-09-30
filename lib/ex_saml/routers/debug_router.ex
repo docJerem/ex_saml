@@ -277,6 +277,7 @@ defmodule ExSaml.DebugRouter do
   defp do_enable(conn, idp_id) do
     with {:ok, params} <- params(conn),
          {:ok, settings} <- Access.settings_opts(params) |> bad_request(conn),
+         :ok <- require_idp_for_always(conn, idp_id, settings),
          {:ok, ttl} <- Access.ttl_ms(params, opts(conn)) |> bad_request(conn),
          :ok <- require_cache(conn) do
       enable_opts =
@@ -501,6 +502,21 @@ defmodule ExSaml.DebugRouter do
       )
     end
   end
+
+  # Every response of every IdP for payload_ttl: never over HTTP, the
+  # console's allow_global_always: is the deliberate way to do it.
+  defp require_idp_for_always(conn, nil, settings) do
+    if settings[:capture] == :always do
+      send_error(conn, 400, :invalid_parameter, "capture: always is only accepted per IdP.", %{
+        "parameter" => "capture",
+        "allowed" => ["none", "on_error"]
+      })
+    else
+      :ok
+    end
+  end
+
+  defp require_idp_for_always(_conn, _idp_id, _settings), do: :ok
 
   defp require_payload_download(conn) do
     if opts(conn).allow_payload_download do

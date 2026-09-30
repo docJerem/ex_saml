@@ -80,7 +80,7 @@ defmodule ExSaml.DebugTest do
       refute Debug.enabled?("globex")
       refute Debug.enabled?()
 
-      Debug.enable(capture: :always, log: :full)
+      Debug.enable(capture: :always, log: :full, allow_global_always: true)
       assert Debug.settings("acme") == %{capture: :on_error, log: :silent}
       assert Debug.settings("globex") == %{capture: :always, log: :full}
 
@@ -91,6 +91,16 @@ defmodule ExSaml.DebugTest do
     test "options are validated" do
       assert_raise ArgumentError, fn -> Debug.enable(capture: :sometimes) end
       assert_raise ArgumentError, fn -> Debug.enable(log: :loud) end
+    end
+
+    test "capture: :always is refused globally unless asked for explicitly" do
+      assert_raise ArgumentError, ~r/per IdP/, fn -> Debug.enable(capture: :always) end
+      refute Debug.enabled?()
+
+      assert {:ok, %{scope: {:idp, "acme"}}} = Debug.enable(idp_id: "acme", capture: :always)
+
+      assert {:ok, %{scope: :global, settings: %{capture: :always}}} =
+               Debug.enable(capture: :always, allow_global_always: true)
     end
 
     test "static config override, boolean or keyword" do

@@ -168,6 +168,11 @@ defmodule ExSaml.Debug do
     * `:ttl` — milliseconds before the flag expires (default: 1 hour)
     * `:capture` — `:on_error` (default), `:always` or `:none`
     * `:log` — `:steps` (default), `:full` or `:silent`
+    * `:allow_global_always` — permit `capture: :always` in the global scope.
+      Refused by default: it keeps every response of every IdP for
+      `payload_ttl`, and its use case is always one IdP.
+
+  Raises `ArgumentError` on an invalid option.
   """
   @spec enable(keyword()) ::
           {:ok, %{scope: scope(), expires_at: DateTime.t(), settings: settings()}}
@@ -175,6 +180,15 @@ defmodule ExSaml.Debug do
     scope = scope(Keyword.get(opts, :idp_id))
     ttl = Keyword.get(opts, :ttl, @default_ttl)
     settings = settings_from(opts)
+
+    if scope == :global and settings.capture == :always and
+         not Keyword.get(opts, :allow_global_always, false),
+       do:
+         raise(ArgumentError, """
+         capture: :always is per IdP: pass idp_id:, or allow_global_always: true \
+         to keep every response of every IdP.\
+         """)
+
     expires_at = DateTime.add(DateTime.utc_now(), ttl, :millisecond)
 
     case debug_cache() do

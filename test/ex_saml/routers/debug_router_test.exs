@@ -246,6 +246,16 @@ defmodule ExSaml.DebugRouterTest do
                "global_scope_forbidden"
     end
 
+    test "refuses capture: always globally, even where the global switch is allowed" do
+      Process.put(:authz, {:ok, :all})
+
+      conn = call(:put, "/debug", ~s({"capture":"always"}), allow_global_scope: true)
+
+      assert conn.status == 400
+      assert %{"code" => "invalid_parameter", "parameter" => "capture"} = json(conn)["error"]
+      refute Debug.enabled?()
+    end
+
     test "works for an unrestricted caller on a mount that allows it" do
       Process.put(:authz, {:ok, :all})
 
@@ -530,7 +540,7 @@ defmodule ExSaml.DebugRouterTest do
     test "a capture that cannot be attributed is invisible to a scoped caller" do
       # A flow that failed before IdP lookup has no IdP to attribute it to, so
       # it takes the global flag to record one at all.
-      Debug.enable(capture: :always, log: :silent)
+      Debug.enable(capture: :always, log: :silent, allow_global_always: true)
       Debug.invalidate_memo()
       Debug.stash_capture(nil, "t-orphan", @payload)
 
