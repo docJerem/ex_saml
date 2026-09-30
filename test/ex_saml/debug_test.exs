@@ -21,6 +21,13 @@ defmodule ExSaml.DebugTest do
       Application.delete_env(:ex_saml, :debug_cache)
       Application.delete_env(:ex_saml, :debug_log_level)
       Application.delete_env(:ex_saml, :max_failures_per_idp)
+      Application.delete_env(:ex_saml, :max_captures_per_idp)
+      Application.delete_env(:ex_saml, :max_capture_bytes)
+      Application.delete_env(:ex_saml, :max_debug_ttl)
+
+      for key <- [:max_traces_per_idp, :max_trace_events, :max_trace_bytes, :max_event_bytes],
+          do: Application.delete_env(:ex_saml, key)
+
       Application.delete_env(:ex_saml, :payload_ttl)
       Application.delete_env(:ex_saml, :provisional_ttl)
 
@@ -74,7 +81,7 @@ defmodule ExSaml.DebugTest do
       refute Debug.enabled?("globex")
       refute Debug.enabled?()
 
-      Debug.enable(capture: :always, log: :full)
+      Debug.enable(capture: :always, log: :full, allow_global_always: true)
       assert Debug.settings("acme") == %{capture: :on_error, log: :silent}
       assert Debug.settings("globex") == %{capture: :always, log: :full}
 
@@ -85,6 +92,37 @@ defmodule ExSaml.DebugTest do
     test "options are validated" do
       assert_raise ArgumentError, fn -> Debug.enable(capture: :sometimes) end
       assert_raise ArgumentError, fn -> Debug.enable(log: :loud) end
+    end
+
+    test "the TTL is capped by max_debug_ttl, from the console too" do
+      assert_raise ArgumentError, ~r/max_debug_ttl/, fn ->
+        Debug.enable(idp_id: "acme", ttl: :timer.hours(5))
+      end
+
+      assert_raise ArgumentError, fn -> Debug.enable(idp_id: "acme", ttl: 0) end
+      assert_raise ArgumentError, fn -> Debug.enable(idp_id: "acme", ttl: "1h") end
+      refute Debug.enabled?("acme")
+
+      Application.put_env(:ex_saml, :max_debug_ttl, :timer.minutes(10))
+      assert_raise ArgumentError, fn -> Debug.enable(idp_id: "acme", ttl: :timer.minutes(11)) end
+    end
+
+    test "the default TTL never exceeds max_debug_ttl" do
+      Application.put_env(:ex_saml, :max_debug_ttl, :timer.minutes(10))
+
+      {:ok, %{expires_at: expires_at}} = Debug.enable(idp_id: "acme")
+
+      assert DateTime.diff(expires_at, DateTime.utc_now(), :millisecond) <= :timer.minutes(10)
+    end
+
+    test "capture: :always is refused globally unless asked for explicitly" do
+      assert_raise ArgumentError, ~r/per IdP/, fn -> Debug.enable(capture: :always) end
+      refute Debug.enabled?()
+
+      assert {:ok, %{scope: {:idp, "acme"}}} = Debug.enable(idp_id: "acme", capture: :always)
+
+      assert {:ok, %{scope: :global, settings: %{capture: :always}}} =
+               Debug.enable(capture: :always, allow_global_always: true)
     end
 
     test "static config override, boolean or keyword" do
@@ -463,6 +501,174 @@ defmodule ExSaml.DebugTest do
       assert ["t3", "t2"] = Enum.map(Debug.failures("acme"), & &1.trace_id)
       assert Debug.capture("t1") == nil
       assert Debug.failures("globex") == []
+    end
+  end
+
+  # The captures written at receipt are what an unauthenticated sender of
+  # SAMLResponses controls: they must be bounded before anyone knows whether
+  # the flow fails, not only once it has.
+  describe "capture bounds" do
+    setup do
+      Application.put_env(:ex_saml, :max_captures_per_idp, 2)
+      :ok
+    end
+
+    for mode <- [:on_error, :always] do
+      test "pending captures are capped per IdP, oldest evicted (capture: #{mode})" do
+        Debug.enable(idp_id: "acme", capture: unquote(mode))
+
+        for id <- ["t1", "t2", "t3"], do: Debug.stash_capture("acme", id, @payload)
+
+        assert Debug.capture("t1") == nil
+        assert %{trace_id: "t2"} = Debug.capture("t2")
+        assert %{trace_id: "t3"} = Debug.capture("t3")
+      end
+    end
+
+    test "the cap is per IdP" do
+      Debug.enable(idp_id: "acme")
+      Debug.enable(idp_id: "globex")
+
+      for id <- ["a1", "a2", "a3"], do: Debug.stash_capture("acme", id, @payload)
+      Debug.stash_capture("globex", "g1", @payload)
+
+      assert Debug.capture("a1") == nil
+      assert %{idp_id: "globex"} = Debug.capture("g1")
+    end
+
+    test "a burst of responses never evicts a promoted failure" do
+      Debug.enable(idp_id: "acme")
+
+      Debug.stash_capture("acme", "failed", @payload)
+      Debug.promote("failed", %{reason: :bad_digest, step: :decode, idp_id: "acme"})
+
+      for n <- 1..10, do: Debug.stash_capture("acme", "burst-#{n}", @payload)
+
+      assert %{captured_on: :error} = Debug.failure("failed")
+      assert ["failed"] = Enum.map(Debug.failures("acme"), & &1.trace_id)
+      assert Debug.capture("burst-8") == nil
+      assert %{} = Debug.capture("burst-10")
+    end
+
+    test "a promoted capture leaves the pending index" do
+      Debug.enable(idp_id: "acme")
+
+      Debug.stash_capture("acme", "t1", @payload)
+      Debug.promote("t1", %{reason: :bad_saml, step: :decode, idp_id: "acme"})
+
+      assert StubCache.get({ExSaml.Debug, {:pending, "acme"}}) == []
+    end
+
+    test "captures that cannot be attributed to an IdP are bounded too" do
+      Application.put_env(:ex_saml, :max_failures_per_idp, 2)
+      Debug.enable(log: :silent)
+
+      for id <- ["o1", "o2", "o3"],
+          do: Debug.promote(id, %{reason: :missing_saml_response, step: :acs})
+
+      assert Debug.capture("o1") == nil
+      assert %{captured_on: :error} = Debug.capture("o3")
+    end
+
+    test "a payload above max_capture_bytes is dropped, its size kept" do
+      Application.put_env(:ex_saml, :max_capture_bytes, 4096)
+      Debug.enable(idp_id: "acme")
+      big = Base.encode64(:binary.copy("x", 8192))
+
+      Debug.stash_capture("acme", "big", %{@payload | saml_response: big})
+      Debug.stash_capture("acme", "small", @payload)
+
+      assert %{saml_response: nil, saml_response_dropped_bytes: dropped} = Debug.capture("big")
+      assert dropped == byte_size(big)
+      assert %{saml_response: small} = Debug.capture("small")
+      assert small == @payload.saml_response
+    end
+
+    test "the budget holds when a capture is promoted from the process stash" do
+      Application.put_env(:ex_saml, :max_capture_bytes, 4096)
+      Debug.enable(idp_id: "acme")
+      big = Base.encode64(:binary.copy("x", 8192))
+
+      Debug.stash_capture("acme", "t1", %{@payload | saml_response: big})
+      # Gone from the cache (expired, evicted): promotion falls back to the stash.
+      StubCache.delete({ExSaml.Debug, {:capture, "t1"}})
+      Debug.promote("t1", %{reason: :bad_saml, step: :decode, idp_id: "acme"})
+
+      assert %{captured_on: :error, saml_response: nil, saml_response_dropped_bytes: _} =
+               Debug.failure("t1")
+    end
+
+    test "a RelayState far above the 80 bytes of the spec is truncated" do
+      Debug.enable(idp_id: "acme")
+      Debug.stash_capture("acme", "t1", %{@payload | relay_state: :binary.copy("r", 10_000)})
+
+      assert byte_size(Debug.capture("t1").relay_state) == 1024
+    end
+  end
+
+  describe "trace bounds" do
+    setup do
+      Debug.enable(idp_id: "acme", log: :silent)
+      :ok
+    end
+
+    defp event(trace_id, name, extra \\ %{}),
+      do: Debug.log(name, Map.merge(%{idp_id: "acme", trace_id: trace_id}, extra))
+
+    test "a trace stops at max_trace_events with one truncation marker" do
+      Application.put_env(:ex_saml, :max_trace_events, 4)
+
+      for n <- 1..10, do: event("t1", :"e#{n}")
+
+      assert [:e1, :e2, :e3, :trace_truncated] = Enum.map(Debug.trace("t1"), &elem(&1, 0))
+
+      assert {:trace_truncated, %{events: 3, first_dropped: :e4, idp_id: "acme"}} =
+               List.last(Debug.trace("t1"))
+    end
+
+    test "a trace stops at max_trace_bytes" do
+      Application.put_env(:ex_saml, :max_trace_bytes, 4096)
+
+      for n <- 1..10, do: event("t1", :"e#{n}", %{blob: :binary.copy("x", 1024)})
+
+      trace = Debug.trace("t1")
+      assert {:trace_truncated, _} = List.last(trace)
+      assert length(trace) < 10
+    end
+
+    test "an event above max_event_bytes is kept as a summary, its stamps intact" do
+      Application.put_env(:ex_saml, :max_event_bytes, 1024)
+
+      event("t1", :decode_result, %{assertion: %{attributes: :binary.copy("g", 4096)}})
+      event("t1", :small, %{ok: true})
+
+      assert [{:decode_result, cut}, {:small, %{ok: true}}] = Debug.trace("t1")
+
+      assert %{truncated: true, keys: [:assertion], idp_id: "acme", trace_id: "t1"} = cut
+      assert cut.bytes > 1024
+      refute Map.has_key?(cut, :assertion)
+    end
+
+    test "traces are capped per IdP, oldest evicted" do
+      Application.put_env(:ex_saml, :max_traces_per_idp, 2)
+
+      for id <- ["t1", "t2", "t3"], do: event(id, :authn_request)
+
+      assert Debug.trace("t1") == nil
+      assert [_] = Debug.trace("t2")
+      assert [_] = Debug.trace("t3")
+    end
+
+    test "the trace of a failed flow is not evicted by newer flows" do
+      Application.put_env(:ex_saml, :max_traces_per_idp, 2)
+
+      event("failed", :response_received)
+      Debug.promote("failed", %{reason: :bad_digest, step: :decode, idp_id: "acme"})
+
+      for n <- 1..5, do: event("t#{n}", :authn_request)
+
+      assert [{:response_received, _}] = Debug.trace("failed")
+      assert Debug.trace("t1") == nil
     end
   end
 

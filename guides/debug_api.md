@@ -64,7 +64,7 @@ state deliberately that the pipeline in front is the only control.
 | `:allow_unredacted` | `false` | permit `?redact=false` on a trace |
 | `:allow_payload_download` | `true` | permit reading a captured `SAMLResponse` |
 | `:allow_node_local` | `false` | permit writes with no cache configured |
-| `:max_debug_ttl_ms` | 4 h | cap on `ttl_ms` |
+| `:max_debug_ttl_ms` | 4 h | cap on `ttl_ms`, never above the library's `max_debug_ttl` |
 | `:default_locale` | `"en"` | for `GET /failures/:trace_id` |
 | `:audit_level` | `:info` | |
 | `:audit_sink` | `nil` | `{Mod, :fun}` called with the audit entry |
@@ -92,6 +92,9 @@ so `{Mod, :fun}` tuples work everywhere while anonymous functions need
 
 `PUT` takes `{"ttl_ms": 1800000, "capture": "always", "log": "steps"}`, all
 optional. `capture` and `log` are parsed against closed catalogues.
+`"capture": "always"` is accepted on `PUT /debug/idps/:idp_id` only: on the
+global `PUT /debug` it is a 400, since it would keep every response of every
+IdP for an hour.
 
 ## A support session
 
@@ -153,7 +156,9 @@ unset. Writes are refused with 409 `cache_not_configured` in that state, because
 `enable/1` would otherwise arm a single node behind your load balancer.
 
 **404 and 409 on a payload are different problems.** `payload_not_captured`
-means the flow was recorded with `capture: :none`; `payload_not_decodable` means
+means the flow was recorded with `capture: :none`; `payload_too_large` means it
+went over `max_capture_bytes` and only its size was kept (`bytes` in the error,
+`dropped_bytes` on `GET /failures/:trace_id`); `payload_not_decodable` means
 the bytes are there but do not inflate or decode to text — fetch them with
 `?format=json` and hand the base64 to the IdP vendor.
 

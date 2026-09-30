@@ -59,8 +59,18 @@ defmodule ExSaml.Debug do
   Traces and captures hold the raw `SAMLResponse`, the NameID and the assertion
   attributes in the cache; `log: :full` also writes them to the logs. Keep the
   TTL short, scope to a single `idp_id`, and consider a dedicated
-  `debug_cache:` in production. At most `max_failures_per_idp` (default 20)
-  captures are kept per IdP.
+  `debug_cache:` in production.
+
+  ## Memory bounds
+
+  Whoever posts to the public ACS decides how many flows debug records, so
+  everything it stores is bounded per IdP by count and by size:
+  `max_captures_per_idp` (50) pending and `max_failures_per_idp` (20) failed
+  captures of at most `max_capture_bytes` (256 KB), `max_traces_per_idp` (100)
+  traces of at most `max_trace_events` (64) events, `max_trace_bytes` (128 KB)
+  and `max_event_bytes` (16 KB) per event. The flag itself lives at most
+  `max_debug_ttl` (4 h). See the "Memory bounds" section of the error handling
+  guide for the resulting ceiling and the recommended production cache.
   """
 
   require Logger
@@ -68,12 +78,37 @@ defmodule ExSaml.Debug do
   alias ExSaml.{Error, ErrorCache, Helper, IdpData}
 
   @default_ttl :timer.hours(1)
+  # Everything recorded while debug is on is bounded by the flag's lifetime,
+  # and the console is where a long TTL is typed: cap it here, not only in the
+  # debug API.
+  @default_max_debug_ttl :timer.hours(4)
   @default_trace_ttl :timer.minutes(15)
   @default_payload_ttl :timer.hours(1)
   # Must outlive the whole exchange window: the authorization code TTL (30 s)
   # plus a late or retried consumer callback. Aligned on the relay-state TTL.
   @default_provisional_ttl :timer.minutes(5)
   @default_max_failures 20
+  # Captures written at receipt, before anyone knows whether the flow fails.
+  # Bounded separately from the failures so a burst of responses can only
+  # evict other pending captures, never a promoted failure.
+  @default_max_captures 50
+  # Per-capture budget, measured as the stored term (`:erlang.external_size/1`).
+  # A real signed response is a few KB to a few tens of KB; above the budget
+  # the payload is dropped and its size kept.
+  @default_max_capture_bytes 256 * 1024
+  # RelayState is limited to 80 bytes by SAML Bindings §3.4.3 and is sender
+  # controlled: anything longer is not something a support engineer needs whole.
+  @max_relay_state_bytes 1024
+  # Traces: one per flow, including an AuthnRequest that never comes back, so
+  # also something a sender controls. Bounded in count per IdP, in events and
+  # bytes per trace, and in bytes per event.
+  @default_max_traces 100
+  @default_max_trace_events 64
+  @default_max_trace_bytes 128 * 1024
+  @default_max_event_bytes 16 * 1024
+  # Kept on an event cut for size: they say where and when it happened, and
+  # `idp_id` is what attributes a trace to a tenant.
+  @stamp_keys [:idp_id, :trace_id, :node, :at]
   @default_log_level :warning
   @runtime_env :debug_runtime
   @stash_key :ex_saml_debug_capture
@@ -127,6 +162,7 @@ defmodule ExSaml.Debug do
             :pending | :always | :error | :authorization_code_not_found | :assertion_not_found,
           error: map() | nil,
           saml_response: binary() | nil,
+          saml_response_dropped_bytes: non_neg_integer() | nil,
           saml_encoding: binary() | nil,
           relay_state: binary() | nil,
           consume_uri: binary() | nil,
@@ -143,16 +179,39 @@ defmodule ExSaml.Debug do
   Options:
 
     * `:idp_id` — restrict to one IdP (default: global)
-    * `:ttl` — milliseconds before the flag expires (default: 1 hour)
+    * `:ttl` — milliseconds before the flag expires (default: 1 hour, or
+      `max_debug_ttl` when lower). Above `config :ex_saml, max_debug_ttl:`
+      (default 4 hours) it is refused.
     * `:capture` — `:on_error` (default), `:always` or `:none`
     * `:log` — `:steps` (default), `:full` or `:silent`
+    * `:allow_global_always` — permit `capture: :always` in the global scope.
+      Refused by default: it keeps every response of every IdP for
+      `payload_ttl`, and its use case is always one IdP.
+
+  Raises `ArgumentError` on an invalid option.
   """
   @spec enable(keyword()) ::
           {:ok, %{scope: scope(), expires_at: DateTime.t(), settings: settings()}}
   def enable(opts \\ []) do
     scope = scope(Keyword.get(opts, :idp_id))
-    ttl = Keyword.get(opts, :ttl, @default_ttl)
+    ttl = Keyword.get(opts, :ttl, min(@default_ttl, max_debug_ttl()))
     settings = settings_from(opts)
+
+    unless is_integer(ttl) and ttl > 0 and ttl <= max_debug_ttl(),
+      do:
+        raise(ArgumentError, """
+        ttl: must be a positive number of milliseconds, at most \
+        #{max_debug_ttl()} (config :ex_saml, max_debug_ttl:), got: #{inspect(ttl)}\
+        """)
+
+    if scope == :global and settings.capture == :always and
+         not Keyword.get(opts, :allow_global_always, false),
+       do:
+         raise(ArgumentError, """
+         capture: :always is per IdP: pass idp_id:, or allow_global_always: true \
+         to keep every response of every IdP.\
+         """)
+
     expires_at = DateTime.add(DateTime.utc_now(), ttl, :millisecond)
 
     case debug_cache() do
@@ -261,7 +320,14 @@ defmodule ExSaml.Debug do
           payload_ttl: non_neg_integer(),
           provisional_ttl: non_neg_integer(),
           error_ttl: non_neg_integer(),
+          max_debug_ttl: pos_integer(),
           max_failures_per_idp: non_neg_integer(),
+          max_captures_per_idp: non_neg_integer(),
+          max_capture_bytes: non_neg_integer(),
+          max_traces_per_idp: non_neg_integer(),
+          max_trace_events: non_neg_integer(),
+          max_trace_bytes: non_neg_integer(),
+          max_event_bytes: non_neg_integer(),
           debug_log_level: Logger.level()
         }
   def config do
@@ -271,7 +337,14 @@ defmodule ExSaml.Debug do
       payload_ttl: payload_ttl(),
       provisional_ttl: provisional_ttl(),
       error_ttl: ErrorCache.ttl(),
+      max_debug_ttl: max_debug_ttl(),
       max_failures_per_idp: max_failures(),
+      max_captures_per_idp: max_captures(),
+      max_capture_bytes: max_capture_bytes(),
+      max_traces_per_idp: max_traces(),
+      max_trace_events: max_trace_events(),
+      max_trace_bytes: max_trace_bytes(),
+      max_event_bytes: max_event_bytes(),
       debug_log_level: log_level()
     }
   end
@@ -441,7 +514,14 @@ defmodule ExSaml.Debug do
 
   defp mask_name_id(other), do: other
 
-  @doc "Appends `{event, meta}` to the trace identified by `trace_id`."
+  @doc """
+  Appends `{event, meta}` to the trace identified by `trace_id`.
+
+  Bounded: an event above `max_event_bytes` is stored as a summary (its size
+  and keys); a trace stops at `max_trace_events` events or `max_trace_bytes`,
+  with a final `:trace_truncated` event, after which nothing more is written;
+  at most `max_traces_per_idp` traces are kept per IdP.
+  """
   @spec record(binary(), event(), map()) :: :ok
   def record(trace_id, event, meta) when is_binary(trace_id) and trace_id != "" do
     case debug_cache() do
@@ -450,8 +530,17 @@ defmodule ExSaml.Debug do
 
       cache ->
         key = trace_key(trace_id)
-        trace = cache.get(key) || []
-        cache.put(key, trace ++ [{event, meta}], ttl: trace_ttl())
+        entry = {event, bound_event(meta)}
+
+        case cache.get(key) do
+          trace when is_list(trace) and trace != [] ->
+            append(cache, key, trace, entry)
+
+          _ ->
+            cache.put(key, [entry], ttl: trace_ttl())
+            index_trace(meta[:idp_id], trace_id)
+        end
+
         :ok
     end
   rescue
@@ -461,6 +550,37 @@ defmodule ExSaml.Debug do
   end
 
   def record(_, _, _), do: :ok
+
+  defp append(cache, key, trace, {event, meta} = entry) do
+    cond do
+      match?({:trace_truncated, _}, List.last(trace)) ->
+        :ok
+
+      length(trace) + 1 >= max_trace_events() or
+          :erlang.external_size([entry | trace]) > max_trace_bytes() ->
+        marker =
+          meta
+          |> Map.take(@stamp_keys)
+          |> Map.merge(%{events: length(trace), first_dropped: event})
+
+        cache.put(key, trace ++ [{:trace_truncated, marker}], ttl: trace_ttl())
+
+      true ->
+        cache.put(key, trace ++ [entry], ttl: trace_ttl())
+    end
+  end
+
+  defp bound_event(meta) do
+    bytes = :erlang.external_size(meta)
+
+    if bytes > max_event_bytes() do
+      meta
+      |> Map.take(@stamp_keys)
+      |> Map.merge(%{truncated: true, bytes: bytes, keys: Map.keys(meta) -- @stamp_keys})
+    else
+      meta
+    end
+  end
 
   @doc "Returns the ordered list of `{event, meta}` recorded for a flow, or `nil`."
   @spec trace(binary() | nil) :: trace() | nil
@@ -506,9 +626,16 @@ defmodule ExSaml.Debug do
         Process.put(@stash_key, capture)
 
         case mode do
-          :always -> write_capture(%{capture | captured_on: :always}, payload_ttl())
-          :on_error -> write_capture(capture, provisional_ttl())
-          :none -> :ok
+          :always ->
+            write_capture(%{capture | captured_on: :always}, payload_ttl())
+            index_pending(idp_id, trace_id)
+
+          :on_error ->
+            write_capture(capture, provisional_ttl())
+            index_pending(idp_id, trace_id)
+
+          :none ->
+            :ok
         end
     end
   rescue
@@ -568,6 +695,7 @@ defmodule ExSaml.Debug do
     capture = if mode == :none, do: %{capture | saml_response: nil}, else: capture
 
     write_capture(capture, payload_ttl())
+    unindex_pending(existing[:idp_id], capture.trace_id)
     index_failure(idp_id, capture.trace_id)
     :ok
   end
@@ -789,6 +917,8 @@ defmodule ExSaml.Debug do
   defp trace_key(trace_id), do: {__MODULE__, {:trace, trace_id}}
   defp capture_key(trace_id), do: {__MODULE__, {:capture, trace_id}}
   defp failures_key(idp_id), do: {__MODULE__, {:failures, idp_id}}
+  defp pending_key(idp_id), do: {__MODULE__, {:pending, idp_id}}
+  defp traces_key(idp_id), do: {__MODULE__, {:traces, idp_id}}
   defp code_key(code), do: {__MODULE__, {:code, code}}
 
   defp read_capture(trace_id) when is_binary(trace_id) do
@@ -798,22 +928,89 @@ defmodule ExSaml.Debug do
   defp read_capture(_), do: nil
 
   defp write_capture(%{trace_id: trace_id} = capture, ttl) when is_binary(trace_id) do
-    if cache = debug_cache(), do: cache.put(capture_key(trace_id), capture, ttl: ttl)
+    if cache = debug_cache(),
+      do: cache.put(capture_key(trace_id), within_budget(capture), ttl: ttl)
+
     :ok
   end
 
   defp write_capture(_, _), do: :ok
 
-  # Newest first, bounded; evicted captures are deleted.
-  defp index_failure(nil, _trace_id), do: :ok
+  # Applied on every write, so a capture promoted from the process stash is
+  # held to the same budget as one written at receipt.
+  defp within_budget(capture) do
+    capture = Map.update(capture, :relay_state, nil, &cap_binary(&1, @max_relay_state_bytes))
 
+    case capture do
+      %{saml_response: payload} when is_binary(payload) ->
+        if :erlang.external_size(capture) > max_capture_bytes(),
+          do:
+            %{capture | saml_response: nil}
+            |> Map.put(:saml_response_dropped_bytes, byte_size(payload)),
+          else: capture
+
+      _ ->
+        capture
+    end
+  end
+
+  defp cap_binary(value, max) when is_binary(value) and byte_size(value) > max,
+    do: binary_part(value, 0, max)
+
+  defp cap_binary(value, _max), do: value
+
+  # Two indexes per IdP, newest first, each bounded, disjoint: a capture is
+  # pending from receipt until it is promoted, then a failure. Together they
+  # make the number of captures a function of the configuration:
+  # `IdPs with debug on × (max_captures_per_idp + max_failures_per_idp)`.
+  # A nil IdP (a flow that failed before IdP lookup) is a bucket like another,
+  # so an unattributable capture is bounded too.
+  #
+  # The indexes are read-modify-write on a shared cache, not atomic: two nodes
+  # indexing at the same instant can each drop the other's id. The capture
+  # then lives out its TTL unindexed. That loosens the bound by the number of
+  # concurrent writers, it does not remove it, and no lock is worth that.
   defp index_failure(idp_id, trace_id) do
+    push_index(failures_key(idp_id), trace_id, max_failures(), payload_ttl(), fn cache, id ->
+      cache.delete(capture_key(id))
+    end)
+  end
+
+  # A pending id may have been promoted by another process (code exchange)
+  # without this index hearing of it yet: only a capture still pending is
+  # deleted on eviction, so a burst of responses never erases a failure.
+  defp index_pending(idp_id, trace_id) do
+    push_index(pending_key(idp_id), trace_id, max_captures(), payload_ttl(), fn cache, id ->
+      if match?(%{captured_on: on} when on in [:pending, :always], read_capture(id)),
+        do: cache.delete(capture_key(id))
+    end)
+  end
+
+  # The trace of a failed flow is what support reads next to its capture: it
+  # is left to its TTL rather than evicted by newer flows.
+  defp index_trace(idp_id, trace_id) do
+    push_index(traces_key(idp_id), trace_id, max_traces(), trace_ttl(), fn cache, id ->
+      unless match?(%{error: %{}}, read_capture(id)), do: cache.delete(trace_key(id))
+    end)
+  end
+
+  defp unindex_pending(idp_id, trace_id) do
+    with cache when not is_nil(cache) <- debug_cache(),
+         key = pending_key(idp_id),
+         ids when is_list(ids) <- cache.get(key),
+         true <- trace_id in ids do
+      cache.put(key, List.delete(ids, trace_id), ttl: payload_ttl())
+    end
+
+    :ok
+  end
+
+  defp push_index(key, trace_id, max, ttl, evict) do
     if cache = debug_cache() do
-      key = failures_key(idp_id)
       current = (cache.get(key) || []) |> List.delete(trace_id)
-      {kept, evicted} = Enum.split([trace_id | current], max_failures())
-      Enum.each(evicted, &cache.delete(capture_key(&1)))
-      cache.put(key, kept, ttl: payload_ttl())
+      {kept, evicted} = Enum.split([trace_id | current], max)
+      cache.put(key, kept, ttl: ttl)
+      Enum.each(evicted, &evict.(cache, &1))
     end
 
     :ok
@@ -865,6 +1062,26 @@ defmodule ExSaml.Debug do
 
   defp max_failures,
     do: Application.get_env(:ex_saml, :max_failures_per_idp, @default_max_failures)
+
+  defp max_debug_ttl,
+    do: Application.get_env(:ex_saml, :max_debug_ttl, @default_max_debug_ttl)
+
+  defp max_captures,
+    do: Application.get_env(:ex_saml, :max_captures_per_idp, @default_max_captures)
+
+  defp max_capture_bytes,
+    do: Application.get_env(:ex_saml, :max_capture_bytes, @default_max_capture_bytes)
+
+  defp max_traces, do: Application.get_env(:ex_saml, :max_traces_per_idp, @default_max_traces)
+
+  defp max_trace_events,
+    do: Application.get_env(:ex_saml, :max_trace_events, @default_max_trace_events)
+
+  defp max_trace_bytes,
+    do: Application.get_env(:ex_saml, :max_trace_bytes, @default_max_trace_bytes)
+
+  defp max_event_bytes,
+    do: Application.get_env(:ex_saml, :max_event_bytes, @default_max_event_bytes)
 
   defp log_level, do: Application.get_env(:ex_saml, :debug_log_level, @default_log_level)
 

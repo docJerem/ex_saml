@@ -114,14 +114,24 @@ defmodule ExSaml.Debug.View do
       "saml_encoding" => capture[:saml_encoding],
       "consume_uri" => capture[:consume_uri],
       "entity_id" => capture[:entity_id],
-      "saml_response" => %{
-        "present" => is_binary(payload),
-        "bytes" => if(is_binary(payload), do: byte_size(payload)),
-        "href" => if(is_binary(payload), do: payload_href)
-      },
+      "saml_response" => payload_summary(payload, payload_href, capture),
       "locale" => locale,
       "message" => message(capture[:error], locale)
     }
+  end
+
+  # `dropped_bytes` only when the payload went over `max_capture_bytes`, so
+  # that "not captured" and "too large to keep" read differently.
+  defp payload_summary(payload, payload_href, capture) do
+    summary = %{
+      "present" => is_binary(payload),
+      "bytes" => if(is_binary(payload), do: byte_size(payload)),
+      "href" => if(is_binary(payload), do: payload_href)
+    }
+
+    if dropped = capture[:saml_response_dropped_bytes],
+      do: Map.put(summary, "dropped_bytes", dropped),
+      else: summary
   end
 
   @doc "`GET /failures/:trace_id/saml_response` in its JSON form."
@@ -271,7 +281,14 @@ defmodule ExSaml.Debug.View do
       "payload_ttl_ms" => config.payload_ttl,
       "provisional_ttl_ms" => config.provisional_ttl,
       "error_ttl_ms" => config.error_ttl,
+      "max_debug_ttl_ms" => config.max_debug_ttl,
       "max_failures_per_idp" => config.max_failures_per_idp,
+      "max_captures_per_idp" => config.max_captures_per_idp,
+      "max_capture_bytes" => config.max_capture_bytes,
+      "max_traces_per_idp" => config.max_traces_per_idp,
+      "max_trace_events" => config.max_trace_events,
+      "max_trace_bytes" => config.max_trace_bytes,
+      "max_event_bytes" => config.max_event_bytes,
       "debug_log_level" => JSON.normalize(config.debug_log_level),
       "enforced_response_checks" =>
         Enum.map(ValidationContext.enforced_checks(), &JSON.normalize/1)
