@@ -11,7 +11,7 @@ defmodule ExSaml.Assertion do
   it will check in `attributes` next.
   """
 
-  alias ExSaml.Subject
+  alias ExSaml.{AssertionCache, AuthorizationCodeCache, Debug, Error, Subject}
 
   require Logger
 
@@ -42,19 +42,89 @@ defmodule ExSaml.Assertion do
           idp_id: String.t()
         }
 
-  def get_from_code(code) do
-    case ExSaml.AuthorizationCodeCache.take(code) do
-      {idp_id, _} = key ->
-        case ExSaml.AssertionCache.get(key) do
-          %__MODULE__{attributes: assertion} -> {:ok, {idp_id, assertion}}
-          _ -> {:error, assertion: :not_found}
-        end
+  @doc """
+  Exchanges an authorization code (single use) for `{:ok, {idp_id, attributes}}`.
 
-      _ ->
-        Logger.info("Authorization code expired")
-        {:error, :unauthorized}
+  On failure returns `{:error, %ExSaml.Error{step: :code_exchange}}` with `reason`
+  `:authorization_code_not_found` (unknown, expired or already used code) or
+  `:assertion_not_found` (valid code, but the assertion is gone from the
+  assertion store). Both are traced by `ExSaml.Debug` when debug mode is on,
+  and the flow's capture is promoted so the `SAMLResponse` is kept.
+  """
+  @spec get_from_code(term()) :: {:ok, {binary(), map()}} | {:error, Error.t()}
+  def get_from_code(code) do
+    ctx = Debug.code_context(code) || %{}
+
+    case AuthorizationCodeCache.take(code) do
+      {idp_id, _} = key ->
+        fetch_assertion(code, key, idp_id, ctx)
+
+      # Map minted by `ExSaml.SPHandler`; `trace_id` is optional so that codes
+      # written by an older node during a rolling deploy are still honoured.
+      %{ex_saml_assertion_key: {idp_id, _} = key} = payload ->
+        fetch_assertion(
+          code,
+          key,
+          idp_id,
+          Map.merge(ctx, %{trace_id: payload[:trace_id] || ctx[:trace_id]}),
+          payload
+        )
+
+      other ->
+        # A missed code is worthless as a credential, but keep logs consistent
+        # with the :steps redaction: only a prefix, enough to correlate.
+        Logger.warning("[ExSaml] Authorization code not found or expired: #{code_prefix(code)}")
+
+        Debug.log(:code_exchanged, %{
+          code: code,
+          idp_id: ctx[:idp_id],
+          trace_id: ctx[:trace_id],
+          code_found: false,
+          cache_value: other
+        })
+
+        {:error,
+         Error.new(%{
+           reason: :authorization_code_not_found,
+           step: :code_exchange,
+           idp_id: ctx[:idp_id],
+           trace_id: ctx[:trace_id]
+         })}
     end
   end
+
+  defp fetch_assertion(code, key, idp_id, ctx, payload \\ nil) do
+    trace_id = ctx[:trace_id]
+    base = %{code: code, idp_id: idp_id, trace_id: trace_id, assertion_key: key, payload: payload}
+
+    case AssertionCache.get(key) do
+      %__MODULE__{attributes: attributes} = assertion ->
+        # The consumer's process has no debug context: pass the IdP explicitly
+        # so per-IdP debug also records successful exchanges.
+        Debug.log(:code_exchanged, idp_id, fn ->
+          Map.merge(base, %{assertion_found: true, assertion: assertion})
+        end)
+
+        {:ok, {idp_id, attributes}}
+
+      other ->
+        Debug.log(:code_exchanged, Map.merge(base, %{assertion_found: false, cache_value: other}))
+
+        error =
+          Error.new(%{
+            reason: :assertion_not_found,
+            step: :code_exchange,
+            idp_id: idp_id,
+            trace_id: trace_id
+          })
+
+        Debug.promote(trace_id, error, :assertion_not_found)
+        {:error, error}
+    end
+  end
+
+  defp code_prefix(code) when is_binary(code), do: String.slice(code, 0, 6) <> "…"
+  defp code_prefix(code), do: inspect(code)
 
   @doc false
   def from_core(%ExSaml.Core.Assertion{} = core) do

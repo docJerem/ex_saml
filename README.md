@@ -108,6 +108,78 @@ Configure the Nebulex cache module used for assertions and relay state:
 config :ex_saml, cache: MyApp.Cache
 ```
 
+### Error handling
+
+The assertion consumer service always redirects to the target URL with either
+`?code=<authorization_code>` (success) or `?error_id=<trace_id>` (failure). Both
+are random, single-use and expire; consume them with `ExSaml.Assertion.get_from_code/1`
+and `ExSaml.Error.get_from_id/1`. Every failure is an `%ExSaml.Error{}` whose
+`reason` is always an atom and whose identifier is the flow's `trace_id`:
+
+```elixir
+def callback(conn, %{"error_id" => error_id}) do
+  case ExSaml.Error.get_from_id(error_id) do
+    {:ok, %ExSaml.Error{trace_id: trace_id} = error} ->
+      conn
+      |> put_flash(:error, "#{ExSaml.ErrorMessages.get(error)} (trace ID: #{trace_id})")
+      |> redirect(to: "/login")
+
+    {:error, %ExSaml.Error{reason: :error_not_found}} ->
+      redirect(conn, to: "/login")
+  end
+end
+```
+
+See the [error handling and debugging guide](guides/error_handling_and_debugging.md)
+for the full contract, the catalogue of reasons and the 2.0 migration notes.
+
+### Response validation checks
+
+Beyond signatures, recipient, audience and time conditions, the ACS checks the
+`Issuer`, the `InResponseTo`, the `SessionNotOnOrAfter` and the bearer
+confirmation method of every response (SAML 2.0 Core / Profiles). Each check
+can reject or only log, per `config :ex_saml, enforced_response_checks:`;
+`[]` turns everything log-only. Details and defaults in the
+[guide](guides/error_handling_and_debugging.md#response-validation-checks).
+
+### Debug mode
+
+`ExSaml.Debug` records a trace of the whole sign-in flow (AuthnRequest, IdP
+response, decoding, validation, code issuance and exchange), keeps a capture of
+failed flows (error summary + raw `SAMLResponse`), lists them per IdP and can
+replay them against the current configuration. It is enabled **at runtime**,
+from a remote console, without a redeploy or a config change, globally or for
+one IdP, and always expires:
+
+```elixir
+ExSaml.Debug.enable(idp_id: "acme", ttl: :timer.minutes(30))
+ExSaml.Debug.enable(idp_id: "acme", capture: :always, log: :silent)
+ExSaml.Debug.status()
+ExSaml.Debug.failures("acme")
+ExSaml.Debug.trace(trace_id)
+ExSaml.Debug.saml_response(trace_id, decode: true)
+ExSaml.Debug.replay(trace_id)
+ExSaml.Debug.disable("acme")
+```
+
+By default the log lines redact the payload and the assertion (`log: :steps`)
+and the `SAMLResponse` is kept only for flows that fail (`capture: :on_error`),
+including flows whose authorization code is never exchanged. Use
+`config :ex_saml, debug_cache:` to keep debug data out of your main cache.
+Details in the [guide](guides/error_handling_and_debugging.md#4-debug-mode).
+
+All of that is also reachable over HTTP, so support can diagnose a failed
+sign-in without a remote console. `ExSaml.DebugRouter` is a `Plug.Router` you
+mount behind your own admin pipeline — it does no authentication of its own and
+refuses to start without an explicit access rule:
+
+```elixir
+forward "/", ExSaml.DebugRouter, authorize: {MyApp.Saml.Debug, :authorize}
+```
+
+`authorize` may return `{:ok, [idp_id]}` to scope every route to one tenant's
+IdPs. See the [debug API guide](guides/debug_api.md).
+
 ### Dynamic Provider Loading
 
 For loading providers from a database at runtime:
@@ -144,6 +216,9 @@ This exposes:
 - `POST /sso/csp-report` - CSP violation report endpoint
 
 SP endpoints (metadata, ACS, SLO) are configured via `ExSaml.Helper` URI builders and handled by `ExSaml.SPHandler`.
+
+`ExSaml.DebugRouter` is mounted separately, behind your admin pipeline — see
+[Debug mode](#debug-mode).
 
 ## Usage
 

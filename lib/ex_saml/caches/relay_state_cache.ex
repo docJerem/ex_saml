@@ -9,6 +9,8 @@ defmodule ExSaml.RelayStateCache do
   preventing replay attacks.
   """
 
+  alias ExSaml.Debug
+
   @doc "Returns the remaining TTL for the given relay state key."
   def ttl(key), do: assertion_cache().ttl(cache_key(key))
 
@@ -20,10 +22,22 @@ defmodule ExSaml.RelayStateCache do
     do: assertion_cache().put(cache_key(key), assertion, ttl: ttl)
 
   @doc "Deletes the relay state for the given key."
-  def delete(key), do: assertion_cache().delete(cache_key(key))
+  def delete(key) do
+    result = assertion_cache().delete(cache_key(key))
+    Debug.log(:relay_state_deleted, %{relay_state: key, trace_id: key})
+    result
+  end
 
   @doc "Atomically retrieves and deletes the relay state (anti-replay)."
-  def take(key), do: assertion_cache().take(cache_key(key))
+  def take(key) do
+    value = assertion_cache().take(cache_key(key))
+
+    Debug.log(:relay_state_taken, fn ->
+      %{relay_state: key, trace_id: key, hit: not is_nil(value), value: value}
+    end)
+
+    value
+  end
 
   defp assertion_cache, do: Application.get_env(:ex_saml, :cache)
 

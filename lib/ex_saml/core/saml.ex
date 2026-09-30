@@ -34,9 +34,14 @@ defmodule ExSaml.Core.Saml do
     Org,
     Response,
     SpMetadata,
+    StatusCode,
     Subject,
-    Util
+    Util,
+    ValidationContext
   }
+
+  # 5-second clock skew tolerance, shared by every time-based check.
+  @clock_skew_secs 5
 
   # ---------------------------------------------------------------------------
   # SAML namespace definitions
@@ -92,43 +97,37 @@ defmodule ExSaml.Core.Saml do
   defp subject_method_map("urn:oasis:names:tc:SAML:2.0:cm:bearer"), do: :bearer
   defp subject_method_map(_), do: :unknown
 
-  @spec status_code_map(String.t()) :: atom()
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:Success"), do: :success
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:VersionMismatch"), do: :bad_version
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"), do: :authn_failed
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:InvalidAttrNameOrValue"), do: :bad_attr
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:RequestDenied"), do: :denied
-  defp status_code_map("urn:oasis:names:tc:SAML:2.0:status:UnsupportedBinding"), do: :bad_binding
+  # Status URIs are resolved through the full SAML 2.0 catalogue in
+  # `ExSaml.Core.StatusCode`. The historical atoms used by `%Response{status: _}`
+  # and by LogoutResponse generation (`:bad_version`, `:bad_attr`, `:denied`,
+  # `:bad_binding`) are preserved for compatibility; every other spec status now
+  # maps to its catalogue atom instead of a raw URI suffix.
+  @legacy_status %{
+    version_mismatch: :bad_version,
+    invalid_attr_name_or_value: :bad_attr,
+    request_denied: :denied,
+    unsupported_binding: :bad_binding
+  }
 
-  defp status_code_map(urn) when is_list(urn) do
-    case urn do
-      ~c"urn:" ++ _ ->
-        urn
-        |> to_string()
-        |> String.split(":")
-        |> List.last()
-
-      _ ->
-        :unknown
-    end
+  @spec status_code_map(String.t() | charlist() | nil) :: atom()
+  defp status_code_map(uri) when is_binary(uri) or is_list(uri) or is_nil(uri) do
+    atom = StatusCode.to_atom(uri)
+    Map.get(@legacy_status, atom, atom)
   end
 
   defp status_code_map(_), do: :unknown
 
   @spec rev_status_code_map(atom()) :: String.t()
-  defp rev_status_code_map(:success), do: "urn:oasis:names:tc:SAML:2.0:status:Success"
-  defp rev_status_code_map(:bad_version), do: "urn:oasis:names:tc:SAML:2.0:status:VersionMismatch"
-  defp rev_status_code_map(:authn_failed), do: "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"
+  defp rev_status_code_map(status) do
+    canonical =
+      Enum.find_value(@legacy_status, status, fn {canonical, legacy} ->
+        if legacy == status, do: canonical
+      end)
 
-  defp rev_status_code_map(:bad_attr),
-    do: "urn:oasis:names:tc:SAML:2.0:status:InvalidAttrNameOrValue"
-
-  defp rev_status_code_map(:denied), do: "urn:oasis:names:tc:SAML:2.0:status:RequestDenied"
-
-  defp rev_status_code_map(:bad_binding),
-    do: "urn:oasis:names:tc:SAML:2.0:status:UnsupportedBinding"
-
-  defp rev_status_code_map(_), do: :erlang.error(:bad_status_code)
+    StatusCode.to_uri(canonical)
+  rescue
+    ArgumentError -> :erlang.error(:bad_status_code)
+  end
 
   @spec logout_reason_map(String.t()) :: atom()
   defp logout_reason_map("urn:oasis:names:tc:SAML:2.0:logout:user"), do: :user
@@ -804,31 +803,129 @@ defmodule ExSaml.Core.Saml do
   end
 
   @doc """
-  Validates a SAML assertion XML element.
+  Validates a SAML assertion XML element against a `ValidationContext`.
 
-  Decodes the assertion and validates:
-  - Version is "2.0"
-  - Recipient matches the expected value
-  - Audience matches (if present in conditions)
-  - Assertion is not stale
+  Decodes the assertion and validates, in order: version, `Issuer` against the
+  IdP `entityID` (Core §2.2.3, Profiles §4.1.4.2), `Recipient`, `Audience`,
+  `SubjectConfirmation/@Method` is bearer (Profiles §4.1.4.2), `NotBefore` has
+  passed within the clock-skew tolerance, `SessionNotOnOrAfter` has not passed
+  (Core §2.7.2), and the assertion is not stale. Time conditions are evaluated
+  at `ctx.now` (see `ExSaml.Core.ValidationContext`).
+
+  Whether a failed check rejects or only logs is decided by
+  `ExSaml.Core.ValidationContext.verdict/3`.
   """
-  @spec validate_assertion(tuple(), String.t(), String.t()) ::
+  @spec validate_assertion(tuple(), ValidationContext.t()) ::
           {:ok, Assertion.t()} | {:error, term()}
-  def validate_assertion(assertion_xml, recipient, audience) do
+  def validate_assertion(assertion_xml, %ValidationContext{} = ctx) do
     case decode_assertion(assertion_xml) do
       {:error, reason} ->
         {:error, reason}
 
       {:ok, assertion} ->
+        now = ValidationContext.now_secs(ctx)
+
         with :ok <- validate_version(assertion),
-             :ok <- validate_recipient(assertion, recipient),
-             :ok <- validate_audience(assertion, audience),
-             :ok <- check_not_before(assertion),
-             :ok <- check_stale(assertion) do
+             :ok <- validate_issuer(assertion, ctx),
+             :ok <- validate_recipient(assertion, ctx.recipient),
+             :ok <- validate_audience(assertion, ctx.audience),
+             :ok <- validate_subject_confirmation(assertion, ctx),
+             :ok <- check_not_before(assertion, now),
+             :ok <- check_session_expiry(assertion, ctx, now),
+             :ok <- check_stale(assertion, now) do
           {:ok, assertion}
         end
     end
   end
+
+  @doc """
+  Validates a SAML assertion with only a recipient and an audience.
+
+  Kept for callers that have no `SpConfig` to build a context from; the checks
+  that need one are skipped, the rest behave identically. `opts` accepts `:now`.
+  """
+  @spec validate_assertion(tuple(), String.t(), String.t(), keyword()) ::
+          {:ok, Assertion.t()} | {:error, term()}
+  def validate_assertion(assertion_xml, recipient, audience, opts \\ []) do
+    validate_assertion(assertion_xml, %ValidationContext{
+      recipient: recipient,
+      audience: audience,
+      now: Keyword.get(opts, :now)
+    })
+  end
+
+  # Identity of the speaker, before anything the speaker says is believed.
+  # Skipped when the IdP entityID is unknown, which is the case for callers
+  # that build a `%SpConfig{}` by hand.
+  defp validate_issuer(%Assertion{issuer: issuer}, %ValidationContext{} = ctx) do
+    expected = trimmed(ctx.idp_entity_id)
+
+    cond do
+      expected == "" ->
+        :ok
+
+      trimmed(issuer) == expected ->
+        :ok
+
+      true ->
+        ValidationContext.verdict(ctx, {:error, :bad_issuer},
+          expected: expected,
+          actual: trimmed(issuer)
+        )
+    end
+  end
+
+  # Profiles §4.1.4.2 requires the bearer method for web browser SSO. A missing
+  # `@Method` decodes to `:bearer` (see `subject_method_map/1`), so this only
+  # rejects a method the IdP stated and that is not bearer.
+  defp validate_subject_confirmation(%Assertion{subject: subject}, %ValidationContext{} = ctx) do
+    case subject.confirmation_method do
+      :bearer ->
+        :ok
+
+      method ->
+        ValidationContext.verdict(ctx, {:error, :bad_subject_confirmation}, method: method)
+    end
+  end
+
+  # Core §2.7.2. Distinct from `check_stale/2`: `SessionNotOnOrAfter` bounds the
+  # session the IdP established, not the validity of the assertion, and carries
+  # its own error so a consumer can tell "log in again" from "this assertion is
+  # too old".
+  defp check_session_expiry(%Assertion{authn: authn}, %ValidationContext{} = ctx, now_secs) do
+    case Keyword.get(authn, :session_not_on_or_after) do
+      nil -> :ok
+      stamp -> check_session_stamp(stamp, safe_to_secs(stamp), ctx, now_secs)
+    end
+  end
+
+  # Fail open on a value we cannot parse, whatever the policy says: the
+  # alternative is turning an IdP formatting bug into a rejected login on the
+  # day this check ships.
+  defp check_session_stamp(stamp, :error, ctx, _now_secs),
+    do: ValidationContext.warn(ctx, :session_expired, reason: :unparsable, actual: stamp)
+
+  defp check_session_stamp(stamp, {:ok, session_secs}, ctx, now_secs) do
+    # NotOnOrAfter is an exclusive bound.
+    if now_secs - @clock_skew_secs >= session_secs do
+      ValidationContext.verdict(ctx, {:error, :session_expired}, actual: stamp)
+    else
+      :ok
+    end
+  end
+
+  # `Util.saml_to_datetime/1` raises on a malformed timestamp. Callers that
+  # reach a value the SP never validated before need the failure as data.
+  defp safe_to_secs(stamp) do
+    {:ok, stamp |> Util.saml_to_datetime() |> :calendar.datetime_to_gregorian_seconds()}
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp trimmed(nil), do: ""
+  defp trimmed(value), do: value |> to_string() |> String.trim()
 
   defp validate_version(%Assertion{version: "2.0"}), do: :ok
   defp validate_version(_), do: {:error, :bad_version}
@@ -852,25 +949,19 @@ defmodule ExSaml.Core.Saml do
     end
   end
 
-  # 5-second clock skew tolerance for NotBefore validation
-  @not_before_skew_secs 5
-
   @doc false
-  defp check_not_before(%Assertion{conditions: conditions}) do
+  defp check_not_before(%Assertion{conditions: conditions}, now_secs) do
     case Keyword.get(conditions, :not_before) do
       nil ->
         :ok
 
       not_before ->
-        now = :erlang.localtime() |> :erlang.localtime_to_universaltime()
-        now_secs = :calendar.datetime_to_gregorian_seconds(now)
-
         nb_secs =
           not_before
           |> Util.saml_to_datetime()
           |> :calendar.datetime_to_gregorian_seconds()
 
-        if now_secs >= nb_secs - @not_before_skew_secs do
+        if now_secs >= nb_secs - @clock_skew_secs do
           :ok
         else
           {:error, :too_early}
@@ -879,9 +970,7 @@ defmodule ExSaml.Core.Saml do
   end
 
   @doc false
-  defp check_stale(%Assertion{} = a) do
-    now = :erlang.localtime() |> :erlang.localtime_to_universaltime()
-    now_secs = :calendar.datetime_to_gregorian_seconds(now)
+  defp check_stale(%Assertion{} = a, now_secs) do
     t = stale_time(a)
 
     if now_secs > t do

@@ -117,7 +117,7 @@ defmodule ExSaml.IdpData do
     idp_data
   end
 
-  defp save_idp_config(idp_data, %{id: id, sp_id: sp_id} = opts_map)
+  defp save_idp_config(%IdpData{} = idp_data, %{id: id, sp_id: sp_id} = opts_map)
        when is_binary(id) and is_binary(sp_id) do
     %IdpData{
       idp_data
@@ -167,7 +167,7 @@ defmodule ExSaml.IdpData do
   end
 
   @spec update_core_configs(%IdpData{}, %{required(id()) => %SpData{}}, map()) :: %IdpData{}
-  defp update_core_configs(idp_data, service_providers, opts_map) do
+  defp update_core_configs(%IdpData{} = idp_data, service_providers, opts_map) do
     case Map.get(service_providers, idp_data.sp_id) do
       %SpData{} = sp ->
         idp_data = %IdpData{idp_data | idp_metadata: build_idp_metadata(idp_data, opts_map)}
@@ -286,7 +286,7 @@ defmodule ExSaml.IdpData do
   end
 
   @spec from_xml(binary, %IdpData{}) :: %IdpData{}
-  defp from_xml(metadata_xml, idp_data) when is_binary(metadata_xml) do
+  defp from_xml(metadata_xml, %IdpData{} = idp_data) when is_binary(metadata_xml) do
     xml_opts = [
       space: :normalize,
       namespace_conformant: true,
@@ -395,7 +395,12 @@ defmodule ExSaml.IdpData do
       metadata_uri: Helper.get_metadata_uri(idp_data.base_url, path_segment_idp_id),
       consume_uri: Helper.get_consume_uri(idp_data.base_url, path_segment_idp_id),
       logout_uri: Helper.get_logout_uri(idp_data.base_url, path_segment_idp_id),
-      entity_id: sp_entity_id
+      entity_id: sp_entity_id,
+      # Both come from data already on `%IdpData{}` — the entityID parsed out of
+      # the IdP metadata, and our own identifier for it — so no consumer has to
+      # supply anything new for the Issuer check to work.
+      idp_entity_id: idp_data.entity_id,
+      idp_id: idp_data.id
     }
   end
 

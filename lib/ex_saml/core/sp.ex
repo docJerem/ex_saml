@@ -30,10 +30,14 @@ defmodule ExSaml.Core.Sp do
     Saml,
     SpConfig,
     SpMetadata,
+    StatusCode,
     Subject,
     Util,
+    ValidationContext,
     Xml.Dsig
   }
+
+  alias ExSaml.Debug
 
   @type xml :: record(:xmlElement)
   @type dupe_fun :: (ExSaml.Core.Assertion.t(), binary() -> :ok | term())
@@ -101,7 +105,7 @@ defmodule ExSaml.Core.Sp do
   @spec generate_authn_request(String.t(), SpConfig.t(), String.t() | nil) :: xml()
   def generate_authn_request(idp_url, %SpConfig{consume_uri: consume_uri} = sp, format) do
     stamp = now_saml_stamp()
-    issuer = get_entity_id(sp)
+    issuer = SpConfig.entity_id(sp)
 
     xml =
       Saml.to_xml(%AuthnRequest{
@@ -140,7 +144,7 @@ defmodule ExSaml.Core.Sp do
   @spec generate_logout_request(String.t(), String.t(), Subject.t(), SpConfig.t()) :: xml()
   def generate_logout_request(idp_url, session_index, %Subject{} = subject, %SpConfig{} = sp) do
     stamp = now_saml_stamp()
-    issuer = get_entity_id(sp)
+    issuer = SpConfig.entity_id(sp)
 
     xml =
       Saml.to_xml(%LogoutRequest{
@@ -172,7 +176,7 @@ defmodule ExSaml.Core.Sp do
   @spec generate_logout_response(String.t(), atom(), SpConfig.t()) :: xml()
   def generate_logout_response(idp_url, status, %SpConfig{} = sp) do
     stamp = now_saml_stamp()
-    issuer = get_entity_id(sp)
+    issuer = SpConfig.entity_id(sp)
 
     xml =
       Saml.to_xml(%LogoutResponse{
@@ -198,7 +202,7 @@ defmodule ExSaml.Core.Sp do
   """
   @spec generate_metadata(SpConfig.t()) :: xml()
   def generate_metadata(%SpConfig{org: org, tech: tech} = sp) do
-    entity_id = get_entity_id(sp)
+    entity_id = SpConfig.entity_id(sp)
 
     xml =
       Saml.to_xml(%SpMetadata{
@@ -232,7 +236,7 @@ defmodule ExSaml.Core.Sp do
   @spec validate_assertion(xml(), SpConfig.t()) ::
           {:ok, ExSaml.Core.Assertion.t()} | {:error, term()}
   def validate_assertion(xml, %SpConfig{} = sp) do
-    validate_assertion(xml, fn _a, _digest -> :ok end, sp)
+    validate_assertion(xml, fn _a, _digest -> :ok end, sp, [])
   end
 
   @doc """
@@ -240,21 +244,57 @@ defmodule ExSaml.Core.Sp do
 
   The `duplicate_fun` callback receives the decoded assertion and the XML
   digest, and should return `:ok` or an error term to reject duplicates.
+
+  Options:
+
+    * `:now` — the instant at which the assertion's time conditions are
+      evaluated (`DateTime` or Erlang UTC datetime), defaults to now. Used by
+      `ExSaml.Debug.replay/2` to evaluate a captured response as of its receipt.
   """
-  @spec validate_assertion(xml(), dupe_fun(), SpConfig.t()) ::
+  @spec validate_assertion(xml(), dupe_fun() | SpConfig.t(), SpConfig.t() | keyword()) ::
           {:ok, ExSaml.Core.Assertion.t()} | {:error, term()}
-  def validate_assertion(xml, duplicate_fun, %SpConfig{} = sp) do
+  def validate_assertion(xml, %SpConfig{} = sp, opts) when is_list(opts) do
+    validate_assertion(xml, fn _a, _digest -> :ok end, sp, opts)
+  end
+
+  def validate_assertion(xml, duplicate_fun, %SpConfig{} = sp)
+      when is_function(duplicate_fun, 2) do
+    validate_assertion(xml, duplicate_fun, sp, [])
+  end
+
+  @spec validate_assertion(xml(), dupe_fun(), SpConfig.t(), keyword()) ::
+          {:ok, ExSaml.Core.Assertion.t()} | {:error, term()}
+  def validate_assertion(xml, duplicate_fun, %SpConfig{} = sp, opts) do
     ns = @protocol_ns
     success_status = ~c"urn:oasis:names:tc:SAML:2.0:status:Success"
+
+    # The nested status of a previous response must never be read for this one.
+    Logger.metadata(ex_saml_saml_sub_status: nil)
+
+    ctx = ValidationContext.from_sp_config(sp, opts)
 
     with :ok <- check_status_code(xml, ns, success_status),
          {:ok, assertion_xml} <- extract_assertion(xml, ns, sp),
          :ok <- verify_envelope_signature(xml, sp),
          :ok <- verify_assertion_signature(assertion_xml, sp),
-         {:ok, assertion} <-
-           Saml.validate_assertion(assertion_xml, sp.consume_uri, get_entity_id(sp)),
+         :ok <- check_response_issuer(xml, ns, ctx),
+         {:ok, assertion} <- Saml.validate_assertion(assertion_xml, ctx),
          :ok <- check_duplicate(assertion, xml, duplicate_fun) do
       {:ok, assertion}
+    else
+      {:error, reason} = error ->
+        Debug.log(:validate_assertion_failed, fn ->
+          %{
+            reason: reason,
+            consume_uri: sp.consume_uri,
+            entity_id: SpConfig.entity_id(sp),
+            idp_signs_envelopes: sp.idp_signs_envelopes,
+            idp_signs_assertions: sp.idp_signs_assertions,
+            trusted_fingerprints: sp.trusted_fingerprints
+          }
+        end)
+
+        error
     end
   end
 
@@ -276,19 +316,63 @@ defmodule ExSaml.Core.Sp do
 
   defp check_status_value(status, status, _xml, _ns), do: :ok
 
+  # The public error stays `{:saml_error, top_level_status_uri, message}`. The
+  # actionable reason usually sits in the nested second-level StatusCode
+  # (AuthnFailed, InvalidNameIDPolicy, UnknownPrincipal, …): it is resolved
+  # through `ExSaml.Core.StatusCode`, recorded in the process Logger metadata
+  # (read back by `ExSaml.Error.new/1`) and logged in debug mode.
   defp check_status_value(error_status, _success, xml, ns) do
-    error_message =
-      case :xmerl_xpath.string(
-             ~c"/samlp:Response/samlp:Status/samlp:StatusMessage/text()",
-             xml,
-             [{:namespace, ns}]
-           ) do
-        [] -> nil
-        [a] -> :lists.flatten(:xmerl_xs.value_of(a))
-        _ -> :malformed
-      end
+    error_message = status_message(xml, ns)
+    sub_status_uri = sub_status_uri(xml, ns)
+    sub_status = if sub_status_uri, do: StatusCode.to_atom(sub_status_uri)
+    Logger.metadata(ex_saml_saml_sub_status: sub_status)
+
+    Debug.log(:saml_status_error, fn ->
+      %{
+        status: StatusCode.to_atom(error_status),
+        status_uri: to_string(error_status),
+        sub_status: sub_status,
+        sub_status_uri: sub_status_uri && to_string(sub_status_uri),
+        status_message: error_message && to_string(error_message),
+        status_detail: status_detail(xml, ns)
+      }
+    end)
 
     {:error, {:saml_error, error_status, error_message}}
+  end
+
+  defp status_message(xml, ns) do
+    case :xmerl_xpath.string(
+           ~c"/samlp:Response/samlp:Status/samlp:StatusMessage/text()",
+           xml,
+           [{:namespace, ns}]
+         ) do
+      [] -> nil
+      [a] -> :lists.flatten(:xmerl_xs.value_of(a))
+      _ -> :malformed
+    end
+  end
+
+  defp sub_status_uri(xml, ns) do
+    case :xmerl_xpath.string(
+           ~c"/samlp:Response/samlp:Status/samlp:StatusCode/samlp:StatusCode/@Value",
+           xml,
+           [{:namespace, ns}]
+         ) do
+      [attr] when Record.is_record(attr, :xmlAttribute) -> xmlAttribute(attr, :value)
+      _ -> nil
+    end
+  end
+
+  defp status_detail(xml, ns) do
+    case :xmerl_xpath.string(
+           ~c"/samlp:Response/samlp:Status/samlp:StatusDetail",
+           xml,
+           [{:namespace, ns}]
+         ) do
+      [detail] -> detail |> :xmerl_xs.value_of() |> :lists.flatten() |> to_string()
+      _ -> nil
+    end
   end
 
   defp extract_assertion(xml, ns, sp) do
@@ -303,13 +387,24 @@ defmodule ExSaml.Core.Sp do
           true = Record.is_record(decrypted, :xmlElement)
 
           case :xmerl_xpath.string(~c"/saml:Assertion", decrypted, [{:namespace, ns}]) do
-            [a] -> {:ok, a}
-            _ -> {:error, :bad_assertion}
+            [a] ->
+              {:ok, a}
+
+            nodes ->
+              bad_assertion(:decrypted_assertion_count, %{count: length(nodes)})
           end
         rescue
-          _ -> {:error, :bad_assertion}
+          e ->
+            bad_assertion(:decrypt_assertion, %{
+              error: Exception.format(:error, e, __STACKTRACE__),
+              has_private_key: not is_nil(sp.key)
+            })
         catch
-          _, _ -> {:error, :bad_assertion}
+          kind, value ->
+            bad_assertion(:decrypt_assertion, %{
+              error: Exception.format(kind, value, __STACKTRACE__),
+              has_private_key: not is_nil(sp.key)
+            })
         end
 
       _ ->
@@ -318,10 +413,24 @@ defmodule ExSaml.Core.Sp do
                xml,
                [{:namespace, ns}]
              ) do
-          [a] when Record.is_record(a, :xmlElement) -> {:ok, a}
-          _ -> {:error, :bad_assertion}
+          [a] when Record.is_record(a, :xmlElement) ->
+            {:ok, a}
+
+          nodes ->
+            bad_assertion(:assertion_count, %{count: length(List.wrap(nodes))})
         end
     end
+  end
+
+  # Keeps the public `:bad_assertion` reason while surfacing the swallowed cause
+  # in debug mode (which of the three extraction paths failed, and why).
+  defp bad_assertion(where, meta) do
+    Debug.log(
+      :validate_assertion_failed,
+      Map.merge(%{reason: :bad_assertion, where: where}, meta)
+    )
+
+    {:error, :bad_assertion}
   end
 
   defp verify_envelope_signature(xml, sp) do
@@ -343,6 +452,60 @@ defmodule ExSaml.Core.Sp do
       end
     else
       :ok
+    end
+  end
+
+  # Profiles §4.1.4.2. `Issuer` is optional on a `StatusResponseType`, so an
+  # absent element is not a failure; a present one that names a different IdP
+  # is. Runs after signature verification on purpose — checking it on an
+  # unverified document would fill the warn logs with forged traffic that the
+  # signature check rejects anyway.
+  defp check_response_issuer(xml, ns, %ValidationContext{} = ctx) do
+    expected = ctx.idp_entity_id |> to_string() |> String.trim()
+
+    case {expected, response_issuer(xml, ns)} do
+      {"", _} ->
+        :ok
+
+      {_, nil} ->
+        :ok
+
+      {expected, expected} ->
+        :ok
+
+      {expected, actual} ->
+        ValidationContext.verdict(ctx, {:error, :bad_issuer}, expected: expected, actual: actual)
+    end
+  end
+
+  defp response_issuer(xml, ns) do
+    case :xmerl_xpath.string(~c"/samlp:Response/saml:Issuer/text()", xml, [{:namespace, ns}]) do
+      [text] when Record.is_record(text, :xmlText) ->
+        text |> xmlText(:value) |> to_string() |> String.trim()
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  Returns the `ID` attribute of a generated request element, or `nil`.
+
+  `generate_authn_request/3` mints the id internally — `Dsig.sign/3` prepends it
+  when SP signing is on, `add_xml_id/1` appends it otherwise — and the SP needs
+  it back to match the `InResponseTo` of the response it will receive.
+  """
+  @spec xml_id(xml()) :: String.t() | nil
+  def xml_id(xml) do
+    xml
+    |> xmlElement(:attributes)
+    |> Enum.find_value(fn attr ->
+      Record.is_record(attr, :xmlAttribute) and xmlAttribute(attr, :name) == :ID and
+        to_string(xmlAttribute(attr, :value))
+    end)
+    |> case do
+      false -> nil
+      value -> value
     end
   end
 
@@ -458,9 +621,6 @@ defmodule ExSaml.Core.Sp do
 
     xmlElement(xml, attributes: attrs)
   end
-
-  defp get_entity_id(%SpConfig{entity_id: nil, metadata_uri: meta_uri}), do: meta_uri
-  defp get_entity_id(%SpConfig{entity_id: entity_id}), do: entity_id
 
   defp reorder_issuer(elem) do
     content = xmlElement(elem, :content)
