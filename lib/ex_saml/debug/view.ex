@@ -281,6 +281,7 @@ defmodule ExSaml.Debug.View do
       "payload_ttl_ms" => config.payload_ttl,
       "provisional_ttl_ms" => config.provisional_ttl,
       "error_ttl_ms" => config.error_ttl,
+      "max_debug_ttl_ms" => config.max_debug_ttl,
       "max_failures_per_idp" => config.max_failures_per_idp,
       "max_captures_per_idp" => config.max_captures_per_idp,
       "max_capture_bytes" => config.max_capture_bytes,

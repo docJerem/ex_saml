@@ -23,6 +23,7 @@ defmodule ExSaml.DebugTest do
       Application.delete_env(:ex_saml, :max_failures_per_idp)
       Application.delete_env(:ex_saml, :max_captures_per_idp)
       Application.delete_env(:ex_saml, :max_capture_bytes)
+      Application.delete_env(:ex_saml, :max_debug_ttl)
 
       for key <- [:max_traces_per_idp, :max_trace_events, :max_trace_bytes, :max_event_bytes],
           do: Application.delete_env(:ex_saml, key)
@@ -91,6 +92,27 @@ defmodule ExSaml.DebugTest do
     test "options are validated" do
       assert_raise ArgumentError, fn -> Debug.enable(capture: :sometimes) end
       assert_raise ArgumentError, fn -> Debug.enable(log: :loud) end
+    end
+
+    test "the TTL is capped by max_debug_ttl, from the console too" do
+      assert_raise ArgumentError, ~r/max_debug_ttl/, fn ->
+        Debug.enable(idp_id: "acme", ttl: :timer.hours(5))
+      end
+
+      assert_raise ArgumentError, fn -> Debug.enable(idp_id: "acme", ttl: 0) end
+      assert_raise ArgumentError, fn -> Debug.enable(idp_id: "acme", ttl: "1h") end
+      refute Debug.enabled?("acme")
+
+      Application.put_env(:ex_saml, :max_debug_ttl, :timer.minutes(10))
+      assert_raise ArgumentError, fn -> Debug.enable(idp_id: "acme", ttl: :timer.minutes(11)) end
+    end
+
+    test "the default TTL never exceeds max_debug_ttl" do
+      Application.put_env(:ex_saml, :max_debug_ttl, :timer.minutes(10))
+
+      {:ok, %{expires_at: expires_at}} = Debug.enable(idp_id: "acme")
+
+      assert DateTime.diff(expires_at, DateTime.utc_now(), :millisecond) <= :timer.minutes(10)
     end
 
     test "capture: :always is refused globally unless asked for explicitly" do

@@ -177,8 +177,13 @@ defmodule ExSaml.Debug.Access do
     end
   end
 
-  @doc "Validates `ttl_ms` against the mount's cap."
-  def ttl_ms(params, %__MODULE__{max_debug_ttl_ms: max}) do
+  @doc """
+  Validates `ttl_ms` against the mount's cap, itself never above the
+  library's `max_debug_ttl`, which `Debug.enable/1` enforces.
+  """
+  def ttl_ms(params, %__MODULE__{max_debug_ttl_ms: mount_max}) do
+    max = min(mount_max, Debug.config().max_debug_ttl)
+
     case Map.get(params, "ttl_ms") do
       nil -> {:ok, nil}
       ms when is_integer(ms) and ms > 0 and ms <= max -> {:ok, ms}

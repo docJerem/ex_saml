@@ -68,6 +68,10 @@ defmodule ExSaml.Debug do
   alias ExSaml.{Error, ErrorCache, Helper, IdpData}
 
   @default_ttl :timer.hours(1)
+  # Everything recorded while debug is on is bounded by the flag's lifetime,
+  # and the console is where a long TTL is typed: cap it here, not only in the
+  # debug API.
+  @default_max_debug_ttl :timer.hours(4)
   @default_trace_ttl :timer.minutes(15)
   @default_payload_ttl :timer.hours(1)
   # Must outlive the whole exchange window: the authorization code TTL (30 s)
@@ -165,7 +169,9 @@ defmodule ExSaml.Debug do
   Options:
 
     * `:idp_id` — restrict to one IdP (default: global)
-    * `:ttl` — milliseconds before the flag expires (default: 1 hour)
+    * `:ttl` — milliseconds before the flag expires (default: 1 hour, or
+      `max_debug_ttl` when lower). Above `config :ex_saml, max_debug_ttl:`
+      (default 4 hours) it is refused.
     * `:capture` — `:on_error` (default), `:always` or `:none`
     * `:log` — `:steps` (default), `:full` or `:silent`
     * `:allow_global_always` — permit `capture: :always` in the global scope.
@@ -178,8 +184,15 @@ defmodule ExSaml.Debug do
           {:ok, %{scope: scope(), expires_at: DateTime.t(), settings: settings()}}
   def enable(opts \\ []) do
     scope = scope(Keyword.get(opts, :idp_id))
-    ttl = Keyword.get(opts, :ttl, @default_ttl)
+    ttl = Keyword.get(opts, :ttl, min(@default_ttl, max_debug_ttl()))
     settings = settings_from(opts)
+
+    unless is_integer(ttl) and ttl > 0 and ttl <= max_debug_ttl(),
+      do:
+        raise(ArgumentError, """
+        ttl: must be a positive number of milliseconds, at most \
+        #{max_debug_ttl()} (config :ex_saml, max_debug_ttl:), got: #{inspect(ttl)}\
+        """)
 
     if scope == :global and settings.capture == :always and
          not Keyword.get(opts, :allow_global_always, false),
@@ -297,6 +310,7 @@ defmodule ExSaml.Debug do
           payload_ttl: non_neg_integer(),
           provisional_ttl: non_neg_integer(),
           error_ttl: non_neg_integer(),
+          max_debug_ttl: pos_integer(),
           max_failures_per_idp: non_neg_integer(),
           max_captures_per_idp: non_neg_integer(),
           max_capture_bytes: non_neg_integer(),
@@ -313,6 +327,7 @@ defmodule ExSaml.Debug do
       payload_ttl: payload_ttl(),
       provisional_ttl: provisional_ttl(),
       error_ttl: ErrorCache.ttl(),
+      max_debug_ttl: max_debug_ttl(),
       max_failures_per_idp: max_failures(),
       max_captures_per_idp: max_captures(),
       max_capture_bytes: max_capture_bytes(),
@@ -1042,6 +1057,9 @@ defmodule ExSaml.Debug do
 
   defp max_failures,
     do: Application.get_env(:ex_saml, :max_failures_per_idp, @default_max_failures)
+
+  defp max_debug_ttl,
+    do: Application.get_env(:ex_saml, :max_debug_ttl, @default_max_debug_ttl)
 
   defp max_captures,
     do: Application.get_env(:ex_saml, :max_captures_per_idp, @default_max_captures)

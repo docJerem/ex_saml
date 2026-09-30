@@ -215,6 +215,16 @@ defmodule ExSaml.DebugRouterTest do
       assert json(conn)["error"]["max_ms"] == 4 * 60 * 60 * 1000
     end
 
+    test "the library's max_debug_ttl caps a more generous mount" do
+      Application.put_env(:ex_saml, :max_debug_ttl, :timer.hours(1))
+      on_exit(fn -> Application.delete_env(:ex_saml, :max_debug_ttl) end)
+
+      conn = call(:put, "/debug/idps/acme", ~s({"ttl_ms":7200000}))
+
+      assert conn.status == 400
+      assert %{"code" => "ttl_too_large", "max_ms" => 3_600_000} = json(conn)["error"]
+    end
+
     test "refuses a non-numeric ttl" do
       assert error_code(call(:put, "/debug/idps/acme", ~s({"ttl_ms":"soon"}))) ==
                "invalid_parameter"
