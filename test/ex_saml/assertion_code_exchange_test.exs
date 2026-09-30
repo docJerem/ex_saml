@@ -1,4 +1,4 @@
-defmodule ExSaml.AssertionTest do
+defmodule ExSaml.AssertionCodeExchangeTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
