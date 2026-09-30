@@ -265,7 +265,12 @@ ExSaml.Debug.disable()
 - Default: **off**.
 - Scope: global, or a single `idp_id` (recommended in production; the IdP flag
   wins over the global one).
-- **Auto-expiry**: the flag always expires, default 1 hour.
+- **Auto-expiry**: the flag always expires, default 1 hour, at most
+  `max_debug_ttl` (4 hours): a longer `ttl:` raises `ArgumentError`, from the
+  console as from the debug API.
+- `capture: :always` is accepted **per IdP only**. Globally it would keep every
+  response of every IdP for `payload_ttl`; pass `allow_global_always: true` to
+  `enable/1` to do it anyway.
 - Debug can never break a sign-in: every cache failure inside `ExSaml.Debug`
   degrades to "disabled".
 - Debug costs nothing when off: `enable/1` sets one "active" marker in the
@@ -293,12 +298,68 @@ Configuration keys:
 | `trace_ttl:` | 15 min | TTL of a trace |
 | `payload_ttl:` | 1 h | TTL of a promoted capture and of the per-IdP failure list |
 | `provisional_ttl:` | 5 min | TTL of a capture written at receipt with `capture: :on_error`, before the flow is known to have failed. Must outlive the whole exchange window (code TTL plus a late or retried consumer callback); aligned on the relay-state TTL |
-| `max_failures_per_idp:` | 20 | Captures kept per IdP; older ones are evicted |
+| `max_debug_ttl:` | 4 h | Longest TTL `enable/1` accepts; also caps the debug API's `max_debug_ttl_ms` |
+| `max_failures_per_idp:` | 20 | Failed captures kept per IdP; older ones are evicted |
+| `max_captures_per_idp:` | 50 | Captures written at receipt and not (yet) failed, kept per IdP; older ones are evicted. Never evicts a failure |
+| `max_capture_bytes:` | 256 KB | Size of one stored capture; above it the payload is dropped and `saml_response_dropped_bytes` records its size |
+| `max_traces_per_idp:` | 100 | Traces kept per IdP; older ones are evicted, except the trace of a failed flow still listed in `failures/1` |
+| `max_trace_events:` | 64 | Events per trace; the last one is then `:trace_truncated` and nothing more is recorded |
+| `max_trace_bytes:` | 128 KB | Size of one trace; same truncation |
+| `max_event_bytes:` | 16 KB | Size of one event; a larger one is stored as `%{truncated: true, bytes:, keys:}` plus `idp_id`, `trace_id`, `node`, `at` |
 
 > **PII warning.** Traces and captures hold the raw `SAMLResponse`, the NameID
 > and the assertion attributes in the cache; `log: :full` also writes them to
 > the logs. Keep the TTL short, scope to one IdP, and prefer a dedicated
 > `debug_cache:` in production.
+
+### Memory bounds
+
+The ACS is public: once debug is on, whoever posts `SAMLResponse`s to it
+decides how many flows are recorded and how large they are. Everything debug
+stores is therefore bounded by count and by size, per IdP, whatever the
+traffic:
+
+```
+per IdP with debug on ≈ (max_captures_per_idp + max_failures_per_idp) × max_capture_bytes
+                      + (max_traces_per_idp + max_failures_per_idp) × max_trace_bytes
+                      ≈ 70 × 256 KB + 120 × 128 KB ≈ 33 MB with the defaults
+```
+
+That is a ceiling for a flood of maximal forged responses; a real flow is a few
+KB of capture and ten-odd events. The buckets are keyed by the **configured**
+IdPs (plus one for flows that failed before IdP lookup), so a sender cannot
+create new ones. The per-IdP indexes are updated without a lock: two nodes
+writing at the same instant can let one entry slip out of its index and live
+out its TTL, which loosens the bound by a few entries, never removes it.
+
+Two things the library cannot bound for you:
+
+- **Replication.** With `Nebulex.Adapters.Replicated` every node holds a copy:
+  multiply by the number of nodes.
+- **Expiry is not eviction.** `Nebulex.Adapters.Local` removes an expired entry
+  when it is read or when its generation is rotated (`gc_interval`), so a
+  5-minute capture can occupy memory for up to two generations.
+
+The production setup is a **dedicated, non-replicated** `debug_cache:` with a
+hard ceiling and a short generation, so that debug can never crowd out
+sessions and codes in the main cache:
+
+```elixir
+defmodule MyApp.SamlDebugCache do
+  use Nebulex.Cache, otp_app: :my_app, adapter: Nebulex.Adapters.Local
+end
+
+config :my_app, MyApp.SamlDebugCache,
+  gc_interval: :timer.minutes(5),
+  max_size: 10_000,
+  allocated_memory: 200_000_000
+
+config :ex_saml, debug_cache: MyApp.SamlDebugCache
+```
+
+A local cache means a trace lives on the node that served the request. If the
+debug API must answer from any node, `Nebulex.Adapters.Partitioned` keeps one
+copy of each entry, readable from everywhere.
 
 ### Traces
 
@@ -334,7 +395,8 @@ and the raw `SAMLResponse`, kept together under the `trace_id`.
 | `trace_id`, `idp_id`, `received_at` | identity of the flow |
 | `captured_on` | why it was kept: `:error` (the library rejected the response), `:authorization_code_not_found` (the code was never exchanged, or exchanged twice), `:assertion_not_found`, or `:always` |
 | `error` | `%{trace_id, reason, scope, step, idp_id}` — no PII |
-| `saml_response` | the base64 exactly as posted by the IdP (`nil` with `capture: :none`) |
+| `saml_response` | the base64 exactly as posted by the IdP (`nil` with `capture: :none`, or when larger than `max_capture_bytes`) |
+| `saml_response_dropped_bytes` | set only when the payload went over `max_capture_bytes`: its size |
 | `saml_encoding`, `relay_state`, `consume_uri`, `entity_id` | what a faithful replay needs |
 
 How it is written, per `capture:` mode:
@@ -347,7 +409,8 @@ How it is written, per `capture:` mode:
   simply lets its provisional capture expire. This is what makes the
   "signed in on the library side, failed on the consumer side" case
   diagnosable.
-- `:always`: written at receipt with `payload_ttl`, promoted on failure.
+- `:always`: written at receipt with `payload_ttl`, promoted on failure. Per
+  IdP only.
 - `:none`: nothing at receipt; a failure still leaves a capture, without the
   payload.
 

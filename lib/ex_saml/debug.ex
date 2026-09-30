@@ -59,8 +59,18 @@ defmodule ExSaml.Debug do
   Traces and captures hold the raw `SAMLResponse`, the NameID and the assertion
   attributes in the cache; `log: :full` also writes them to the logs. Keep the
   TTL short, scope to a single `idp_id`, and consider a dedicated
-  `debug_cache:` in production. At most `max_failures_per_idp` (default 20)
-  captures are kept per IdP.
+  `debug_cache:` in production.
+
+  ## Memory bounds
+
+  Whoever posts to the public ACS decides how many flows debug records, so
+  everything it stores is bounded per IdP by count and by size:
+  `max_captures_per_idp` (50) pending and `max_failures_per_idp` (20) failed
+  captures of at most `max_capture_bytes` (256 KB), `max_traces_per_idp` (100)
+  traces of at most `max_trace_events` (64) events, `max_trace_bytes` (128 KB)
+  and `max_event_bytes` (16 KB) per event. The flag itself lives at most
+  `max_debug_ttl` (4 h). See the "Memory bounds" section of the error handling
+  guide for the resulting ceiling and the recommended production cache.
   """
 
   require Logger
@@ -985,16 +995,11 @@ defmodule ExSaml.Debug do
   end
 
   defp unindex_pending(idp_id, trace_id) do
-    if cache = debug_cache() do
-      key = pending_key(idp_id)
-
-      case cache.get(key) do
-        ids when is_list(ids) ->
-          if trace_id in ids, do: cache.put(key, List.delete(ids, trace_id), ttl: payload_ttl())
-
-        _ ->
-          :ok
-      end
+    with cache when not is_nil(cache) <- debug_cache(),
+         key = pending_key(idp_id),
+         ids when is_list(ids) <- cache.get(key),
+         true <- trace_id in ids do
+      cache.put(key, List.delete(ids, trace_id), ttl: payload_ttl())
     end
 
     :ok
