@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ECDSA signatures (`ecdsa-sha256`, `ecdsa-sha384`, `ecdsa-sha512`) on the P-256, P-384 and P-521 curves. An IdP whose signing certificate holds an EC key (e.g. a PingFederate `…-EC-…` signing key) had every Response rejected with `:unsupported_algorithm`, and its key was decoded as RSA. `ExSaml.Core.Xml.Dsig.verify/2` now reads EC keys and converts the XML-DSig `r || s` `SignatureValue` (RFC 4051) to the DER form `:public_key` verifies; `sign/4` does the reverse with an EC private key. A signature method naming another key type than the certificate's is rejected with `:bad_signature` (#67)
+
 ## [1.1.3] - 2026-09-30
 
 ### Fixed

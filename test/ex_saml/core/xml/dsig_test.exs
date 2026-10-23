@@ -243,6 +243,74 @@ defmodule ExSaml.Core.Xml.DsigTest do
     end
   end
 
+  describe "ECDSA" do
+    defp ec_key(curve) do
+      %{cert: cert_bin, key: key} =
+        :public_key.pkix_test_root_cert(~c"ExSaml ECDSA", [{:key, {:namedCurve, curve}}])
+
+      {key, cert_bin}
+    end
+
+    defp signature_value(signed_xml) do
+      [text] =
+        :xmerl_xpath.string(
+          ~c"ds:Signature/ds:SignatureValue/text()",
+          signed_xml,
+          namespace: [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}]
+        )
+
+      :base64.decode(xmlText(text, :value))
+    end
+
+    defp signed_foo(key, cert_bin, method) do
+      ~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|
+      |> parse_xml()
+      |> Dsig.sign(key, cert_bin, method)
+    end
+
+    for {curve, method, field_size} <- [
+          {:secp256r1, :ecdsa_sha256, 32},
+          {:secp384r1, :ecdsa_sha384, 48},
+          {:secp521r1, :ecdsa_sha512, 66}
+        ] do
+      test "#{method} on #{curve}: signs r || s and verifies" do
+        {key, cert_bin} = ec_key(unquote(curve))
+        signed_xml = signed_foo(key, cert_bin, unquote(method))
+
+        assert byte_size(signature_value(signed_xml)) == 2 * unquote(field_size)
+        assert :ok = Dsig.verify(signed_xml, [{:sha256, :crypto.hash(:sha256, cert_bin)}])
+      end
+    end
+
+    test "a tampered signature is rejected" do
+      {key, cert_bin} = ec_key(:secp256r1)
+
+      xml =
+        [signed_foo(key, cert_bin, :ecdsa_sha256)]
+        |> :xmerl.export(:xmerl_xml)
+        |> List.flatten()
+        |> to_string()
+
+      [sig64] = Regex.run(~r|<ds:SignatureValue>([^<]+)<|, xml, capture: :all_but_first)
+      <<r::binary-size(32), s::binary-size(32)>> = :base64.decode(sig64)
+      tampered = :base64.encode(s <> r)
+
+      assert {:error, :bad_signature} =
+               xml |> String.replace(sig64, tampered) |> parse_xml() |> Dsig.verify()
+    end
+
+    test "a signature method of another key type than the certificate's is rejected" do
+      {rsa_key, rsa_cert} = test_sign_256_key()
+      {ec_key, ec_cert} = ec_key(:secp256r1)
+
+      assert {:error, :bad_signature} =
+               rsa_key |> signed_foo(rsa_cert, :ecdsa_sha256) |> Dsig.verify()
+
+      assert {:error, :bad_signature} =
+               ec_key |> signed_foo(ec_cert, :rsa_sha256) |> Dsig.verify()
+    end
+  end
+
   describe "strip/1" do
     test "strip removes signature and returns original element" do
       doc =
