@@ -3,6 +3,7 @@ defmodule ExSaml.SpData do
 
   require Logger
   alias ExSaml.Core
+  alias ExSaml.Core.Xml.Dsig
   alias ExSaml.SpData
 
   defstruct id: "",
@@ -16,6 +17,7 @@ defmodule ExSaml.SpData do
             org_url: "",
             cert: :undefined,
             key: :undefined,
+            sig_method: nil,
             valid?: true
 
   @type t :: %__MODULE__{
@@ -29,7 +31,8 @@ defmodule ExSaml.SpData do
           org_displayname: binary(),
           org_url: binary(),
           cert: :undefined | binary(),
-          key: :undefined | :RSAPrivateKey,
+          key: :undefined | tuple(),
+          sig_method: Dsig.sig_method() | nil,
           valid?: boolean()
         }
 
@@ -63,12 +66,40 @@ defmodule ExSaml.SpData do
       org_displayname: Map.get(opts_map, :org_displayname, @default_org_displayname),
       org_url: Map.get(opts_map, :org_url, @default_org_url),
       key: Map.get(opts_map, :key, :undefined),
-      cert: Map.get(opts_map, :cert, :undefined)
+      cert: Map.get(opts_map, :cert, :undefined),
+      sig_method: Map.get(opts_map, :sig_method)
     }
     |> set_id(opts_map)
     |> load_cert(opts_map)
     |> load_key(opts_map)
+    |> check_sig_method(opts_map)
   end
+
+  # A configured `sig_method` must be a known one, and one the key can
+  # produce: `:ecdsa_sha256` with an RSA key would sign nothing verifiable.
+  @spec check_sig_method(%SpData{}, map()) :: %SpData{}
+  defp check_sig_method(%SpData{sig_method: nil} = sp_data, _), do: sp_data
+
+  defp check_sig_method(%SpData{sig_method: sig_method, key: key} = sp_data, %{} = opts_map) do
+    with %{key_type: key_type} <- Dsig.signature_props(sig_method),
+         true <- key == :undefined or key_type == key_type(key) do
+      sp_data
+    else
+      _ ->
+        Logger.error(
+          "[ExSaml] Invalid SP sig_method [#{inspect(sig_method)}] for the key: #{inspect(opts_map)}"
+        )
+
+        %SpData{sp_data | valid?: false}
+    end
+  end
+
+  defp key_type(key),
+    do:
+      key
+      |> Dsig.default_method()
+      |> Dsig.signature_props()
+      |> Map.fetch!(:key_type)
 
   @spec set_id(%SpData{}, map()) :: %SpData{}
   defp set_id(%SpData{} = sp_data, %{} = opts_map) do

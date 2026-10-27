@@ -11,6 +11,12 @@ defmodule ExSaml.Core.Xml.Dsig.Rsa do
   @type hash :: :sha | :sha256
 
   @doc """
+  The signature method for an RSA key: `:rsa_sha256`.
+  """
+  @spec default_method(tuple()) :: :rsa_sha256
+  def default_method({:RSAPrivateKey, _, _, _, _, _, _, _, _, _, _}), do: :rsa_sha256
+
+  @doc """
   Signs `data` and returns the `SignatureValue` bytes.
   """
   @spec sign(binary(), hash(), tuple()) :: binary()

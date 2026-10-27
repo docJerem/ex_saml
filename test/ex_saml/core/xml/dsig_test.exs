@@ -2,6 +2,7 @@ defmodule ExSaml.Core.Xml.DsigTest do
   use ExUnit.Case, async: true
 
   alias ExSaml.Core.Xml.Dsig
+  alias ExSaml.Core.Xml.Dsig.MlDsa
 
   require Record
 
@@ -240,6 +241,67 @@ defmodule ExSaml.Core.Xml.DsigTest do
 
       assert {:error, :missing_certificate} =
                Dsig.verify(certless_doc, [:crypto.hash(:sha, cert_bin)])
+    end
+  end
+
+  describe "default_method/1 and sign/3" do
+    test "an RSA key signs rsa-sha256" do
+      {key, cert_bin} = test_sign_256_key()
+      doc = parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      assert Dsig.default_method(key) == :rsa_sha256
+      assert :ok = doc |> Dsig.sign(key, cert_bin) |> Dsig.verify()
+    end
+
+    for {curve, method} <- [
+          {:secp256r1, :ecdsa_sha256},
+          {:secp384r1, :ecdsa_sha384},
+          {:secp521r1, :ecdsa_sha512}
+        ] do
+      test "an EC key on #{curve} signs #{method}" do
+        {key, cert_bin} = ec_key(unquote(curve))
+        doc = parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+        signed_xml = Dsig.sign(doc, key, cert_bin)
+
+        assert Dsig.default_method(key) == unquote(method)
+
+        [attr] =
+          :xmerl_xpath.string(
+            ~c"ds:Signature/ds:SignedInfo/ds:SignatureMethod/@Algorithm",
+            signed_xml,
+            namespace: [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}]
+          )
+
+        assert to_string(xmlAttribute(attr, :value)) =~
+                 "ecdsa-" <> (unquote(method) |> Atom.to_string() |> String.replace("ecdsa_", ""))
+
+        assert :ok = Dsig.verify(signed_xml)
+      end
+    end
+  end
+
+  describe "ML-DSA" do
+    # Signed by this library on a VM with ML-DSA (test/data/keys/generate.sh
+    # made the key). Runs everywhere: the outcome depends on the VM.
+    test "a signature verifies where the VM has ML-DSA, and is unsupported elsewhere" do
+      import ExUnit.CaptureLog
+
+      doc =
+        [__DIR__, "../../fixtures/ml_dsa_65_signed.xml"]
+        |> Path.join()
+        |> File.read!()
+        |> parse_xml()
+
+      if MlDsa.available?() do
+        assert :ok = Dsig.verify(doc)
+      else
+        log =
+          capture_log(fn ->
+            assert {:error, :unsupported_algorithm} = Dsig.verify(doc)
+          end)
+
+        assert log =~ "ML-DSA signature rejected"
+      end
     end
   end
 

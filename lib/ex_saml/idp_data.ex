@@ -387,6 +387,7 @@ defmodule ExSaml.IdpData do
       },
       key: sp_data.key,
       certificate: sp_data.cert,
+      sig_method: sp_data.sig_method,
       sp_sign_requests: idp_data.sign_requests,
       sp_sign_metadata: idp_data.sign_metadata,
       idp_signs_envelopes: idp_data.signed_envelopes_in_resp,

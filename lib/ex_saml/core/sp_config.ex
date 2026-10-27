@@ -23,7 +23,8 @@ defmodule ExSaml.Core.SpConfig do
             consume_uri: "",
             logout_uri: nil,
             encrypt_mandatory: false,
-            entity_id: nil
+            entity_id: nil,
+            sig_method: nil
 
   @type t :: %__MODULE__{
           org: Org.t(),
@@ -41,6 +42,7 @@ defmodule ExSaml.Core.SpConfig do
           consume_uri: String.t(),
           logout_uri: String.t() | nil,
           encrypt_mandatory: boolean(),
-          entity_id: String.t() | nil
+          entity_id: String.t() | nil,
+          sig_method: ExSaml.Core.Xml.Dsig.sig_method() | nil
         }
 end
