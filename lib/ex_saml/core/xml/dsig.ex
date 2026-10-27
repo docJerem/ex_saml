@@ -8,13 +8,16 @@ defmodule ExSaml.Core.Xml.Dsig do
   Currently supports RSA + SHA1|SHA256 and ECDSA + SHA256|SHA384|SHA512
   signatures. RSA-SHA1 is rejected on verification.
 
-  An ECDSA `SignatureValue` is the raw `r || s` concatenation (RFC 4051
-  §3.3.6), not the DER `ECDSA-Sig-Value` that `:public_key` produces and
-  expects: it is converted both ways.
+  This module owns the XML side: canonicalization, the `Reference` digest,
+  the `ds:Signature` structure and the certificate. Producing and checking
+  the `SignatureValue` bytes is the job of one module per key type,
+  `ExSaml.Core.Xml.Dsig.Rsa` and `ExSaml.Core.Xml.Dsig.Ecdsa`, chosen from
+  the private key when signing and from the signature method when verifying.
   """
 
   alias ExSaml.Core.Util
   alias ExSaml.Core.Xml.C14n
+  alias ExSaml.Core.Xml.Dsig.{Ecdsa, Rsa}
 
   require Record
 
@@ -52,26 +55,42 @@ defmodule ExSaml.Core.Xml.Dsig do
     Record.extract(:SubjectPublicKeyInfo, from_lib: "public_key/include/public_key.hrl")
   )
 
-  Record.defrecord(
-    :ec_private_key,
-    :ECPrivateKey,
-    Record.extract(:ECPrivateKey, from_lib: "public_key/include/public_key.hrl")
-  )
-
+  # id-ecPublicKey, the SubjectPublicKeyInfo algorithm of an EC certificate.
   @ec_public_key {1, 2, 840, 10_045, 2, 1}
-
-  # Bytes of r and s, each, in an ECDSA signature value, per named curve:
-  # secp256r1 (P-256), secp384r1 (P-384) and secp521r1 (P-521).
-  @ec_field_sizes %{
-    {1, 2, 840, 10_045, 3, 1, 7} => 32,
-    {1, 3, 132, 0, 34} => 48,
-    {1, 3, 132, 0, 35} => 66
-  }
 
   @type xml :: record(:xmlElement) | record(:xmlDocument)
   @type sig_method ::
           :rsa_sha1 | :rsa_sha256 | :ecdsa_sha256 | :ecdsa_sha384 | :ecdsa_sha512
   @type fingerprint :: binary() | {:sha | :sha256, binary()}
+  @type key_type :: :rsa | :ecdsa
+
+  # The signature methods, one row each: hash function, DigestMethod URI,
+  # SignatureMethod URI and the key type the method needs. `signature_props/1`
+  # looks a method up by its atom, or by its URI as a string or charlist.
+  @methods [
+    rsa_sha1:
+      {:sha, "http://www.w3.org/2000/09/xmldsig#sha1",
+       "http://www.w3.org/2000/09/xmldsig#rsa-sha1", :rsa},
+    rsa_sha256:
+      {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
+       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", :rsa},
+    ecdsa_sha256:
+      {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
+       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256", :ecdsa},
+    ecdsa_sha384:
+      {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
+       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384", :ecdsa},
+    ecdsa_sha512:
+      {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
+       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512", :ecdsa}
+  ]
+
+  @method_by_name Enum.reduce(@methods, %{}, fn {name, {_, _, uri, _} = row}, acc ->
+                    acc
+                    |> Map.put(name, row)
+                    |> Map.put(uri, row)
+                    |> Map.put(String.to_charlist(uri), row)
+                  end)
 
   @doc """
   Returns an element without any ds:Signature elements inside it.
@@ -224,7 +243,7 @@ defmodule ExSaml.Core.Xml.Dsig do
     sig_info_canon = C14n.c14n(sig_info)
     data = :unicode.characters_to_binary(sig_info_canon, :unicode, :utf8)
 
-    signature = data |> :public_key.sign(hash_function, private_key) |> raw_signature(private_key)
+    signature = signer(private_key).sign(data, hash_function, private_key)
     sig64 = :base64.encode_to_string(signature)
     cert64 = :base64.encode_to_string(cert_bin)
 
@@ -426,14 +445,21 @@ defmodule ExSaml.Core.Xml.Dsig do
 
     sig = :base64.decode(xmlText(sig_text, :value))
 
-    with {:ok, {key, cert_bin}} <- extract_public_key(element, ds_ns),
-         {:ok, sig} <- der_signature(key_type, key, sig) do
-      case :public_key.verify(data, hash_function, sig, key) do
-        true -> check_fingerprints(cert_bin, fingerprints)
-        false -> {:error, :bad_signature}
-      end
+    with {:ok, {key, cert_bin}} <- extract_public_key(element, ds_ns) do
+      # A key of another kind than the method names fails here too.
+      if verifier(key_type).verify(data, hash_function, sig, key),
+        do: check_fingerprints(cert_bin, fingerprints),
+        else: {:error, :bad_signature}
     end
   end
+
+  # The module producing the SignatureValue for a private key.
+  defp signer({:RSAPrivateKey, _, _, _, _, _, _, _, _, _, _}), do: Rsa
+  defp signer({:ECPrivateKey, _, _, _, _, _}), do: Ecdsa
+
+  # The module checking the SignatureValue for a signature method's key type.
+  defp verifier(:rsa), do: Rsa
+  defp verifier(:ecdsa), do: Ecdsa
 
   defp extract_public_key(element, ds_ns) do
     case :xmerl_xpath.string(
@@ -477,30 +503,12 @@ defmodule ExSaml.Core.Xml.Dsig do
 
   # --- Private helpers ---
 
-  # Depending on the OTP version, a :plain certificate's curve parameters come
-  # DER-encoded or already decoded.
-  defp decode_public_key({:AlgorithmIdentifier, @ec_public_key, parameters}, point)
-       when is_binary(parameters),
-       do: {{:ECPoint, point}, :public_key.der_decode(:EcpkParameters, parameters)}
-
+  # The public key of a certificate, from the algorithm and subjectPublicKey
+  # of its SubjectPublicKeyInfo. Any algorithm but EC is read as RSA.
   defp decode_public_key({:AlgorithmIdentifier, @ec_public_key, parameters}, point),
-    do: {{:ECPoint, point}, parameters}
+    do: Ecdsa.public_key(parameters, point)
 
-  defp decode_public_key(_algorithm, key_bin),
-    do: :public_key.pem_entry_decode({:RSAPublicKey, key_bin, :not_encrypted})
-
-  # The signature as `:public_key.verify/4` takes it, provided the
-  # certificate's key is of the kind the signature method names.
-  defp der_signature(:rsa, {:RSAPublicKey, _, _}, sig), do: {:ok, sig}
-
-  defp der_signature(:ecdsa, {{:ECPoint, _}, _}, sig)
-       when sig != <<>> and rem(byte_size(sig), 2) == 0 do
-    size = div(byte_size(sig), 2)
-    <<r::size(size)-unit(8), s::size(size)-unit(8)>> = sig
-    {:ok, :public_key.der_encode(:"ECDSA-Sig-Value", {:"ECDSA-Sig-Value", r, s})}
-  end
-
-  defp der_signature(_key_type, _key, _sig), do: {:error, :bad_signature}
+  defp decode_public_key(_algorithm, key_der), do: Rsa.public_key(key_der)
 
   defp find_attr(name, element) do
     case :lists.keyfind(name, 2, xmlElement(element, :attributes)) do
@@ -509,73 +517,20 @@ defmodule ExSaml.Core.Xml.Dsig do
     end
   end
 
-  defp key_type("http://www.w3.org/2001/04/xmldsig-more#ecdsa-" <> _), do: :ecdsa
-  defp key_type(_method), do: :rsa
-
-  # The `SignatureValue` of a `:public_key.sign/3` signature: r and s, each
-  # left-padded to the curve's field size, for an ECDSA key.
-  defp raw_signature(der, ec_private_key(parameters: {:namedCurve, curve})) do
-    size = Map.fetch!(@ec_field_sizes, curve)
-    {:"ECDSA-Sig-Value", r, s} = :public_key.der_decode(:"ECDSA-Sig-Value", der)
-    <<r::size(size)-unit(8), s::size(size)-unit(8)>>
+  # The key type a signature method URI needs.
+  defp key_type(method_uri) do
+    {_hash, _digest_uri, _method_uri, key_type} = Map.fetch!(@method_by_name, method_uri)
+    key_type
   end
-
-  defp raw_signature(signature, _private_key), do: signature
 
   @doc false
-  def signature_props("http://www.w3.org/2000/09/xmldsig#rsa-sha1"),
-    do: signature_props(:rsa_sha1)
-
-  def signature_props(~c"http://www.w3.org/2000/09/xmldsig#rsa-sha1"),
-    do: signature_props(:rsa_sha1)
-
-  def signature_props(:rsa_sha1) do
-    {:sha, "http://www.w3.org/2000/09/xmldsig#sha1", "http://www.w3.org/2000/09/xmldsig#rsa-sha1"}
+  @spec signature_props(sig_method() | String.t() | charlist()) ::
+          {hash :: atom(), digest_uri :: String.t(), method_uri :: String.t()}
+          | :unsupported_algorithm
+  def signature_props(method) do
+    case Map.fetch(@method_by_name, method) do
+      {:ok, {hash, digest_uri, method_uri, _key_type}} -> {hash, digest_uri, method_uri}
+      :error -> :unsupported_algorithm
+    end
   end
-
-  def signature_props("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"),
-    do: signature_props(:rsa_sha256)
-
-  def signature_props(~c"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"),
-    do: signature_props(:rsa_sha256)
-
-  def signature_props(:rsa_sha256) do
-    {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
-     "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"}
-  end
-
-  def signature_props("http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"),
-    do: signature_props(:ecdsa_sha256)
-
-  def signature_props(~c"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"),
-    do: signature_props(:ecdsa_sha256)
-
-  def signature_props(:ecdsa_sha256) do
-    {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
-     "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"}
-  end
-
-  def signature_props("http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384"),
-    do: signature_props(:ecdsa_sha384)
-
-  def signature_props(~c"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384"),
-    do: signature_props(:ecdsa_sha384)
-
-  def signature_props(:ecdsa_sha384) do
-    {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
-     "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384"}
-  end
-
-  def signature_props("http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512"),
-    do: signature_props(:ecdsa_sha512)
-
-  def signature_props(~c"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512"),
-    do: signature_props(:ecdsa_sha512)
-
-  def signature_props(:ecdsa_sha512) do
-    {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
-     "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512"}
-  end
-
-  def signature_props(_unknown), do: :unsupported_algorithm
 end
