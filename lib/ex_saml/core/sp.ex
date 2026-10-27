@@ -113,11 +113,16 @@ defmodule ExSaml.Core.Sp do
       })
 
     if sp.sp_sign_requests do
-      xml |> Dsig.sign(sp.key, sp.certificate) |> reorder_issuer()
+      xml |> Dsig.sign(sp.key, sp.certificate, sig_method(sp)) |> reorder_issuer()
     else
       add_xml_id(xml)
     end
   end
+
+  # The signature method of the SP's own signatures: the configured one, or
+  # the one its key calls for.
+  defp sig_method(%SpConfig{sig_method: nil, key: key}), do: Dsig.default_method(key)
+  defp sig_method(%SpConfig{sig_method: sig_method}), do: sig_method
 
   # ---------------------------------------------------------------------------
   # LogoutRequest generation
@@ -156,7 +161,7 @@ defmodule ExSaml.Core.Sp do
       })
 
     if sp.sp_sign_requests do
-      xml |> Dsig.sign(sp.key, sp.certificate) |> reorder_issuer()
+      xml |> Dsig.sign(sp.key, sp.certificate, sig_method(sp)) |> reorder_issuer()
     else
       add_xml_id(xml)
     end
@@ -183,7 +188,7 @@ defmodule ExSaml.Core.Sp do
       })
 
     if sp.sp_sign_requests do
-      xml |> Dsig.sign(sp.key, sp.certificate) |> reorder_issuer()
+      xml |> Dsig.sign(sp.key, sp.certificate, sig_method(sp)) |> reorder_issuer()
     else
       add_xml_id(xml)
     end
@@ -214,7 +219,7 @@ defmodule ExSaml.Core.Sp do
       })
 
     if sp.sp_sign_metadata do
-      Dsig.sign(xml, sp.key, sp.certificate)
+      Dsig.sign(xml, sp.key, sp.certificate, sig_method(sp))
     else
       add_xml_id(xml)
     end

@@ -234,10 +234,11 @@ defmodule ExSaml.Core.Util do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Loads an RSA private key from the given file path.
+  Loads a private key from the given file path, as `import_private_key/2`
+  reads it.
 
   The key is cached in the `:ex_saml_core_privkey_cache` ETS table.
-  Returns `{:ok, rsa_private_key}` or `{:error, reason}`.
+  Returns `{:ok, private_key}` or `{:error, reason}`.
   """
   @spec load_private_key(String.t()) :: {:ok, term()} | {:error, term()}
   # Path comes from server-side SP configuration, not user input.
@@ -256,7 +257,12 @@ defmodule ExSaml.Core.Util do
   end
 
   @doc """
-  Imports an RSA private key from a PEM-encoded binary string.
+  Imports a private key from a PEM-encoded binary string.
+
+  The first unencrypted private key entry is taken: a PKCS#1 `RSAPrivateKey`,
+  a SEC 1 `ECPrivateKey`, or a PKCS#8 `PrivateKeyInfo` wrapping an RSA, EC
+  or ML-DSA key, decoded to the key record `:public_key` signs with. An
+  ML-DSA key needs OTP 28.1 or later.
 
   The key is cached in the `:ex_saml_core_privkey_cache` ETS table under
   the given `identifier`.
@@ -270,42 +276,34 @@ defmodule ExSaml.Core.Util do
   end
 
   defp do_import_private_key(cache_key, pem) do
-    entries = :public_key.pem_decode(pem)
-
-    result =
-      Enum.find_value(entries, :error, fn
-        {:RSAPrivateKey, der, :not_encrypted} ->
-          {:ok, :public_key.der_decode(:RSAPrivateKey, der)}
-
-        {:PrivateKeyInfo, der, :not_encrypted} ->
-          {:ok, unwrap_private_key_info(der)}
-
-        _ ->
-          nil
-      end)
-
-    case result do
+    case pem |> :public_key.pem_decode() |> Enum.find_value(:error, &decode_private_key/1) do
       {:ok, key} ->
         :ets.insert(:ex_saml_core_privkey_cache, {cache_key, key})
         {:ok, key}
 
       :error ->
-        {:error, :no_rsa_private_key}
+        {:error, :no_private_key}
     end
   end
 
-  defp unwrap_private_key_info(der) do
-    private_key_info = :public_key.der_decode(:PrivateKeyInfo, der)
+  @private_key_entries [:RSAPrivateKey, :ECPrivateKey, :PrivateKeyInfo, :OneAsymmetricKey]
+  @private_key_records [:RSAPrivateKey, :ECPrivateKey, :"ML-DSAPrivateKey"]
 
-    # PrivateKeyInfo wraps the key — extract the inner RSAPrivateKey
-    case private_key_info do
-      {:PrivateKeyInfo, _version, _algo, inner_der, _attrs} ->
-        :public_key.der_decode(:RSAPrivateKey, inner_der)
-
-      other ->
-        other
+  # `:public_key.pem_entry_decode/1` unwraps a PrivateKeyInfo to the key it
+  # holds. A key this OTP cannot read, such as ML-DSA before OTP 28.1, comes
+  # back as the raw PrivateKeyInfo, or raises: either way it is skipped like
+  # any other entry.
+  defp decode_private_key({type, _der, :not_encrypted} = entry)
+       when type in @private_key_entries do
+    case :public_key.pem_entry_decode(entry) do
+      key when is_tuple(key) and elem(key, 0) in @private_key_records -> {:ok, key}
+      _ -> nil
     end
+  rescue
+    _ -> nil
   end
+
+  defp decode_private_key(_entry), do: nil
 
   # ---------------------------------------------------------------------------
   # Certificate loading / importing

@@ -15,7 +15,7 @@ permissions:
 jobs:
   test:
     name: Test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
 
     strategy:
       fail-fast: false
@@ -25,6 +25,15 @@ jobs:
             otp: "26"
           - elixir: "1.18"
             otp: "28"
+          # The ML-DSA tests need OTP 28.1+ on OpenSSL 3.5+, which the
+          # ubuntu-26.04 image ships: here they must run, not be skipped.
+          # Elixir 1.20's type checker warns on pre-existing code, so this
+          # job compiles without --warnings-as-errors until that is cleaned.
+          - elixir: "1.20"
+            otp: "29"
+            os: ubuntu-26.04
+            require_ml_dsa: "true"
+            warnings_as_errors: "false"
 
     steps:
       - uses: actions/checkout@v4
@@ -52,13 +61,15 @@ jobs:
         run: mix deps.get
 
       - name: Compile (warnings as errors)
-        run: mix compile --warnings-as-errors
+        run: mix compile ${{ matrix.warnings_as_errors == 'false' && '' || '--warnings-as-errors' }}
 
       - name: Check formatting
         run: mix format --check-formatted
 
       - name: Run tests
         run: mix test
+        env:
+          EX_SAML_REQUIRE_ML_DSA: ${{ matrix.require_ml_dsa }}
 
       - name: Check unused dependencies
         run: mix deps.unlock --check-unused

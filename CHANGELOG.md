@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- ML-DSA signatures (`ml-dsa-44`, `ml-dsa-65`, `ml-dsa-87`, FIPS 204), with the SignatureMethod URIs of draft-eastlake-rfc9231bis-xmlsec-uris-09 §3.3.15. `ExSaml.Core.Xml.Dsig` verifies and signs them through `:public_key`, which knows ML-DSA from OTP 28.1 on when linked with OpenSSL 3.5 or later; elsewhere an ML-DSA signature is rejected with `:unsupported_algorithm`. The `SignatureValue` is the raw FIPS 204 signature (pure ML-DSA, empty context). A Signature carrying the draft's optional `SignatureContext` is rejected, as `:public_key` cannot take a context. The Reference digest of an ML-DSA signature is the one its `DigestMethod` names, among SHA-256, SHA-384 and SHA-512; the SP signs with SHA-256, SHA-384 or SHA-512 for ML-DSA-44, -65 or -87 (#69)
+- `sig_method` option of a service provider, to pick the SP's own signature method; by default the SP signs with the method its key calls for, through `ExSaml.Core.Xml.Dsig.default_method/1`: `:rsa_sha256`, `:ecdsa_sha256` / `:ecdsa_sha384` / `:ecdsa_sha512` by curve, or `:ml_dsa_44` / `:ml_dsa_65` / `:ml_dsa_87` by parameter set. `Dsig.sign/3` does the same, where it always signed `rsa-sha256`, which mislabelled the signature of an EC key (#69)
+
+### Changed
+
+- `ExSaml.Core.Util.import_private_key/2` and `load_private_key/1` accept EC (SEC 1 or PKCS#8) and ML-DSA (PKCS#8) private keys, not only RSA, so a service provider can sign with them. A PEM without a readable private key now fails with `:no_private_key` instead of `:no_rsa_private_key` (#69)
 - ECDSA signatures (`ecdsa-sha256`, `ecdsa-sha384`, `ecdsa-sha512`) on the P-256, P-384 and P-521 curves. An IdP whose signing certificate holds an EC key (e.g. a PingFederate `…-EC-…` signing key) had every Response rejected with `:unsupported_algorithm`, and its key was decoded as RSA. `ExSaml.Core.Xml.Dsig.verify/2` now reads EC keys and converts the XML-DSig `r || s` `SignatureValue` (RFC 4051) to the DER form `:public_key` verifies; `sign/4` does the reverse with an EC private key. A signature method naming another key type than the certificate's is rejected with `:bad_signature` (#67)
 
 ## [1.1.3] - 2026-09-30

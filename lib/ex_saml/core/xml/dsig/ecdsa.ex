@@ -17,15 +17,26 @@ defmodule ExSaml.Core.Xml.Dsig.Ecdsa do
     Record.extract(:ECPrivateKey, from_lib: "public_key/include/public_key.hrl")
   )
 
-  # Bytes of r and s, each, in a signature value, per named curve:
-  # secp256r1 (P-256), secp384r1 (P-384) and secp521r1 (P-521).
-  @field_sizes %{
-    {1, 2, 840, 10_045, 3, 1, 7} => 32,
-    {1, 3, 132, 0, 34} => 48,
-    {1, 3, 132, 0, 35} => 66
+  # Per named curve, secp256r1 (P-256), secp384r1 (P-384) and secp521r1
+  # (P-521): the bytes of r and s, each, in a signature value, and the
+  # signature method matching the curve.
+  @curves %{
+    {1, 2, 840, 10_045, 3, 1, 7} => {32, :ecdsa_sha256},
+    {1, 3, 132, 0, 34} => {48, :ecdsa_sha384},
+    {1, 3, 132, 0, 35} => {66, :ecdsa_sha512}
   }
 
   @type hash :: :sha256 | :sha384 | :sha512
+
+  @doc """
+  The signature method matching the key's curve: `:ecdsa_sha256` on P-256,
+  `:ecdsa_sha384` on P-384 and `:ecdsa_sha512` on P-521.
+  """
+  @spec default_method(tuple()) :: :ecdsa_sha256 | :ecdsa_sha384 | :ecdsa_sha512
+  def default_method(ec_private_key(parameters: {:namedCurve, curve})) do
+    {_size, method} = Map.fetch!(@curves, curve)
+    method
+  end
 
   @doc """
   Signs `data` with an `ECPrivateKey` on a supported curve and returns the
@@ -33,7 +44,7 @@ defmodule ExSaml.Core.Xml.Dsig.Ecdsa do
   """
   @spec sign(binary(), hash(), tuple()) :: binary()
   def sign(data, hash, ec_private_key(parameters: {:namedCurve, curve}) = key) do
-    size = Map.fetch!(@field_sizes, curve)
+    {size, _method} = Map.fetch!(@curves, curve)
     der = :public_key.sign(data, hash, key)
     {:"ECDSA-Sig-Value", r, s} = :public_key.der_decode(:"ECDSA-Sig-Value", der)
     <<r::size(size)-unit(8), s::size(size)-unit(8)>>
@@ -50,7 +61,8 @@ defmodule ExSaml.Core.Xml.Dsig.Ecdsa do
   def verify(data, hash, signature, {{:ECPoint, _}, _} = key)
       when signature != <<>> and rem(byte_size(signature), 2) == 0 do
     size = div(byte_size(signature), 2)
-    <<r::size(size)-unit(8), s::size(size)-unit(8)>> = signature
+    r = :binary.decode_unsigned(binary_part(signature, 0, size))
+    s = :binary.decode_unsigned(binary_part(signature, size, size))
     der = :public_key.der_encode(:"ECDSA-Sig-Value", {:"ECDSA-Sig-Value", r, s})
     :public_key.verify(data, hash, der, key)
   end

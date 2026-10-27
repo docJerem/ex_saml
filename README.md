@@ -43,6 +43,8 @@ config :ex_saml, ExSaml.Provider,
       entity_id: "urn:myapp:sp",
       certfile: "path/to/sp.crt",
       keyfile: "path/to/sp.key",
+      # Optional, defaults to the key's own algorithm
+      sig_method: :ecdsa_sha256,
       # Optional
       contact_name: "Admin",
       contact_email: "admin@example.com",
@@ -54,6 +56,8 @@ config :ex_saml, ExSaml.Provider,
 ```
 
 You can also provide `cert` and `key` directly instead of file paths.
+
+The key may be RSA, EC on P-256, P-384 or P-521, or ML-DSA (OTP 28.1+ linked with OpenSSL 3.5+). The SP signs with the method its key calls for: `:rsa_sha256`, `:ecdsa_sha256` / `:ecdsa_sha384` / `:ecdsa_sha512` by curve, or `:ml_dsa_44` / `:ml_dsa_65` / `:ml_dsa_87` by parameter set. `sig_method` overrides that choice with another method of the same key type, e.g. `:ecdsa_sha384` on a P-256 key.
 
 ### Identity Provider
 
@@ -214,7 +218,7 @@ ExSaml includes hardened defaults for SAML processing:
 
 - **XXE protection** — All XML parsing uses `allow_entities: false` ([CVE-2026-28809](https://cna.erlef.org/cves/CVE-2026-28809.html))
 - **NotBefore validation** — Assertions are rejected if issued in the future (with 5s clock skew tolerance)
-- **Algorithm whitelist** — RSA-SHA256 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; unknown signature algorithms return a clean error instead of crashing; RSA-SHA1 is rejected
+- **Algorithm whitelist** — RSA-SHA256, ECDSA-SHA256/384/512 (P-256, P-384, P-521) and ML-DSA-44/65/87 (post-quantum, FIPS 204; needs OTP 28.1+ linked with OpenSSL 3.5+) are accepted; unknown signature algorithms return a clean error instead of crashing; RSA-SHA1 is rejected
 - **Namespace-conformant parsing** — All `xmerl_scan` calls enforce `namespace_conformant: true`
 
 To report a security issue, email security@cryptr.co.
