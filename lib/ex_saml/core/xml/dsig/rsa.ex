@@ -1,6 +1,7 @@
 defmodule ExSaml.Core.Xml.Dsig.Rsa do
   @moduledoc """
-  RSA signatures for XML-DSig: `rsa-sha1` and `rsa-sha256`.
+  RSA signatures for XML-DSig: `rsa-sha1`, `rsa-sha256`, `rsa-sha384` and
+  `rsa-sha512`.
 
   The `SignatureValue` is the PKCS#1 v1.5 signature exactly as
   `:public_key.sign/3` returns it, so no conversion is needed either way.
@@ -8,7 +9,7 @@ defmodule ExSaml.Core.Xml.Dsig.Rsa do
   rejects it on verification.
   """
 
-  @type hash :: :sha | :sha256
+  @type hash :: :sha | :sha256 | :sha384 | :sha512
 
   @doc """
   Signs `data` and returns the `SignatureValue` bytes.

@@ -5,8 +5,8 @@ defmodule ExSaml.Core.Xml.Dsig do
   Implements enveloped XML digital signature generation and verification
   as specified at http://www.w3.org/TR/xmldsig-core/
 
-  Currently supports RSA + SHA1|SHA256 and ECDSA + SHA256|SHA384|SHA512
-  signatures. RSA-SHA1 is rejected on verification.
+  Currently supports RSA + SHA1|SHA256|SHA384|SHA512 and
+  ECDSA + SHA256|SHA384|SHA512 signatures. RSA-SHA1 is rejected on verification.
 
   This module owns the XML side: canonicalization, the `Reference` digest,
   the `ds:Signature` structure and the certificate. Producing and checking
@@ -60,7 +60,13 @@ defmodule ExSaml.Core.Xml.Dsig do
 
   @type xml :: record(:xmlElement) | record(:xmlDocument)
   @type sig_method ::
-          :rsa_sha1 | :rsa_sha256 | :ecdsa_sha256 | :ecdsa_sha384 | :ecdsa_sha512
+          :rsa_sha1
+          | :rsa_sha256
+          | :rsa_sha384
+          | :rsa_sha512
+          | :ecdsa_sha256
+          | :ecdsa_sha384
+          | :ecdsa_sha512
   @type fingerprint :: binary() | {:sha | :sha256, binary()}
   @type key_type :: :rsa | :ecdsa
 
@@ -74,6 +80,12 @@ defmodule ExSaml.Core.Xml.Dsig do
     rsa_sha256:
       {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
        "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", :rsa},
+    rsa_sha384:
+      {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
+       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384", :rsa},
+    rsa_sha512:
+      {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
+       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512", :rsa},
     ecdsa_sha256:
       {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
        "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256", :ecdsa},

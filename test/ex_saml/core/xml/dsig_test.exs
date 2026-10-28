@@ -221,6 +221,18 @@ defmodule ExSaml.Core.Xml.DsigTest do
       assert :ok = Dsig.verify(signed_xml, [:crypto.hash(:sha, cert_bin)])
     end
 
+    for method <- [:rsa_sha384, :rsa_sha512] do
+      test "sign with #{method} and verify" do
+        doc =
+          parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+        {key, cert_bin} = test_sign_256_key()
+        signed_xml = Dsig.sign(doc, key, cert_bin, unquote(method))
+
+        assert :ok = Dsig.verify(signed_xml, [:crypto.hash(:sha, cert_bin)])
+      end
+    end
+
     test "signature without X509Certificate returns {:error, :missing_certificate}" do
       doc =
         parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
