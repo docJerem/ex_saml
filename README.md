@@ -212,12 +212,50 @@ ExSaml.State (assertion storage: ETS | Session | Cache)
 
 ExSaml includes hardened defaults for SAML processing:
 
-- **XXE protection** — All XML parsing uses `allow_entities: false` ([CVE-2026-28809](https://cna.erlef.org/cves/CVE-2026-28809.html))
+- **Single hardened XML entry point** — SAML messages, decrypted assertions and IdP metadata are all parsed by `ExSaml.Core.Xml.SafeXml.scan/1`, which returns `{:ok, xml}` or `{:error, :invalid_xml}` and never raises
+- **XXE protection** — Documents containing a DOCTYPE declaration are rejected before parsing (SAML never uses one), entity references other than the predefined ones are rejected, the parser runs with `allow_entities: false` ([CVE-2026-28809](https://cna.erlef.org/cves/CVE-2026-28809.html)) and never fetches external resources
+- **Bounded input** — Documents and DEFLATE-compressed messages are limited to `:max_document_size` bytes (1 MiB by default); compressed messages are inflated incrementally and rejected as soon as they exceed the limit
+- **Bounded atom creation** — The XML parser creates an atom per element name, attribute name and namespace; names outside the SAML, XML-DSig, XML-Enc and metadata vocabularies draw from a node-wide budget (`:max_new_atoms`) and documents exceeding it are rejected (see [XML parsing limits](#xml-parsing-limits))
 - **NotBefore validation** — Assertions are rejected if issued in the future (with 5s clock skew tolerance)
 - **Algorithm whitelist** — RSA-SHA256/384/512 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; unknown signature algorithms return a clean error instead of crashing; RSA-SHA1 is rejected
-- **Namespace-conformant parsing** — All `xmerl_scan` calls enforce `namespace_conformant: true`
+- **Namespace-conformant parsing** — XML is parsed with `namespace_conformant: true`
 
 To report a security issue, email security@cryptr.co.
+
+### XML parsing limits
+
+The defaults suit standard SAML deployments; all keys are optional and read
+on every parse:
+
+```elixir
+config :ex_saml, :safe_xml,
+  # Maximum size, in bytes, of a document, and of a DEFLATE-compressed
+  # message once inflated.
+  max_document_size: 1_048_576,
+  # Names outside the built-in SAML vocabulary that documents may introduce
+  # over the node's lifetime. Each new name counts once.
+  max_new_atoms: 10_000,
+  # Namespace prefixes an IdP uses instead of the usual ones
+  # (saml, saml2, samlp, saml2p, md, ds, xenc, …), e.g. "ns2" for ns2:Assertion.
+  extra_prefixes: [],
+  # Further names to accept without drawing from the budget, e.g. a vendor
+  # extension: its namespace URI, "xmlns:<prefix>", "<prefix>:<Name>" and "<Name>".
+  extra_names: [],
+  # Arity-1 function called with %{reason: :invalid_xml, kind: …, payload: …}
+  # on every rejected or unparsable document.
+  on_error: &MyApp.SIEM.report_xml_error/1
+```
+
+Names that are already atoms, or that belong to the SAML 2.0 (assertion,
+protocol, metadata and common metadata extensions), WS-Federation metadata,
+XML-DSig 1.0/1.1, exclusive c14n, XML Encryption 1.0/1.1, XML Schema instance
+and `xml:` vocabularies under their usual prefixes, never draw from
+`:max_new_atoms`. An IdP using other prefixes or vendor extension elements
+draws from it the first time each name is seen; declare them with
+`:extra_prefixes` / `:extra_names` to make them independent of the budget.
+When the budget is spent, documents introducing new names are rejected
+(`kind: :rejected, payload: :atom_budget_exhausted` in the `:on_error` hook)
+and a warning is logged once.
 
 ## Migrating from Samly
 
