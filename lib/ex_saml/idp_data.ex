@@ -3,7 +3,8 @@ defmodule ExSaml.IdpData do
 
   import SweetXml
   require Logger
-  alias ExSaml.{Core, Helper, IdpData, SpData}
+  alias ExSaml.{ConfigError, Core, Helper, IdpData, SpData}
+  alias ExSaml.Core.Xml.SafeXml
 
   @type nameid_format :: :unknown | charlist()
   @type certs :: [binary()]
@@ -287,14 +288,12 @@ defmodule ExSaml.IdpData do
 
   @spec from_xml(binary, %IdpData{}) :: %IdpData{}
   defp from_xml(metadata_xml, idp_data) when is_binary(metadata_xml) do
-    xml_opts = [
-      space: :normalize,
-      namespace_conformant: true,
-      comments: false,
-      default_attrs: true
-    ]
+    md_xml =
+      case SafeXml.scan(metadata_xml) do
+        {:ok, md_xml} -> md_xml
+        {:error, reason} -> raise ConfigError, %{idp_id: idp_data.id, metadata: reason}
+      end
 
-    md_xml = SweetXml.parse(metadata_xml, xml_opts)
     signing_certs = get_signing_certs(md_xml)
 
     %IdpData{
