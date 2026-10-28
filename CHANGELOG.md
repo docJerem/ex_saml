@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ExSaml.Core.Xml.SafeXml`, the single entry point for parsing XML: SAML messages, decrypted assertions and IdP metadata all go through `SafeXml.scan/1`, which returns `{:ok, xml}` or `{:error, :invalid_xml}` and never raises. `SafeXml.inflate/1` and `SafeXml.inflate_if_deflated/1` inflate DEFLATE-compressed messages within a size limit (#29)
+- `config :ex_saml, :safe_xml` with the keys `:max_document_size`, `:max_new_atoms`, `:extra_prefixes`, `:extra_names` and `:on_error`, an arity-1 hook receiving `%{reason: :invalid_xml, kind: :error | :exit | :throw | :rejected, payload: …}` on every rejected or unparsable document, e.g. to forward it to a SIEM. See "XML parsing limits" in the README (#29)
+
+### Changed
+
+- `ExSaml.Core.Binding.decode_response/2` returns `{:ok, xml}` or `{:error, :invalid_xml}` instead of the bare parsed element, and no longer raises on invalid base64, invalid DEFLATE data or malformed XML (#29)
+- The `{:invalid_response, reason}` error of the sign-in and sign-out flows now carries the atom `:invalid_xml` instead of an inspected exception string (#29)
+- IdP metadata is parsed with `SafeXml.scan/1` instead of `SweetXml.parse/2`. Whitespace in text nodes is no longer normalised and comments are kept in the parsed tree; the values `ex_saml` reads from metadata are trimmed as before. Metadata that cannot be parsed raises `ExSaml.ConfigError` when the provider is loaded, instead of an exit from `:xmerl_scan` (#29)
+
+### Security
+
+- Reject XML documents containing a DOCTYPE declaration, or any markup declaration, before parsing, and make the parser refuse to fetch any external resource. SAML messages and metadata never carry a DOCTYPE (#29)
+- Reject entity references other than the five predefined entities and character references (#29)
+- Bound the size of parsed documents and of inflated messages: HTTP-Redirect messages are inflated incrementally and rejected once they exceed `:max_document_size` (1 MiB by default), and the same bound applies to HTTP-POST payloads, including those an IdP compresses (#29)
+- Bound atom creation during XML parsing. Element names, attribute names, local names, namespace URIs and processing-instruction targets outside the built-in SAML, XML-DSig, XML-Enc and metadata vocabularies draw from a node-wide budget (`:max_new_atoms`, 10 000 by default), checked before the parser runs; a document that does not fit in what remains is rejected (#29)
+- Reject declared encodings other than UTF-8, US-ASCII and ISO-8859-1, and UTF-16 / UTF-32 documents (#29)
+- Parse IdP metadata through `SafeXml.scan/1`, with the same options and limits as SAML messages (#29)
+
 ## [1.2.0] - 2026-10-28
 
 ### Added
