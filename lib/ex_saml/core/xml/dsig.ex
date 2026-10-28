@@ -5,8 +5,8 @@ defmodule ExSaml.Core.Xml.Dsig do
   Implements enveloped XML digital signature generation and verification
   as specified at http://www.w3.org/TR/xmldsig-core/
 
-  Currently supports RSA + SHA1|SHA256 and ECDSA + SHA256|SHA384|SHA512
-  signatures. RSA-SHA1 is rejected on verification.
+  Currently supports RSA + SHA1|SHA256|SHA384|SHA512 and
+  ECDSA + SHA256|SHA384|SHA512 signatures. RSA-SHA1 is rejected on verification.
 
   An ECDSA `SignatureValue` is the raw `r || s` concatenation (RFC 4051
   §3.3.6), not the DER `ECDSA-Sig-Value` that `:public_key` produces and
@@ -70,7 +70,13 @@ defmodule ExSaml.Core.Xml.Dsig do
 
   @type xml :: record(:xmlElement) | record(:xmlDocument)
   @type sig_method ::
-          :rsa_sha1 | :rsa_sha256 | :ecdsa_sha256 | :ecdsa_sha384 | :ecdsa_sha512
+          :rsa_sha1
+          | :rsa_sha256
+          | :rsa_sha384
+          | :rsa_sha512
+          | :ecdsa_sha256
+          | :ecdsa_sha384
+          | :ecdsa_sha512
   @type fingerprint :: binary() | {:sha | :sha256, binary()}
 
   @doc """
@@ -542,6 +548,28 @@ defmodule ExSaml.Core.Xml.Dsig do
   def signature_props(:rsa_sha256) do
     {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
      "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"}
+  end
+
+  def signature_props("http://www.w3.org/2001/04/xmldsig-more#rsa-sha384"),
+    do: signature_props(:rsa_sha384)
+
+  def signature_props(~c"http://www.w3.org/2001/04/xmldsig-more#rsa-sha384"),
+    do: signature_props(:rsa_sha384)
+
+  def signature_props(:rsa_sha384) do
+    {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
+     "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384"}
+  end
+
+  def signature_props("http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"),
+    do: signature_props(:rsa_sha512)
+
+  def signature_props(~c"http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"),
+    do: signature_props(:rsa_sha512)
+
+  def signature_props(:rsa_sha512) do
+    {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
+     "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"}
   end
 
   def signature_props("http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"),
