@@ -176,7 +176,11 @@ defmodule ExSaml.IdpData do
       %SpData{} = sp ->
         idp_data = %IdpData{idp_data | idp_metadata: build_idp_metadata(idp_data, opts_map)}
         idp_data = %IdpData{idp_data | sp_config: build_sp_config(sp, idp_data)}
-        %IdpData{idp_data | valid?: cert_config_ok?(idp_data, sp)}
+
+        %IdpData{
+          idp_data
+          | valid?: cert_config_ok?(idp_data, sp) and signature_config_ok?(idp_data)
+        }
 
       _ ->
         Logger.error("[ExSaml] Unknown/invalid sp_id: #{idp_data.sp_id}")
@@ -192,6 +196,22 @@ defmodule ExSaml.IdpData do
       false
     else
       true
+    end
+  end
+
+  # Responses are only trusted when signed: at least one of the assertion and
+  # the envelope must carry a signature.
+  @spec signature_config_ok?(%IdpData{}) :: boolean
+  defp signature_config_ok?(%IdpData{} = idp_data) do
+    if idp_data.signed_assertion_in_resp || idp_data.signed_envelopes_in_resp do
+      true
+    else
+      Logger.error(
+        "[ExSaml] signed_assertion_in_resp and signed_envelopes_in_resp are both false - " <>
+          "Skipping identity provider: #{idp_data.id}"
+      )
+
+      false
     end
   end
 
@@ -262,15 +282,12 @@ defmodule ExSaml.IdpData do
     idp_data.nameid_format
   end
 
+  # `provider_type` adapts bindings and request signing to an IdP; it never
+  # relaxes the signatures required on its responses: `signed_assertion_in_resp`
+  # and `signed_envelopes_in_resp` always keep their configured value.
   @spec set_boolean_attr(%IdpData{}, map(), atom()) :: %IdpData{}
   defp set_boolean_attr(%IdpData{} = idp_data, %{provider_type: :adfs}, attr_name)
-       when attr_name not in ~w(allow_idp_initiated_flow use_redirect_for_slo)a do
-    Map.put(idp_data, attr_name, false)
-  end
-
-  defp set_boolean_attr(%IdpData{} = idp_data, %{provider_type: provider_type}, attr_name)
-       when provider_type in ~w(ping_federate ping_one)a and
-              attr_name in ~w(signed_assertion_in_resp signed_envelopes_in_resp)a do
+       when attr_name not in ~w(allow_idp_initiated_flow use_redirect_for_slo signed_assertion_in_resp signed_envelopes_in_resp)a do
     Map.put(idp_data, attr_name, false)
   end
 

@@ -1,6 +1,8 @@
 defmodule ExSamlIdpDataTest do
   use ExUnit.Case
   import ExUnit.CaptureLog
+  alias ExSaml.Core.Sp
+  alias ExSaml.Core.Xml.SafeXml
   alias ExSaml.{IdpData, SpData}
 
   @sp_config1 %{
@@ -122,12 +124,109 @@ defmodule ExSamlIdpDataTest do
         signed_envelopes_in_resp: false
       })
 
+    log =
+      capture_log(fn ->
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        assert idp_data.use_redirect_for_req
+        refute idp_data.sign_requests
+        refute idp_data.sign_metadata
+        refute idp_data.signed_assertion_in_resp
+        refute idp_data.signed_envelopes_in_resp
+      end)
+
+    assert log =~ "signed_assertion_in_resp and signed_envelopes_in_resp are both false"
+  end
+
+  test "an IdP that requires no signature on its responses is invalid", %{sps: sps} do
+    idp_config =
+      Map.merge(@idp_config1, %{signed_assertion_in_resp: false, signed_envelopes_in_resp: false})
+
+    log =
+      capture_log(fn ->
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        refute idp_data.valid?
+        assert IdpData.load_providers([idp_config], sps) == %{}
+      end)
+
+    assert log =~ "Skipping identity provider: idp1"
+  end
+
+  test "an IdP that requires only the envelope signature is valid", %{sps: sps} do
+    idp_config =
+      Map.merge(@idp_config1, %{signed_assertion_in_resp: false, signed_envelopes_in_resp: true})
+
     %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-    assert idp_data.use_redirect_for_req
-    refute idp_data.sign_requests
-    refute idp_data.sign_metadata
-    refute idp_data.signed_assertion_in_resp
-    refute idp_data.signed_envelopes_in_resp
+    assert idp_data.valid?
+    refute idp_data.sp_config.idp_signs_assertions
+    assert idp_data.sp_config.idp_signs_envelopes
+  end
+
+  describe "provider_type keeps the configured signature requirements" do
+    @unsigned_response """
+    <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
+      <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+      <saml:Assertion ID="_a1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
+        <saml:Subject>
+          <saml:NameID>user@example.com</saml:NameID>
+          <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+            <saml:SubjectConfirmationData Recipient="http://ExSaml.howto:4003/sso/sp/consume/idp1" NotOnOrAfter="2099-01-01T00:00:00Z"/>
+          </saml:SubjectConfirmation>
+        </saml:Subject>
+      </saml:Assertion>
+    </samlp:Response>
+    """
+
+    defp unsigned_response do
+      {:ok, xml} = SafeXml.scan(@unsigned_response)
+      xml
+    end
+
+    for provider_type <- [:adfs, :ping_federate, :ping_one] do
+      test "#{provider_type}: the default requires a signed assertion", %{sps: sps} do
+        idp_config = Map.put(@idp_config1, :provider_type, unquote(provider_type))
+
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        assert idp_data.valid?
+        assert idp_data.signed_assertion_in_resp
+        assert idp_data.sp_config.idp_signs_assertions
+
+        assert {:error, {:assertion, {:error, :no_signature}}} =
+                 Sp.validate_assertion(unsigned_response(), idp_data.sp_config)
+      end
+
+      test "#{provider_type}: a required envelope signature is kept", %{sps: sps} do
+        idp_config =
+          Map.merge(@idp_config1, %{
+            provider_type: unquote(provider_type),
+            signed_assertion_in_resp: false,
+            signed_envelopes_in_resp: true
+          })
+
+        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+        assert idp_data.valid?
+        assert idp_data.sp_config.idp_signs_envelopes
+
+        assert {:error, {:envelope, {:error, :no_signature}}} =
+                 Sp.validate_assertion(unsigned_response(), idp_data.sp_config)
+      end
+    end
+
+    test "adfs still forces its other options off", %{sps: sps} do
+      idp_config =
+        Map.merge(@idp_config1, %{
+          sp_id: "sp5",
+          provider_type: :adfs,
+          use_redirect_for_req: true,
+          sign_requests: true,
+          sign_metadata: true
+        })
+
+      %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+      assert idp_data.valid?
+      refute idp_data.use_redirect_for_req
+      refute idp_data.sign_requests
+      refute idp_data.sign_metadata
+    end
   end
 
   test "RSA-1_5 key transport is refused unless the IdP allows it", %{sps: sps} do

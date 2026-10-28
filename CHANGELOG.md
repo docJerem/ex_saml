@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RSA-1_5 key transport is rejected by default: `Sp.validate_assertion/2` returns `{:error, :bad_assertion}` and logs why. XML Encryption 1.1 §5.5.1 advises against RSA-1_5; an IdP that still uses it can be allowed with the new `allow_rsa_1_5_key_transport: true` IdP option
 - A `SubjectConfirmation` without `@Method` decodes as `:unknown` instead of `:bearer` and is rejected with `:bad_subject_confirmation`. Every `Audience` value is read whole, including a value split by a comment, and the SP entity id must be named in every `AudienceRestriction`; `conditions[:audience]` holds the first value. An assertion without `Audience`, a signed `Response` without `Destination` and a re-posted `SAMLResponse` are rejected; each can be made log-only with `:enforced_response_checks` (#55)
 - The configured cache must implement `put_new/3` (Nebulex 2 contract: `true` when written, `false` when the key exists), used by the replay check. Every Nebulex cache does; a hand-written cache module must add it (#55)
+- `provider_type: :adfs`, `:ping_federate` and `:ping_one` no longer change `signed_assertion_in_resp` and `signed_envelopes_in_resp`: they keep their configured value, `signed_assertion_in_resp: true` by default. An IdP of these types that signs only the Response must be configured with `signed_assertion_in_resp: false, signed_envelopes_in_resp: true`. The other options `:adfs` sets are unchanged
+- An IdP configured with both `signed_assertion_in_resp: false` and `signed_envelopes_in_resp: false` is invalid: it is logged as an error and skipped when the providers are loaded
 
 ### Security
 
@@ -43,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validate the `Response/@Destination` against the ACS URL, and require it on a signed `Response` (`:bad_destination`) (#55)
 - Reject an assertion whose ID was already consumed while it is still valid (`:duplicate`), whatever the policy for an assertion carrying `OneTimeUse` (#55)
 - Require an `Audience` and evaluate every `Audience` value of every `AudienceRestriction` (`:bad_audience`) (#55)
+- Require a signature on every Response: `provider_type` no longer turns off the configured signature requirements, and an IdP that requires neither an assertion nor an envelope signature is rejected at load
 
 ## [1.2.0] - 2026-10-28
 
