@@ -5,8 +5,12 @@ defmodule ExSaml.Application do
 
   use Application
 
+  alias ExSaml.Core.Xml.SafeXml.AtomBudget
+
   @impl true
   def start(_type, _args) do
+    _ = AtomBudget.init()
+
     children = [
       # Core ETS tables must be started before Provider
       {ExSaml.Core.TableOwner, []},
