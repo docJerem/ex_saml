@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-28
+
 ### Added
 
-- ECDSA signatures (`ecdsa-sha256`, `ecdsa-sha384`, `ecdsa-sha512`) on the P-256, P-384 and P-521 curves. An IdP whose signing certificate holds an EC key (e.g. a PingFederate `…-EC-…` signing key) had every Response rejected with `:unsupported_algorithm`, and its key was decoded as RSA. `ExSaml.Core.Xml.Dsig.verify/2` now reads EC keys and converts the XML-DSig `r || s` `SignatureValue` (RFC 4051) to the DER form `:public_key` verifies; `sign/4` does the reverse with an EC private key. A signature method naming another key type than the certificate's is rejected with `:bad_signature` (#67)
+- ECDSA signatures (`ecdsa-sha256`, `ecdsa-sha384`, `ecdsa-sha512`) on the P-256, P-384 and P-521 curves. An IdP whose signing certificate holds an EC key (e.g. a PingFederate `…-EC-…` signing key) had every Response rejected with `:unsupported_algorithm`, and its key was decoded as RSA. `ExSaml.Core.Xml.Dsig.verify/2` now reads EC keys and converts the XML-DSig `r || s` `SignatureValue` (RFC 4051) to the DER form `:public_key` verifies; `sign/4` does the reverse with an EC private key. A signature method naming another key type than the certificate's is rejected with `:bad_signature` (#67, #68)
 - RSA-SHA384 and RSA-SHA512 signatures (`rsa-sha384`, `rsa-sha512`, RFC 6931). An IdP signing with either had every Response rejected with `:unsupported_algorithm`; `ExSaml.Core.Xml.Dsig.verify/2` now accepts them and `sign/4` takes `:rsa_sha384` and `:rsa_sha512` (#68)
 
 ### Changed
@@ -102,6 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unused routes and pre-session create pipeline from Samly
 - Hardcoded Nebulex cache — replaced with delegate pattern
 
+[1.2.0]: https://github.com/docJerem/ex_saml/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/docJerem/ex_saml/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/docJerem/ex_saml/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/docJerem/ex_saml/compare/v1.1.0...v1.1.1
