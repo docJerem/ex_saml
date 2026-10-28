@@ -20,9 +20,11 @@ defmodule ExSaml.ErrorMessages do
   @status_responder {:saml_error, ~c"urn:oasis:names:tc:SAML:2.0:status:Responder", :undefined}
   @assertion_signature {:assertion, {:error, :no_signature}}
   @assertion_cert_not_accepted {:assertion, {:error, :cert_not_accepted}}
+  @assertion_missing_certificate {:assertion, {:error, :missing_certificate}}
   @envelop_signature {:envelope, {:error, :no_signature}}
+  @envelope_missing_certificate {:envelope, {:error, :missing_certificate}}
   @name_id_errors {:saml_error, ~c"urn:oasis:names:tc:SAML:2.0:status:Requester", :undefined}
-  @errors ~w(bad_digest assertion_cert_not_accepted missing_assertion_key bad_audience cert_no_accepted invalid_nameid_policy invalid_nonce missing_assertion_signature missing_envelope_signature status_responder)a
+  @errors ~w(bad_digest assertion_cert_not_accepted missing_assertion_key bad_audience cert_no_accepted invalid_nameid_policy invalid_nonce missing_assertion_signature missing_certificate missing_envelope_signature status_responder)a
 
   @doc false
   def get(error, locale \\ "en")
@@ -38,8 +40,14 @@ defmodule ExSaml.ErrorMessages do
   def get(@assertion_cert_not_accepted, locale),
     do: get(:assertion_cert_not_accepted, locale)
 
+  def get(@assertion_missing_certificate, locale),
+    do: get(:missing_certificate, locale)
+
   def get(@envelop_signature, locale),
     do: get(:missing_envelope_signature, locale)
+
+  def get(@envelope_missing_certificate, locale),
+    do: get(:missing_certificate, locale)
 
   def get(@name_id_errors, locale),
     do: get(:invalid_nameid_policy, locale)

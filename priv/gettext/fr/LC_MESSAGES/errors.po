@@ -13,6 +13,9 @@ msgstr "Signature manquante. Veuillez vous assurer que les assertions sont corre
 msgid "assertion_cert_not_accepted"
 msgstr "Le certificat utilisé pour signer les assertions n'a pas été accepté. Il est possible que le certificat ait expiré ou qu'il ne soit pas pris en charge."
 
+msgid "missing_certificate"
+msgstr "Aucun certificat X.509 n'a été trouvé dans la signature SAML. Veuillez configurer votre fournisseur d'identité pour inclure son certificat de signature dans les réponses et assertions signées."
+
 msgid "missing_envelope_signature"
 msgstr "La Signature pour les enveloppes est manquantes. Assurez-vous que vous avec correctement uploadé votre Certificat Cryptr sur votre IdP."
 

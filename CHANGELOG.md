@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-28
+
+### Added
+
+- ECDSA signatures (`ecdsa-sha256`, `ecdsa-sha384`, `ecdsa-sha512`) on the P-256, P-384 and P-521 curves. An IdP whose signing certificate holds an EC key (e.g. a PingFederate `…-EC-…` signing key) had every Response rejected with `:unsupported_algorithm`, and its key was decoded as RSA. `ExSaml.Core.Xml.Dsig.verify/2` now reads EC keys and converts the XML-DSig `r || s` `SignatureValue` (RFC 4051) to the DER form `:public_key` verifies; `sign/4` does the reverse with an EC private key. A signature method naming another key type than the certificate's is rejected with `:bad_signature` (#67, #68)
+- RSA-SHA384 and RSA-SHA512 signatures (`rsa-sha384`, `rsa-sha512`, RFC 6931). An IdP signing with either had every Response rejected with `:unsupported_algorithm`; `ExSaml.Core.Xml.Dsig.verify/2` now accepts them and `sign/4` takes `:rsa_sha384` and `:rsa_sha512` (#68)
+
+### Changed
+
+- `ExSaml.Core.Xml.Dsig.sign/3,4` raise an `ArgumentError` for an unknown signature method, or for a private key of another type than the method names, such as an EC key with `sign/3` and its default `rsa-sha256`. They used to raise a `MatchError` for the former, and for the latter to produce a document that no verifier accepts (#68)
+
+### Security
+
+- ECDSA verification enforces the P-256, P-384 and P-521 whitelist the documentation states. `ExSaml.Core.Xml.Dsig.verify/2` accepted a certificate on any curve `:crypto` supports, such as secp256k1, brainpoolP256r1 or the 112-bit secp224r1, and split a `SignatureValue` of any even length in two halves; it now rejects them with `:bad_signature`, and requires each of r and s to be the curve's field size (RFC 4051) (#68)
+- `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :bad_signature}` instead of raising on a crafted certificate: an EC key with unknown, implicit or explicit curve parameters, or with a point not on its curve, and a key neither RSA nor EC (e.g. Ed25519), which was decoded as RSA. The certificate's `SubjectPublicKeyInfo` algorithm must now match the key type of the signature method (#68)
+
+## [1.1.3] - 2026-09-30
+
+### Fixed
+
+- Multi-valued SAML attributes are no longer concatenated into a single unseparated string. `ExSaml.Assertion.from_core/1` turned a `group` attribute carrying `Admins` / `Developers` / `Finance` into `"AdminsDevelopersFinance"`. The "list of values" clause in `stringize/1` guards on `is_list(hd(values))`, which only held while attribute values were charlists (Erlang esaml); since the `ExSaml.Core` fork (#8) the decoder emits binaries, so a list of values fell through to `List.to_string/1`, which concatenates iodata. Such attributes are now exposed as a list of strings, as `Core.Saml.decode_assertion/1` always decoded them (#64)
+
+## [1.1.2] - 2026-06-08
+
+### Fixed
+
+- AuthnRequest generation no longer ignores a caller-supplied SAML nonce. `ExSaml.AuthHandler` now resolves the nonce via `conn.assigns[:saml_nonce]` first, falling back to the encrypted `saml_nonce` cookie and finally a fresh `UUID.uuid4/0`. Because `put_resp_cookie/4` does not populate `req_cookies`, the previous cookie-only lookup could not see a nonce the SP had just set on the same round-trip, so any auxiliary state (e.g. `redirect_uri`) persisted under that key failed to resolve when the IdP response came back (#36)
+
+## [1.1.1] - 2026-05-19
+
+### Fixed
+
+- IdP-initiated SSO flow no longer rejects all valid Responses with `:access_denied`. `validate_authresp/4` returned the bare atom `:ok` on the IdP-initiated success branch while the caller pattern-matched `{:ok, nonce}` inside `with`, making the whole success path dead code whenever `allow_idp_initiated_flow: true`. The function now returns `{:ok, flow, nonce}` (with `flow` ∈ `{:idp_initiated, :sp_initiated}` and `nonce: nil` for IdP-initiated), and `consume_signin_response/2` exposes a new `flow:` field in its success map so consumers no longer have to deduce the flow type from `nonce == nil` (#27, closes #24)
+- `ExSaml.SPHandler.send_saml_response/3` no longer crashes with `Plug.Conn.AlreadySentError` (or a `nil` URL `ArgumentError`) when authentication fails and the target URL cannot be resolved. The error path now renders an HTML 403 response instead of attempting a redirect to a missing location (#26)
+
+### Changed
+
+- `consume_signin_response/2` success map now includes a `flow:` field (`:sp_initiated` or `:idp_initiated`). Additive — existing keys are unchanged (#27)
+- Error atom `:idp_first_flow_not_allowed` renamed to `:idp_initiated_not_allowed` to align with standard SAML terminology used elsewhere in the module. In practice the previous atom was unobservable because the IdP-initiated flow itself was broken (#27)
+- Internal `stale_time/1` rewritten in idiomatic Elixir — drops the verbatim-from-esaml nested-`case` structure with variable shadowing in favor of an `Enum.min/1` over collected candidate expiries. Same contract, with dedicated unit tests covering all three branches (#28, #14)
+
 ## [1.1.0] - 2026-05-06
 
 ### Added
@@ -63,6 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unused routes and pre-session create pipeline from Samly
 - Hardcoded Nebulex cache — replaced with delegate pattern
 
+[1.2.0]: https://github.com/docJerem/ex_saml/compare/v1.1.3...v1.2.0
+[1.1.3]: https://github.com/docJerem/ex_saml/compare/v1.1.2...v1.1.3
+[1.1.2]: https://github.com/docJerem/ex_saml/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/docJerem/ex_saml/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/docJerem/ex_saml/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/docJerem/ex_saml/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/docJerem/ex_saml/compare/v1.0.0...v1.0.1

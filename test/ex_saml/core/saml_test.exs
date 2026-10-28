@@ -526,6 +526,68 @@ defmodule ExSaml.Core.SamlTest do
   end
 
   # ---------------------------------------------------------------------------
+  # stale_time/1
+  # ---------------------------------------------------------------------------
+
+  describe "stale_time/1" do
+    defp gregorian(saml_stamp) do
+      saml_stamp
+      |> Util.saml_to_datetime()
+      |> :calendar.datetime_to_gregorian_seconds()
+    end
+
+    test "falls back to issue_instant + 5 minutes when neither subject nor conditions carry NotOnOrAfter" do
+      assertion = %Assertion{
+        issue_instant: "2026-01-01T00:00:00Z",
+        subject: %Subject{notonorafter: ""},
+        conditions: []
+      }
+
+      assert Saml.stale_time(assertion) == gregorian("2026-01-01T00:00:00Z") + 5 * 60
+    end
+
+    test "uses subject NotOnOrAfter when only subject restricts" do
+      assertion = %Assertion{
+        issue_instant: "2026-01-01T00:00:00Z",
+        subject: %Subject{notonorafter: "2026-01-01T00:10:00Z"},
+        conditions: []
+      }
+
+      assert Saml.stale_time(assertion) == gregorian("2026-01-01T00:10:00Z")
+    end
+
+    test "uses conditions NotOnOrAfter when only conditions restrict" do
+      assertion = %Assertion{
+        issue_instant: "2026-01-01T00:00:00Z",
+        subject: %Subject{notonorafter: ""},
+        conditions: [not_on_or_after: "2026-01-01T00:10:00Z"]
+      }
+
+      assert Saml.stale_time(assertion) == gregorian("2026-01-01T00:10:00Z")
+    end
+
+    test "returns the minimum when both restrictions are present (conditions earlier)" do
+      assertion = %Assertion{
+        issue_instant: "2026-01-01T00:00:00Z",
+        subject: %Subject{notonorafter: "2026-01-01T00:15:00Z"},
+        conditions: [not_on_or_after: "2026-01-01T00:05:00Z"]
+      }
+
+      assert Saml.stale_time(assertion) == gregorian("2026-01-01T00:05:00Z")
+    end
+
+    test "returns the minimum when both restrictions are present (subject earlier)" do
+      assertion = %Assertion{
+        issue_instant: "2026-01-01T00:00:00Z",
+        subject: %Subject{notonorafter: "2026-01-01T00:05:00Z"},
+        conditions: [not_on_or_after: "2026-01-01T00:15:00Z"]
+      }
+
+      assert Saml.stale_time(assertion) == gregorian("2026-01-01T00:05:00Z")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # validate_stale_assertion
   # ---------------------------------------------------------------------------
 
