@@ -59,6 +59,32 @@ defmodule ExSaml.Core.Xml.Dsig do
     Record.extract(:SubjectPublicKeyInfo, from_lib: "public_key/include/public_key.hrl")
   )
 
+  # XML-DSig namespaces and algorithm URIs: xmldsig-core, exc-c14n,
+  # RFC 4051 and RFC 6931.
+  @xmldsig_ns "http://www.w3.org/2000/09/xmldsig#"
+  @exc_c14n "http://www.w3.org/2001/10/xml-exc-c14n#"
+  @enveloped_signature "http://www.w3.org/2000/09/xmldsig#enveloped-signature"
+  @signature_element "http://www.w3.org/2000/09/xmldsig#Signature"
+
+  @digest_sha1 "http://www.w3.org/2000/09/xmldsig#sha1"
+  @digest_sha256 "http://www.w3.org/2001/04/xmlenc#sha256"
+  @digest_sha384 "http://www.w3.org/2001/04/xmldsig-more#sha384"
+  @digest_sha512 "http://www.w3.org/2001/04/xmlenc#sha512"
+
+  @rsa_sha1 "http://www.w3.org/2000/09/xmldsig#rsa-sha1"
+  @rsa_sha256 "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+  @rsa_sha384 "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384"
+  @rsa_sha512 "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"
+  @ecdsa_sha256 "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"
+  @ecdsa_sha384 "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384"
+  @ecdsa_sha512 "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512"
+
+  # The prefixes the XPath queries use.
+  @xpath_ns [
+    {~c"ds", String.to_atom(@xmldsig_ns)},
+    {~c"ec", String.to_atom(@exc_c14n)}
+  ]
+
   @type xml :: record(:xmlElement) | record(:xmlDocument)
   @type sig_method ::
           :rsa_sha1
@@ -87,27 +113,13 @@ defmodule ExSaml.Core.Xml.Dsig do
   # `signature_props/1` looks a method up by its atom, or by its URI as a
   # string or charlist.
   @methods [
-    rsa_sha1:
-      {:sha, "http://www.w3.org/2000/09/xmldsig#sha1",
-       "http://www.w3.org/2000/09/xmldsig#rsa-sha1", Rsa},
-    rsa_sha256:
-      {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
-       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", Rsa},
-    rsa_sha384:
-      {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
-       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384", Rsa},
-    rsa_sha512:
-      {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
-       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512", Rsa},
-    ecdsa_sha256:
-      {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
-       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256", Ecdsa},
-    ecdsa_sha384:
-      {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
-       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384", Ecdsa},
-    ecdsa_sha512:
-      {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
-       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512", Ecdsa}
+    rsa_sha1: {:sha, @digest_sha1, @rsa_sha1, Rsa},
+    rsa_sha256: {:sha256, @digest_sha256, @rsa_sha256, Rsa},
+    rsa_sha384: {:sha384, @digest_sha384, @rsa_sha384, Rsa},
+    rsa_sha512: {:sha512, @digest_sha512, @rsa_sha512, Rsa},
+    ecdsa_sha256: {:sha256, @digest_sha256, @ecdsa_sha256, Ecdsa},
+    ecdsa_sha384: {:sha384, @digest_sha384, @ecdsa_sha384, Ecdsa},
+    ecdsa_sha512: {:sha512, @digest_sha512, @ecdsa_sha512, Ecdsa}
   ]
 
   @method_by_name Enum.reduce(@methods, %{}, fn {name, {_, _, uri, _} = row}, acc ->
@@ -136,11 +148,11 @@ defmodule ExSaml.Core.Xml.Dsig do
   end
 
   defp valid_kid?(kid) when Record.is_record(kid, :xmlElement) do
-    C14n.canon_name(kid) != "http://www.w3.org/2000/09/xmldsig#Signature"
+    C14n.canon_name(kid) != @signature_element
   end
 
   defp valid_kid?(kid) when Record.is_record(kid, :xmlAttribute) do
-    C14n.canon_name(kid) != "http://www.w3.org/2000/09/xmldsig#Signature"
+    C14n.canon_name(kid) != @signature_element
   end
 
   defp valid_kid?(_), do: true
@@ -152,7 +164,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   """
   @spec sign(record(:xmlElement), tuple(), binary()) :: record(:xmlElement)
   def sign(element_in, private_key, cert_bin) when is_binary(cert_bin) do
-    sign(element_in, private_key, cert_bin, "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256")
+    sign(element_in, private_key, cert_bin, @rsa_sha256)
   end
 
   @doc """
@@ -209,7 +221,7 @@ defmodule ExSaml.Core.Xml.Dsig do
         :crypto.hash(hash_function, :unicode.characters_to_binary(canon_xml, :unicode, :utf8))
       )
 
-    ns = xmlNamespace(nodes: [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}])
+    ns = xmlNamespace(nodes: [{~c"ds", String.to_atom(@xmldsig_ns)}])
 
     sig_info =
       Util.build_nsinfo(
@@ -222,7 +234,7 @@ defmodule ExSaml.Core.Xml.Dsig do
               attributes: [
                 xmlAttribute(
                   name: :Algorithm,
-                  value: ~c"http://www.w3.org/2001/10/xml-exc-c14n#"
+                  value: String.to_charlist(@exc_c14n)
                 )
               ]
             ),
@@ -246,7 +258,7 @@ defmodule ExSaml.Core.Xml.Dsig do
                       attributes: [
                         xmlAttribute(
                           name: :Algorithm,
-                          value: ~c"http://www.w3.org/2000/09/xmldsig#enveloped-signature"
+                          value: String.to_charlist(@enveloped_signature)
                         )
                       ]
                     ),
@@ -255,7 +267,7 @@ defmodule ExSaml.Core.Xml.Dsig do
                       attributes: [
                         xmlAttribute(
                           name: :Algorithm,
-                          value: ~c"http://www.w3.org/2001/10/xml-exc-c14n#"
+                          value: String.to_charlist(@exc_c14n)
                         )
                       ]
                     )
@@ -293,7 +305,7 @@ defmodule ExSaml.Core.Xml.Dsig do
           attributes: [
             xmlAttribute(
               name: :"xmlns:ds",
-              value: ~c"http://www.w3.org/2000/09/xmldsig#"
+              value: String.to_charlist(@xmldsig_ns)
             )
           ],
           content: [
@@ -331,14 +343,11 @@ defmodule ExSaml.Core.Xml.Dsig do
 
   @spec digest(record(:xmlElement), KeyAlgorithm.hash()) :: binary()
   def digest(element, hash_function) do
-    ds_ns = [
-      {~c"ds", :"http://www.w3.org/2000/09/xmldsig#"},
-      {~c"ec", :"http://www.w3.org/2001/10/xml-exc-c14n#"}
-    ]
+    ds_ns = @xpath_ns
 
     txs =
       :xmerl_xpath.string(
-        ~c"ds:Signature/ds:SignedInfo/ds:Reference/ds:Transforms/ds:Transform[@Algorithm='http://www.w3.org/2001/10/xml-exc-c14n#']",
+        ~c"ds:Signature/ds:SignedInfo/ds:Reference/ds:Transforms/ds:Transform[@Algorithm='#{@exc_c14n}']",
         element,
         namespace: ds_ns
       )
@@ -376,10 +385,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   """
   @spec verify(record(:xmlElement), [fingerprint()] | :any) :: :ok | {:error, verify_error()}
   def verify(element, fingerprints) do
-    ds_ns = [
-      {~c"ds", :"http://www.w3.org/2000/09/xmldsig#"},
-      {~c"ec", :"http://www.w3.org/2001/10/xml-exc-c14n#"}
-    ]
+    ds_ns = @xpath_ns
 
     case :xmerl_xpath.string(
            ~c"ds:Signature/ds:SignedInfo/ds:SignatureMethod/@Algorithm",
@@ -430,7 +436,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   defp extract_inclusive_ns(element, ds_ns) do
     [c14n_tx] =
       :xmerl_xpath.string(
-        ~c"ds:Signature/ds:SignedInfo/ds:Reference/ds:Transforms/ds:Transform[@Algorithm='http://www.w3.org/2001/10/xml-exc-c14n#']",
+        ~c"ds:Signature/ds:SignedInfo/ds:Reference/ds:Transforms/ds:Transform[@Algorithm='#{@exc_c14n}']",
         element,
         namespace: ds_ns
       )
