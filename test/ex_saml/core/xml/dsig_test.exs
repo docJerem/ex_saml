@@ -27,6 +27,27 @@ defmodule ExSaml.Core.Xml.DsigTest do
     doc
   end
 
+  defp to_xml_string(xml) do
+    [xml]
+    |> :xmerl.export(:xmerl_xml)
+    |> List.flatten()
+    |> to_string()
+  end
+
+  # The value of an attribute or text node under ds:Signature/ds:SignedInfo.
+  defp signed_info_value(signed_xml, path) do
+    [node] =
+      :xmerl_xpath.string(
+        ~c"ds:Signature/ds:SignedInfo/" ++ path,
+        signed_xml,
+        namespace: [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}]
+      )
+
+    if Record.is_record(node, :xmlAttribute),
+      do: xmlAttribute(node, :value),
+      else: xmlText(node, :value)
+  end
+
   defp test_sign_key do
     cert_bin =
       <<48, 130, 1, 173, 48, 130, 1, 103, 160, 3, 2, 1, 2, 2, 9, 0, 155, 15, 116, 226, 54, 209,
@@ -320,6 +341,194 @@ defmodule ExSaml.Core.Xml.DsigTest do
 
       assert {:error, :bad_signature} =
                ec_key |> signed_foo(ec_cert, :rsa_sha256) |> Dsig.verify()
+    end
+  end
+
+  describe "signature_props/1" do
+    # RFC 6931 §2.1.2, §2.2.2 and §2.3.6: hash, DigestMethod and SignatureMethod
+    # URIs of each method.
+    @signature_methods [
+      rsa_sha1:
+        {:sha, "http://www.w3.org/2000/09/xmldsig#sha1",
+         "http://www.w3.org/2000/09/xmldsig#rsa-sha1"},
+      rsa_sha256:
+        {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
+         "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"},
+      rsa_sha384:
+        {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
+         "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384"},
+      rsa_sha512:
+        {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
+         "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"},
+      ecdsa_sha256:
+        {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
+         "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"},
+      ecdsa_sha384:
+        {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
+         "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384"},
+      ecdsa_sha512:
+        {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
+         "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512"}
+    ]
+
+    for {name, {hash, digest_uri, method_uri}} <- @signature_methods do
+      test "#{name}, by atom, URI string or URI charlist" do
+        props = {unquote(hash), unquote(digest_uri), unquote(method_uri)}
+
+        assert Dsig.signature_props(unquote(name)) == props
+        assert Dsig.signature_props(unquote(method_uri)) == props
+        assert Dsig.signature_props(String.to_charlist(unquote(method_uri))) == props
+      end
+    end
+
+    test "an unknown method is unsupported" do
+      for method <- [
+            :rsa_sha224,
+            "http://www.w3.org/2001/04/xmldsig-more#rsa-sha224",
+            "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha1",
+            "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha224",
+            "http://www.w3.org/2001/04/xmlenc#sha256",
+            "http://www.w3.org/2001/04/xmldsig-more#RSA-SHA256",
+            "",
+            nil
+          ] do
+        assert Dsig.signature_props(method) == :unsupported_algorithm
+      end
+    end
+  end
+
+  describe "the SignedInfo of sign/4" do
+    for {method, key} <- [
+          rsa_sha256: :rsa,
+          rsa_sha384: :rsa,
+          rsa_sha512: :rsa,
+          ecdsa_sha256: :secp256r1,
+          ecdsa_sha384: :secp384r1,
+          ecdsa_sha512: :secp521r1
+        ] do
+      test "#{method} names its SignatureMethod and DigestMethod, and digests with its hash" do
+        {key, cert_bin} =
+          if unquote(key) == :rsa, do: test_sign_256_key(), else: ec_key(unquote(key))
+
+        {hash, digest_uri, method_uri} = Dsig.signature_props(unquote(method))
+        signed_xml = signed_foo(key, cert_bin, unquote(method))
+
+        assert signed_info_value(signed_xml, ~c"ds:SignatureMethod/@Algorithm") ==
+                 String.to_charlist(method_uri)
+
+        assert signed_info_value(signed_xml, ~c"ds:Reference/ds:DigestMethod/@Algorithm") ==
+                 String.to_charlist(digest_uri)
+
+        digest = signed_info_value(signed_xml, ~c"ds:Reference/ds:DigestValue/text()")
+        assert byte_size(:base64.decode(digest)) == byte_size(:crypto.hash(hash, ""))
+      end
+    end
+  end
+
+  describe "verify/2 with RSA-SHA384 and RSA-SHA512" do
+    for method <- [:rsa_sha384, :rsa_sha512] do
+      test "#{method}: an altered document is rejected with :bad_digest" do
+        {key, cert_bin} = test_sign_256_key()
+
+        assert {:error, :bad_digest} =
+                 key
+                 |> signed_foo(cert_bin, unquote(method))
+                 |> to_xml_string()
+                 |> String.replace("<x:name>blah</x:name>", "<x:name>blah!</x:name>")
+                 |> parse_xml()
+                 |> Dsig.verify()
+      end
+
+      test "#{method}: an altered SignatureValue is rejected with :bad_signature" do
+        {key, cert_bin} = test_sign_256_key()
+        xml = key |> signed_foo(cert_bin, unquote(method)) |> to_xml_string()
+
+        [sig64] = Regex.run(~r|<ds:SignatureValue>([^<]+)<|, xml, capture: :all_but_first)
+        <<first, rest::binary>> = :base64.decode(sig64)
+        tampered = :base64.encode(<<Bitwise.bxor(first, 1), rest::binary>>)
+
+        assert {:error, :bad_signature} =
+                 xml |> String.replace(sig64, tampered) |> parse_xml() |> Dsig.verify()
+      end
+
+      test "#{method}: the certificate is checked against the fingerprints" do
+        {key, cert_bin} = test_sign_256_key()
+        {_, other_cert} = ec_key(:secp256r1)
+        signed_xml = signed_foo(key, cert_bin, unquote(method))
+
+        assert :ok = Dsig.verify(signed_xml, [{:sha256, :crypto.hash(:sha256, cert_bin)}])
+
+        assert {:error, :cert_not_accepted} =
+                 Dsig.verify(signed_xml, [{:sha256, :crypto.hash(:sha256, other_cert)}])
+      end
+
+      test "#{method}: an EC certificate is rejected with :bad_signature" do
+        {key, cert_bin} = ec_key(:secp384r1)
+
+        assert {:error, :bad_signature} =
+                 key |> signed_foo(cert_bin, unquote(method)) |> Dsig.verify()
+      end
+    end
+  end
+
+  describe "a rewritten SignatureMethod" do
+    import ExUnit.CaptureLog
+
+    defp with_signature_method(signed_xml, method_uri) do
+      signed_xml
+      |> to_xml_string()
+      |> String.replace(
+        ~r|<ds:SignatureMethod Algorithm="[^"]+"|,
+        ~s|<ds:SignatureMethod Algorithm="#{method_uri}"|
+      )
+      |> parse_xml()
+    end
+
+    for {signed_with, claimed} <- [
+          rsa_sha512: :rsa_sha256,
+          rsa_sha512: :rsa_sha384,
+          rsa_sha384: :rsa_sha512,
+          rsa_sha256: :rsa_sha512
+        ] do
+      # The Reference is digested with the claimed method's hash, so the
+      # DigestValue no longer matches.
+      test "#{signed_with} relabelled #{claimed} is rejected with :bad_digest" do
+        {key, cert_bin} = test_sign_256_key()
+        {_, _, claimed_uri} = Dsig.signature_props(unquote(claimed))
+
+        assert {:error, :bad_digest} =
+                 key
+                 |> signed_foo(cert_bin, unquote(signed_with))
+                 |> with_signature_method(claimed_uri)
+                 |> Dsig.verify()
+      end
+    end
+
+    test "relabelled rsa-sha1 is rejected as insecure" do
+      {key, cert_bin} = test_sign_256_key()
+
+      capture_log(fn ->
+        assert {:error, :insecure_algorithm} =
+                 key
+                 |> signed_foo(cert_bin, :rsa_sha512)
+                 |> with_signature_method("http://www.w3.org/2000/09/xmldsig#rsa-sha1")
+                 |> Dsig.verify()
+      end)
+    end
+
+    test "relabelled with an unknown method is rejected as unsupported" do
+      {key, cert_bin} = test_sign_256_key()
+
+      log =
+        capture_log(fn ->
+          assert {:error, :unsupported_algorithm} =
+                   key
+                   |> signed_foo(cert_bin, :rsa_sha512)
+                   |> with_signature_method("http://www.w3.org/2001/04/xmldsig-more#rsa-sha224")
+                   |> Dsig.verify()
+        end)
+
+      assert log =~ "rsa-sha224"
     end
   end
 

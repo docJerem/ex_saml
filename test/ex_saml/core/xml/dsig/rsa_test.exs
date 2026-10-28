@@ -28,6 +28,44 @@ defmodule ExSaml.Core.Xml.Dsig.RsaTest do
     refute Rsa.verify(@data, :sha, signature, public_key)
   end
 
+  for hash <- [:sha384, :sha512] do
+    test "signs and verifies with #{hash}", %{key: key, public_key: public_key} do
+      signature = Rsa.sign(@data, unquote(hash), key)
+
+      assert byte_size(signature) == 256
+      assert Rsa.verify(@data, unquote(hash), signature, public_key)
+    end
+  end
+
+  test "a signature only verifies with the hash it was made with", %{
+    key: key,
+    public_key: public_key
+  } do
+    for signed_with <- [:sha256, :sha384, :sha512],
+        verified_with <- [:sha256, :sha384, :sha512],
+        signed_with != verified_with do
+      signature = Rsa.sign(@data, signed_with, key)
+
+      refute Rsa.verify(@data, verified_with, signature, public_key),
+             "signed with #{signed_with}, verified with #{verified_with}"
+    end
+  end
+
+  test "another RSA key fails", %{key: key} do
+    signature = Rsa.sign(@data, :sha512, key)
+
+    {:RSAPrivateKey, _, n, e, _, _, _, _, _, _, _} =
+      :public_key.generate_key({:rsa, 2048, 65_537})
+
+    refute Rsa.verify(@data, :sha512, signature, {:RSAPublicKey, n, e})
+  end
+
+  test "an EC private key cannot sign" do
+    ec_key = :public_key.generate_key({:namedCurve, :secp256r1})
+
+    assert_raise FunctionClauseError, fn -> Rsa.sign(@data, :sha256, ec_key) end
+  end
+
   test "a key of another kind fails", %{key: key} do
     signature = Rsa.sign(@data, :sha256, key)
 

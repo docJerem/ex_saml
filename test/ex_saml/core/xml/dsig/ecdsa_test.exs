@@ -40,6 +40,48 @@ defmodule ExSaml.Core.Xml.Dsig.EcdsaTest do
     refute Ecdsa.verify(@data, :sha256, binary_part(signature, 0, 63), public_key)
   end
 
+  # P-521 values are 521 bits: half of them fit in 65 bytes and must be
+  # left-padded to 66.
+  test "r and s are left-padded to the field size" do
+    {key, public_key} = ec_key(:secp521r1)
+
+    for _ <- 1..20 do
+      signature = Ecdsa.sign(@data, :sha512, key)
+
+      assert byte_size(signature) == 132
+      assert Ecdsa.verify(@data, :sha512, signature, public_key)
+    end
+  end
+
+  test "a signature only verifies with the hash it was made with" do
+    {key, public_key} = ec_key(:secp384r1)
+
+    for signed_with <- [:sha256, :sha384, :sha512],
+        verified_with <- [:sha256, :sha384, :sha512],
+        signed_with != verified_with do
+      signature = Ecdsa.sign(@data, signed_with, key)
+
+      refute Ecdsa.verify(@data, verified_with, signature, public_key),
+             "signed with #{signed_with}, verified with #{verified_with}"
+    end
+  end
+
+  test "a key on another curve, or another key on the same curve, fails" do
+    {key, _} = ec_key(:secp256r1)
+    {_, other_curve} = ec_key(:secp384r1)
+    {_, same_curve} = ec_key(:secp256r1)
+    signature = Ecdsa.sign(@data, :sha256, key)
+
+    refute Ecdsa.verify(@data, :sha256, signature, other_curve)
+    refute Ecdsa.verify(@data, :sha256, signature, same_curve)
+  end
+
+  test "an RSA private key cannot sign" do
+    rsa_key = :public_key.generate_key({:rsa, 2048, 65_537})
+
+    assert_raise FunctionClauseError, fn -> Ecdsa.sign(@data, :sha256, rsa_key) end
+  end
+
   test "a key of another kind fails" do
     {key, _} = ec_key(:secp256r1)
     signature = Ecdsa.sign(@data, :sha256, key)
