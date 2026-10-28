@@ -1,6 +1,7 @@
 defmodule ExSaml.Core.Xml.DsigTest do
   use ExUnit.Case, async: true
 
+  alias ExSaml.Core.Xml.C14n
   alias ExSaml.Core.Xml.Dsig
 
   require Record
@@ -32,6 +33,28 @@ defmodule ExSaml.Core.Xml.DsigTest do
     |> :xmerl.export(:xmerl_xml)
     |> List.flatten()
     |> to_string()
+  end
+
+  defp with_signature_method(signed_xml, method_uri) do
+    signed_xml
+    |> to_xml_string()
+    |> String.replace(
+      ~r|<ds:SignatureMethod Algorithm="[^"]+"|,
+      ~s|<ds:SignatureMethod Algorithm="#{method_uri}"|
+    )
+    |> parse_xml()
+  end
+
+  # The SignedInfo bytes a SignatureValue covers, canonicalized as verify/2 does.
+  defp signed_info_bytes(signed_xml) do
+    [signed_info] =
+      :xmerl_xpath.string(
+        ~c"ds:Signature/ds:SignedInfo",
+        signed_xml,
+        namespace: [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}]
+      )
+
+    signed_info |> C14n.c14n() |> String.to_charlist() |> :erlang.list_to_binary()
   end
 
   # The value of an attribute or text node under ds:Signature/ds:SignedInfo.
@@ -336,11 +359,42 @@ defmodule ExSaml.Core.Xml.DsigTest do
       {rsa_key, rsa_cert} = test_sign_256_key()
       {ec_key, ec_cert} = ec_key(:secp256r1)
 
+      # Both methods digest with SHA-256: only the key type differs.
       assert {:error, :bad_signature} =
-               rsa_key |> signed_foo(rsa_cert, :ecdsa_sha256) |> Dsig.verify()
+               rsa_key
+               |> signed_foo(rsa_cert, :rsa_sha256)
+               |> with_signature_method("http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256")
+               |> Dsig.verify()
 
       assert {:error, :bad_signature} =
-               ec_key |> signed_foo(ec_cert, :rsa_sha256) |> Dsig.verify()
+               ec_key
+               |> signed_foo(ec_cert, :ecdsa_sha256)
+               |> with_signature_method("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256")
+               |> Dsig.verify()
+    end
+
+    # A genuine signature over the SignedInfo of a document whose certificate
+    # holds a key on a curve outside P-256, P-384 and P-521.
+    for {curve, field_size} <- [secp256k1: 32, brainpoolP256r1: 32, secp224r1: 28] do
+      test "a certificate on #{curve} is rejected with :bad_signature" do
+        {p256_key, p256_cert} = ec_key(:secp256r1)
+        {key, cert_bin} = ec_key(unquote(curve))
+
+        xml =
+          p256_key
+          |> signed_foo(p256_cert, :ecdsa_sha256)
+          |> to_xml_string()
+          |> String.replace(:base64.encode(p256_cert), :base64.encode(cert_bin))
+
+        der = :public_key.sign(signed_info_bytes(parse_xml(xml)), :sha256, key)
+        {:"ECDSA-Sig-Value", r, s} = :public_key.der_decode(:"ECDSA-Sig-Value", der)
+        size = unquote(field_size)
+        [sig64] = Regex.run(~r|<ds:SignatureValue>([^<]+)<|, xml, capture: :all_but_first)
+        forged = :base64.encode(<<r::size(size)-unit(8), s::size(size)-unit(8)>>)
+
+        assert {:error, :bad_signature} =
+                 xml |> String.replace(sig64, forged) |> parse_xml() |> Dsig.verify()
+      end
     end
   end
 
@@ -425,6 +479,58 @@ defmodule ExSaml.Core.Xml.DsigTest do
     end
   end
 
+  describe "sign/4 arguments" do
+    test "a private key of another type than the method names is refused" do
+      {rsa_key, rsa_cert} = test_sign_256_key()
+      {ec_key, ec_cert} = ec_key(:secp256r1)
+
+      assert_raise ArgumentError,
+                   ~r/ecdsa-sha256 needs a private key of .*Ecdsa, got :RSAPrivateKey/,
+                   fn ->
+                     signed_foo(rsa_key, rsa_cert, :ecdsa_sha256)
+                   end
+
+      assert_raise ArgumentError,
+                   ~r/rsa-sha512 needs a private key of .*Rsa, got :ECPrivateKey/,
+                   fn ->
+                     signed_foo(ec_key, ec_cert, :rsa_sha512)
+                   end
+    end
+
+    test "sign/3 signs RSA-SHA256 and refuses an EC key" do
+      {rsa_key, rsa_cert} = test_sign_256_key()
+      {ec_key, ec_cert} = ec_key(:secp256r1)
+      doc = parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      signed_xml = Dsig.sign(doc, rsa_key, rsa_cert)
+
+      assert signed_info_value(signed_xml, ~c"ds:SignatureMethod/@Algorithm") ==
+               ~c"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+
+      assert :ok = Dsig.verify(signed_xml)
+      assert_raise ArgumentError, fn -> Dsig.sign(doc, ec_key, ec_cert) end
+    end
+
+    test "an unknown signature method is refused" do
+      {key, cert_bin} = test_sign_256_key()
+
+      for method <- [:rsa_sha224, "http://www.w3.org/2001/04/xmldsig-more#rsa-sha224"] do
+        assert_raise ArgumentError, ~r/unsupported signature method/, fn ->
+          signed_foo(key, cert_bin, method)
+        end
+      end
+    end
+
+    test "a signature method URI may be a charlist" do
+      {key, cert_bin} = test_sign_256_key()
+
+      assert :ok =
+               key
+               |> signed_foo(cert_bin, ~c"http://www.w3.org/2001/04/xmldsig-more#rsa-sha512")
+               |> Dsig.verify()
+    end
+  end
+
   describe "verify/2 with RSA-SHA384 and RSA-SHA512" do
     for method <- [:rsa_sha384, :rsa_sha512] do
       test "#{method}: an altered document is rejected with :bad_digest" do
@@ -463,26 +569,40 @@ defmodule ExSaml.Core.Xml.DsigTest do
       end
 
       test "#{method}: an EC certificate is rejected with :bad_signature" do
-        {key, cert_bin} = ec_key(:secp384r1)
+        {ec_method, curve} =
+          if unquote(method) == :rsa_sha384,
+            do: {:ecdsa_sha384, :secp384r1},
+            else: {:ecdsa_sha512, :secp521r1}
+
+        {key, cert_bin} = ec_key(curve)
+        {_, _, method_uri} = Dsig.signature_props(unquote(method))
 
         assert {:error, :bad_signature} =
-                 key |> signed_foo(cert_bin, unquote(method)) |> Dsig.verify()
+                 key
+                 |> signed_foo(cert_bin, ec_method)
+                 |> with_signature_method(method_uri)
+                 |> Dsig.verify()
+      end
+
+      test "#{method}: a certificate neither RSA nor EC is rejected with :bad_signature" do
+        {key, cert_bin} = test_sign_256_key()
+
+        %{cert: ed25519_cert} =
+          :public_key.pkix_test_root_cert(~c"ExSaml Ed25519", key: {:namedCurve, :ed25519})
+
+        assert {:error, :bad_signature} =
+                 key
+                 |> signed_foo(cert_bin, unquote(method))
+                 |> to_xml_string()
+                 |> String.replace(:base64.encode(cert_bin), :base64.encode(ed25519_cert))
+                 |> parse_xml()
+                 |> Dsig.verify()
       end
     end
   end
 
   describe "a rewritten SignatureMethod" do
     import ExUnit.CaptureLog
-
-    defp with_signature_method(signed_xml, method_uri) do
-      signed_xml
-      |> to_xml_string()
-      |> String.replace(
-        ~r|<ds:SignatureMethod Algorithm="[^"]+"|,
-        ~s|<ds:SignatureMethod Algorithm="#{method_uri}"|
-      )
-      |> parse_xml()
-    end
 
     for {signed_with, claimed} <- [
           rsa_sha512: :rsa_sha256,

@@ -11,13 +11,17 @@ defmodule ExSaml.Core.Xml.Dsig do
   This module owns the XML side: canonicalization, the `Reference` digest,
   the `ds:Signature` structure and the certificate. Producing and checking
   the `SignatureValue` bytes is the job of one module per key type,
-  `ExSaml.Core.Xml.Dsig.Rsa` and `ExSaml.Core.Xml.Dsig.Ecdsa`, chosen from
-  the private key when signing and from the signature method when verifying.
+  `ExSaml.Core.Xml.Dsig.Rsa` and `ExSaml.Core.Xml.Dsig.Ecdsa`, behind the
+  `ExSaml.Core.Xml.Dsig.KeyAlgorithm` behaviour. When signing, the module is
+  chosen from the private key, which must be of the type the signature method
+  names. When verifying, it is chosen from the signature method, and the
+  certificate's key must be of that type: a certificate of any other type is
+  rejected with `:bad_signature`.
   """
 
   alias ExSaml.Core.Util
   alias ExSaml.Core.Xml.C14n
-  alias ExSaml.Core.Xml.Dsig.{Ecdsa, Rsa}
+  alias ExSaml.Core.Xml.Dsig.{Ecdsa, KeyAlgorithm, Rsa}
 
   require Record
 
@@ -55,9 +59,6 @@ defmodule ExSaml.Core.Xml.Dsig do
     Record.extract(:SubjectPublicKeyInfo, from_lib: "public_key/include/public_key.hrl")
   )
 
-  # id-ecPublicKey, the SubjectPublicKeyInfo algorithm of an EC certificate.
-  @ec_public_key {1, 2, 840, 10_045, 2, 1}
-
   @type xml :: record(:xmlElement) | record(:xmlDocument)
   @type sig_method ::
           :rsa_sha1
@@ -68,33 +69,45 @@ defmodule ExSaml.Core.Xml.Dsig do
           | :ecdsa_sha384
           | :ecdsa_sha512
   @type fingerprint :: binary() | {:sha | :sha256, binary()}
-  @type key_type :: :rsa | :ecdsa
+  @type verify_error ::
+          :bad_digest
+          | :bad_signature
+          | :cert_not_accepted
+          | :missing_certificate
+          | :no_signature
+          | :multiple_signatures
+          | :insecure_algorithm
+          | :unsupported_algorithm
+
+  # The module of each key type.
+  @key_algorithms [Rsa, Ecdsa]
 
   # The signature methods, one row each: hash function, DigestMethod URI,
-  # SignatureMethod URI and the key type the method needs. `signature_props/1`
-  # looks a method up by its atom, or by its URI as a string or charlist.
+  # SignatureMethod URI and the module of the key type the method needs.
+  # `signature_props/1` looks a method up by its atom, or by its URI as a
+  # string or charlist.
   @methods [
     rsa_sha1:
       {:sha, "http://www.w3.org/2000/09/xmldsig#sha1",
-       "http://www.w3.org/2000/09/xmldsig#rsa-sha1", :rsa},
+       "http://www.w3.org/2000/09/xmldsig#rsa-sha1", Rsa},
     rsa_sha256:
       {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
-       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", :rsa},
+       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", Rsa},
     rsa_sha384:
       {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
-       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384", :rsa},
+       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384", Rsa},
     rsa_sha512:
       {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
-       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512", :rsa},
+       "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512", Rsa},
     ecdsa_sha256:
       {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
-       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256", :ecdsa},
+       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256", Ecdsa},
     ecdsa_sha384:
       {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
-       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384", :ecdsa},
+       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384", Ecdsa},
     ecdsa_sha512:
       {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
-       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512", :ecdsa}
+       "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512", Ecdsa}
   ]
 
   @method_by_name Enum.reduce(@methods, %{}, fn {name, {_, _, uri, _} = row}, acc ->
@@ -142,9 +155,24 @@ defmodule ExSaml.Core.Xml.Dsig do
     sign(element_in, private_key, cert_bin, "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256")
   end
 
-  @spec sign(record(:xmlElement), tuple(), binary(), sig_method() | String.t()) ::
+  @doc """
+  Signs the given XML element with the given signature method, by atom or by
+  URI as a string or charlist.
+
+  Raises an `ArgumentError` for an unknown signature method, or a private key
+  of another type than the method names.
+  """
+  @spec sign(record(:xmlElement), tuple(), binary(), sig_method() | String.t() | charlist()) ::
           record(:xmlElement)
   def sign(element_in, private_key, cert_bin, sig_method) when is_binary(cert_bin) do
+    {hash_function, digest_method, sig_method_url, key_algorithm} = method!(sig_method)
+
+    unless key_algorithm.private_key?(private_key) do
+      raise ArgumentError,
+            "#{sig_method_url} needs a private key of #{inspect(key_algorithm)}, " <>
+              "got #{key_kind(private_key)}"
+    end
+
     element_strip = strip(element_in)
 
     # Ensure root element has an ID
@@ -172,8 +200,6 @@ defmodule ExSaml.Core.Xml.Dsig do
               {xmlElement(element_strip, attributes: new_attrs), String.to_charlist(new_id)}
           end
       end
-
-    {hash_function, digest_method, sig_method_url} = signature_props(sig_method)
 
     # Compute digest of the canonical XML
     canon_xml = C14n.c14n(element)
@@ -255,7 +281,7 @@ defmodule ExSaml.Core.Xml.Dsig do
     sig_info_canon = C14n.c14n(sig_info)
     data = :unicode.characters_to_binary(sig_info_canon, :unicode, :utf8)
 
-    signature = signer(private_key).sign(data, hash_function, private_key)
+    signature = key_algorithm.sign(data, hash_function, private_key)
     sig64 = :base64.encode_to_string(signature)
     cert64 = :base64.encode_to_string(cert_bin)
 
@@ -303,7 +329,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   @spec digest(record(:xmlElement)) :: binary()
   def digest(element), do: digest(element, :sha256)
 
-  @spec digest(record(:xmlElement), :sha | :sha256) :: binary()
+  @spec digest(record(:xmlElement), KeyAlgorithm.hash()) :: binary()
   def digest(element, hash_function) do
     ds_ns = [
       {~c"ds", :"http://www.w3.org/2000/09/xmldsig#"},
@@ -339,8 +365,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   @doc """
   Verifies an XML digital signature, trusting any valid certificate.
   """
-  @spec verify(record(:xmlElement)) ::
-          :ok | {:error, :bad_digest | :bad_signature | :cert_not_accepted}
+  @spec verify(record(:xmlElement)) :: :ok | {:error, verify_error()}
   def verify(element), do: verify(element, :any)
 
   @doc """
@@ -349,17 +374,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   `fingerprints` is a list of valid cert fingerprints that can be accepted,
   or `:any` to accept any valid certificate.
   """
-  @spec verify(record(:xmlElement), [fingerprint()] | :any) ::
-          :ok
-          | {:error,
-             :bad_digest
-             | :bad_signature
-             | :cert_not_accepted
-             | :missing_certificate
-             | :no_signature
-             | :multiple_signatures
-             | :insecure_algorithm
-             | :unsupported_algorithm}
+  @spec verify(record(:xmlElement), [fingerprint()] | :any) :: :ok | {:error, verify_error()}
   def verify(element, fingerprints) do
     ds_ns = [
       {~c"ds", :"http://www.w3.org/2000/09/xmldsig#"},
@@ -377,8 +392,8 @@ defmodule ExSaml.Core.Xml.Dsig do
       [algo_attr] when Record.is_record(algo_attr, :xmlAttribute) ->
         algo = xmlAttribute(algo_attr, :value)
 
-        case signature_props(algo) do
-          {:sha, _, _} ->
+        case Map.fetch(@method_by_name, algo) do
+          {:ok, {:sha, _, _, _}} ->
             require Logger
 
             Logger.error(
@@ -388,10 +403,10 @@ defmodule ExSaml.Core.Xml.Dsig do
 
             {:error, :insecure_algorithm}
 
-          {hash_function, _, method} ->
-            do_verify(element, fingerprints, {hash_function, key_type(method)}, ds_ns)
+          {:ok, {hash_function, _, _, key_algorithm}} ->
+            do_verify(element, fingerprints, {hash_function, key_algorithm}, ds_ns)
 
-          :unsupported_algorithm ->
+          :error ->
             require Logger
             Logger.error("[ExSaml.Core] Unsupported signature algorithm: #{algo}")
             {:error, :unsupported_algorithm}
@@ -446,7 +461,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   defp verify_digest(computed, expected) when computed == expected, do: :ok
   defp verify_digest(_, _), do: {:error, :bad_digest}
 
-  defp verify_signature(element, {hash_function, key_type}, ds_ns, fingerprints) do
+  defp verify_signature(element, {hash_function, key_algorithm}, ds_ns, fingerprints) do
     [sig_info] =
       :xmerl_xpath.string(~c"ds:Signature/ds:SignedInfo", element, namespace: ds_ns)
 
@@ -457,23 +472,23 @@ defmodule ExSaml.Core.Xml.Dsig do
 
     sig = :base64.decode(xmlText(sig_text, :value))
 
-    with {:ok, {key, cert_bin}} <- extract_public_key(element, ds_ns) do
-      # A key of another kind than the method names fails here too.
-      if verifier(key_type).verify(data, hash_function, sig, key),
-        do: check_fingerprints(cert_bin, fingerprints),
-        else: {:error, :bad_signature}
+    # The certificate's key must be of the type the signature method names,
+    # and one the module supports.
+    with {:ok, {spki, cert_bin}} <- extract_public_key_info(element, ds_ns),
+         {^key_algorithm, parameters, key_bits} <- spki,
+         {:ok, key} <- key_algorithm.public_key(parameters, key_bits),
+         true <- key_algorithm.verify(data, hash_function, sig, key) do
+      check_fingerprints(cert_bin, fingerprints)
+    else
+      {:error, :missing_certificate} = error -> error
+      _ -> {:error, :bad_signature}
     end
   end
 
-  # The module producing the SignatureValue for a private key.
-  defp signer({:RSAPrivateKey, _, _, _, _, _, _, _, _, _, _}), do: Rsa
-  defp signer({:ECPrivateKey, _, _, _, _, _}), do: Ecdsa
-
-  # The module checking the SignatureValue for a signature method's key type.
-  defp verifier(:rsa), do: Rsa
-  defp verifier(:ecdsa), do: Ecdsa
-
-  defp extract_public_key(element, ds_ns) do
+  # The SubjectPublicKeyInfo of the signing certificate, as the module of its
+  # algorithm (nil for an unsupported one), the algorithm parameters and the
+  # subjectPublicKey bits.
+  defp extract_public_key_info(element, ds_ns) do
     case :xmerl_xpath.string(
            ~c"ds:Signature//ds:X509Certificate/text()",
            element,
@@ -495,8 +510,9 @@ defmodule ExSaml.Core.Xml.Dsig do
             kb -> kb
           end
 
-        key = decode_public_key(subject_public_key_info(spki, :algorithm), key_bin)
-        {:ok, {key, cert_bin}}
+        {:AlgorithmIdentifier, algorithm, parameters} = subject_public_key_info(spki, :algorithm)
+        key_algorithm = Enum.find(@key_algorithms, &(&1.spki_algorithm() == algorithm))
+        {:ok, {{key_algorithm, parameters, key_bin}, cert_bin}}
     end
   end
 
@@ -515,13 +531,6 @@ defmodule ExSaml.Core.Xml.Dsig do
 
   # --- Private helpers ---
 
-  # The public key of a certificate, from the algorithm and subjectPublicKey
-  # of its SubjectPublicKeyInfo. Any algorithm but EC is read as RSA.
-  defp decode_public_key({:AlgorithmIdentifier, @ec_public_key, parameters}, point),
-    do: Ecdsa.public_key(parameters, point)
-
-  defp decode_public_key(_algorithm, key_der), do: Rsa.public_key(key_der)
-
   defp find_attr(name, element) do
     case :lists.keyfind(name, 2, xmlElement(element, :attributes)) do
       false -> :error
@@ -529,11 +538,19 @@ defmodule ExSaml.Core.Xml.Dsig do
     end
   end
 
-  # The key type a signature method URI needs.
-  defp key_type(method_uri) do
-    {_hash, _digest_uri, _method_uri, key_type} = Map.fetch!(@method_by_name, method_uri)
-    key_type
+  # A signature method's row, by atom or URI, for signing.
+  defp method!(method) do
+    case Map.fetch(@method_by_name, method) do
+      {:ok, row} -> row
+      :error -> raise ArgumentError, "unsupported signature method #{inspect(method)}"
+    end
   end
+
+  # What a private key is, for an error message, without its material.
+  defp key_kind(key) when is_tuple(key) and tuple_size(key) > 0 and is_atom(elem(key, 0)),
+    do: inspect(elem(key, 0))
+
+  defp key_kind(_key), do: "an unsupported private key"
 
   @doc false
   @spec signature_props(sig_method() | String.t() | charlist()) ::
@@ -541,7 +558,7 @@ defmodule ExSaml.Core.Xml.Dsig do
           | :unsupported_algorithm
   def signature_props(method) do
     case Map.fetch(@method_by_name, method) do
-      {:ok, {hash, digest_uri, method_uri, _key_type}} -> {hash, digest_uri, method_uri}
+      {:ok, {hash, digest_uri, method_uri, _key_algorithm}} -> {hash, digest_uri, method_uri}
       :error -> :unsupported_algorithm
     end
   end

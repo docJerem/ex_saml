@@ -63,7 +63,17 @@ defmodule ExSaml.Core.Xml.Dsig.RsaTest do
   test "an EC private key cannot sign" do
     ec_key = :public_key.generate_key({:namedCurve, :secp256r1})
 
-    assert_raise FunctionClauseError, fn -> Rsa.sign(@data, :sha256, ec_key) end
+    refute Rsa.private_key?(ec_key)
+
+    assert_raise ArgumentError, ~r/not an RSA private key/, fn ->
+      Rsa.sign(@data, :sha256, ec_key)
+    end
+  end
+
+  test "private_key?/1 recognises an RSAPrivateKey", %{key: key, public_key: public_key} do
+    assert Rsa.private_key?(key)
+    refute Rsa.private_key?(public_key)
+    refute Rsa.private_key?(nil)
   end
 
   test "a key of another kind fails", %{key: key} do
@@ -75,16 +85,32 @@ defmodule ExSaml.Core.Xml.Dsig.RsaTest do
     refute Rsa.verify(@data, :sha256, signature, ec_key)
   end
 
-  test "public_key/1 reads the certificate's RSAPublicKey" do
-    %{cert: cert_der} = :public_key.pkix_test_root_cert(~c"ExSaml RSA", key: {:rsa, 2048, 65_537})
+  test "public_key/2 reads the RSAPublicKey of a certificate's SubjectPublicKeyInfo" do
+    %{cert: cert_der, key: {:RSAPrivateKey, _, n, e, _, _, _, _, _, _, _}} =
+      :public_key.pkix_test_root_cert(~c"ExSaml RSA", key: {:rsa, 2048, 65_537})
 
-    {:OTPCertificate, {:OTPTBSCertificate, _, _, _, _, _, _, spki, _, _, _}, _, _} =
-      :public_key.pkix_decode_cert(cert_der, :otp)
+    # The bits Dsig reads, from the :plain certificate.
+    {:Certificate, {:TBSCertificate, _, _, _, _, _, _, spki, _, _, _}, _, _} =
+      :public_key.pkix_decode_cert(cert_der, :plain)
 
-    {:OTPSubjectPublicKeyInfo, _, {:RSAPublicKey, n, e}} = spki
-    key_der = :public_key.der_encode(:RSAPublicKey, {:RSAPublicKey, n, e})
+    {:SubjectPublicKeyInfo, {:AlgorithmIdentifier, algorithm, parameters}, key_der} = spki
 
-    assert Rsa.public_key(key_der) == {:RSAPublicKey, n, e}
+    assert algorithm == Rsa.spki_algorithm()
+    assert Rsa.public_key(parameters, key_der) == {:ok, {:RSAPublicKey, n, e}}
+  end
+
+  test "public_key/2 is :error on DER it cannot decode" do
+    assert Rsa.public_key(<<5, 0>>, <<>>) == :error
+    assert Rsa.public_key(<<5, 0>>, "AAAA") == :error
+    assert Rsa.public_key(<<5, 0>>, <<48, 3, 2, 1>>) == :error
+  end
+
+  test "a degenerate public key fails without raising", %{key: key} do
+    signature = Rsa.sign(@data, :sha256, key)
+
+    for public_key <- [{:RSAPublicKey, 0, 0}, {:RSAPublicKey, 1, 1}, {:RSAPublicKey, 15, 3}] do
+      refute Rsa.verify(@data, :sha256, signature, public_key)
+    end
   end
 
   defp ec_public({:ECPrivateKey, _, _, params, point, _}), do: {{:ECPoint, point}, params}

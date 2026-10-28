@@ -79,7 +79,59 @@ defmodule ExSaml.Core.Xml.Dsig.EcdsaTest do
   test "an RSA private key cannot sign" do
     rsa_key = :public_key.generate_key({:rsa, 2048, 65_537})
 
-    assert_raise FunctionClauseError, fn -> Ecdsa.sign(@data, :sha256, rsa_key) end
+    refute Ecdsa.private_key?(rsa_key)
+
+    assert_raise ArgumentError, ~r/not an EC private key/, fn ->
+      Ecdsa.sign(@data, :sha256, rsa_key)
+    end
+  end
+
+  test "private_key?/1 recognises an ECPrivateKey" do
+    {key, public_key} = ec_key(:secp384r1)
+
+    assert Ecdsa.private_key?(key)
+    refute Ecdsa.private_key?(public_key)
+    refute Ecdsa.private_key?(nil)
+  end
+
+  # Curves outside P-256, P-384 and P-521, with their field size.
+  for {curve, field_size} <- [secp256k1: 32, brainpoolP256r1: 32, secp224r1: 28] do
+    test "a genuine signature by a key on #{curve} fails" do
+      {key, public_key} = ec_key(unquote(curve))
+      der = :public_key.sign(@data, :sha256, key)
+      {:"ECDSA-Sig-Value", r, s} = :public_key.der_decode(:"ECDSA-Sig-Value", der)
+      signature = <<r::size(unquote(field_size))-unit(8), s::size(unquote(field_size))-unit(8)>>
+
+      refute Ecdsa.verify(@data, :sha256, signature, public_key)
+    end
+  end
+
+  test "r and s must each be the field size, even zero-padded" do
+    {key, public_key} = ec_key(:secp256r1)
+    <<r::binary-size(32), s::binary-size(32)>> = signature = Ecdsa.sign(@data, :sha256, key)
+
+    assert Ecdsa.verify(@data, :sha256, signature, public_key)
+    refute Ecdsa.verify(@data, :sha256, <<0>> <> r <> <<0>> <> s, public_key)
+    refute Ecdsa.verify(@data, :sha256, signature <> <<0, 0>>, public_key)
+  end
+
+  test "malformed curve parameters or points fail without raising" do
+    {key, {{:ECPoint, point}, params}} = ec_key(:secp256r1)
+    signature = Ecdsa.sign(@data, :sha256, key)
+    <<4, x::binary-size(32), y::binary-size(32)>> = point
+    off_curve = <<4, x::binary, :crypto.exor(y, <<1::256>>)::binary>>
+
+    for public_key <- [
+          {{:ECPoint, point}, {:namedCurve, {1, 2, 3, 4}}},
+          {{:ECPoint, point}, {:namedCurve, {1, 3, 101, 112}}},
+          {{:ECPoint, point}, :asn1_NOVALUE},
+          {{:ECPoint, point}, {:implicitlyCA, :NULL}},
+          {{:ECPoint, <<>>}, params},
+          {{:ECPoint, <<1, 2, 3>>}, params},
+          {{:ECPoint, off_curve}, params}
+        ] do
+      refute Ecdsa.verify(@data, :sha256, signature, public_key), inspect(public_key)
+    end
   end
 
   test "a key of another kind fails" do
@@ -95,14 +147,37 @@ defmodule ExSaml.Core.Xml.Dsig.EcdsaTest do
   test "an unsupported curve cannot sign" do
     {key, _} = ec_key(:secp256k1)
 
-    assert_raise KeyError, fn -> Ecdsa.sign(@data, :sha256, key) end
+    assert_raise ArgumentError, ~r/unsupported EC curve/, fn ->
+      Ecdsa.sign(@data, :sha256, key)
+    end
   end
 
-  test "public_key/2 takes the curve parameters DER-encoded or decoded" do
-    {_, {{:ECPoint, point}, {:namedCurve, _} = params}} = ec_key(:secp256r1)
-    params_der = :public_key.der_encode(:EcpkParameters, params)
+  for curve <- [:secp256r1, :secp384r1, :secp521r1] do
+    test "public_key/2 takes the #{curve} parameters DER-encoded or decoded" do
+      {_, {{:ECPoint, point}, {:namedCurve, _} = params}} = ec_key(unquote(curve))
+      params_der = :public_key.der_encode(:EcpkParameters, params)
 
-    assert Ecdsa.public_key(params_der, point) == {{:ECPoint, point}, params}
-    assert Ecdsa.public_key(params, point) == {{:ECPoint, point}, params}
+      assert Ecdsa.public_key(params_der, point) == {:ok, {{:ECPoint, point}, params}}
+      assert Ecdsa.public_key(params, point) == {:ok, {{:ECPoint, point}, params}}
+    end
+  end
+
+  test "public_key/2 is :error for another curve, malformed parameters or point" do
+    {_, {{:ECPoint, point}, params}} = ec_key(:secp256r1)
+    {_, {{:ECPoint, k1_point}, k1_params}} = ec_key(:secp256k1)
+    <<4, x::binary-size(32), _y::binary>> = point
+
+    assert Ecdsa.public_key(k1_params, k1_point) == :error
+
+    assert Ecdsa.public_key(:public_key.der_encode(:EcpkParameters, k1_params), k1_point) ==
+             :error
+
+    assert Ecdsa.public_key({:namedCurve, {1, 2, 3, 4}}, point) == :error
+    assert Ecdsa.public_key({:implicitlyCA, :NULL}, point) == :error
+    assert Ecdsa.public_key(:asn1_NOVALUE, point) == :error
+    assert Ecdsa.public_key(<<1, 2, 3>>, point) == :error
+    assert Ecdsa.public_key(params, <<2, x::binary>>) == :error
+    assert Ecdsa.public_key(params, binary_part(point, 0, 64)) == :error
+    assert Ecdsa.public_key(params, <<>>) == :error
   end
 end
