@@ -21,6 +21,7 @@ defmodule ExSaml.IdpData do
             sign_metadata: true,
             signed_assertion_in_resp: true,
             signed_envelopes_in_resp: false,
+            allow_rsa_1_5_key_transport: false,
             allow_idp_initiated_flow: true,
             use_redirect_for_slo: false,
             allowed_target_urls: [],
@@ -49,6 +50,7 @@ defmodule ExSaml.IdpData do
           sign_metadata: boolean(),
           signed_assertion_in_resp: boolean(),
           signed_envelopes_in_resp: boolean(),
+          allow_rsa_1_5_key_transport: boolean(),
           allow_idp_initiated_flow: boolean(),
           allowed_target_urls: nil | [binary()],
           entity_id: binary(),
@@ -134,6 +136,7 @@ defmodule ExSaml.IdpData do
     |> set_boolean_attr(opts_map, :sign_metadata)
     |> set_boolean_attr(opts_map, :signed_assertion_in_resp)
     |> set_boolean_attr(opts_map, :signed_envelopes_in_resp)
+    |> set_boolean_attr(opts_map, :allow_rsa_1_5_key_transport)
     |> set_boolean_attr(opts_map, :allow_idp_initiated_flow)
     |> set_boolean_attr(opts_map, :remove_saml_encoding)
   end
@@ -390,6 +393,7 @@ defmodule ExSaml.IdpData do
       sp_sign_metadata: idp_data.sign_metadata,
       idp_signs_envelopes: idp_data.signed_envelopes_in_resp,
       idp_signs_assertions: idp_data.signed_assertion_in_resp,
+      allow_rsa_1_5_key_transport: idp_data.allow_rsa_1_5_key_transport,
       trusted_fingerprints: idp_data.fingerprints,
       metadata_uri: Helper.get_metadata_uri(idp_data.base_url, path_segment_idp_id),
       consume_uri: Helper.get_consume_uri(idp_data.base_url, path_segment_idp_id),

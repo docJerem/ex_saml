@@ -130,6 +130,17 @@ defmodule ExSamlIdpDataTest do
     refute idp_data.signed_envelopes_in_resp
   end
 
+  test "RSA-1_5 key transport is refused unless the IdP allows it", %{sps: sps} do
+    %IdpData{} = idp_data = IdpData.load_provider(@idp_config1, sps)
+    refute idp_data.allow_rsa_1_5_key_transport
+    refute idp_data.sp_config.allow_rsa_1_5_key_transport
+
+    idp_config = Map.put(@idp_config1, :allow_rsa_1_5_key_transport, true)
+    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+    assert idp_data.allow_rsa_1_5_key_transport
+    assert idp_data.sp_config.allow_rsa_1_5_key_transport
+  end
+
   test "valid-idp-config-5", %{sps: sps} do
     idp_config = %{@idp_config1 | base_url: nil}
     %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
