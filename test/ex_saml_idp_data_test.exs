@@ -240,6 +240,23 @@ defmodule ExSamlIdpDataTest do
     assert idp_data.sp_config.allow_rsa_1_5_key_transport
   end
 
+  test "user_key_attribute is idp_user_id unless the IdP names another or nil", %{sps: sps} do
+    assert IdpData.load_provider(@idp_config1, sps).user_key_attribute == "idp_user_id"
+
+    idp_config = Map.put(@idp_config1, :user_key_attribute, "uid")
+    assert IdpData.load_provider(idp_config, sps).user_key_attribute == "uid"
+
+    idp_config = Map.put(@idp_config1, :user_key_attribute, nil)
+    assert IdpData.load_provider(idp_config, sps).user_key_attribute == nil
+  end
+
+  test "user_key_attribute must be an attribute name or nil", %{sps: sps} do
+    for attr <- ["", :uid, 42] do
+      idp_config = Map.put(@idp_config1, :user_key_attribute, attr)
+      assert_raise ExSaml.ConfigError, fn -> IdpData.load_provider(idp_config, sps) end
+    end
+  end
+
   test "valid-idp-config-5", %{sps: sps} do
     idp_config = %{@idp_config1 | base_url: nil}
     %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)

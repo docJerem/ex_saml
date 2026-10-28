@@ -92,7 +92,7 @@ defmodule ExSaml.SPHandler do
          {:ok, %{assertion: assertion, nonce: nonce}} <-
            consume_signin_response(conn, idp_data) do
       nameid = assertion.subject.name
-      assertion_key = {idp_data.id, maybe_idp_user_id(assertion) || nameid}
+      assertion_key = {idp_data.id, user_key_attribute(assertion, idp_data) || nameid}
       conn = State.put_assertion(conn, assertion_key, assertion)
       target_url = auth_target_url(conn, idp_data, assertion, relay_state)
 
@@ -144,8 +144,12 @@ defmodule ExSaml.SPHandler do
     end
   end
 
-  defp maybe_idp_user_id(%{attributes: %{"idp_user_id" => idp_user_id}}), do: idp_user_id
-  defp maybe_idp_user_id(_), do: nil
+  # The value of the IdP's `user_key_attribute`, which keys the assertion
+  # instead of the NameID when the assertion carries it.
+  defp user_key_attribute(_assertion, %IdpData{user_key_attribute: nil}), do: nil
+
+  defp user_key_attribute(%{attributes: attributes}, %IdpData{user_key_attribute: attr}),
+    do: Map.get(attributes, attr)
 
   defp maybe_redirect_to_start_url(_, nil), do: :ok
 

@@ -76,7 +76,9 @@ config :ex_saml, ExSaml.Provider,
       allow_idp_initiated_flow: true,
       use_redirect_for_req: false,
       use_redirect_for_slo: false,
-      allowed_target_urls: ["https://myapp.example.com/dashboard"]
+      allowed_target_urls: ["https://myapp.example.com/dashboard"],
+      # Attribute whose value keys the user instead of the NameID (nil: NameID only)
+      user_key_attribute: "idp_user_id"
     }
   ],
   idp_id_from: :path_segment  # or :subdomain
@@ -88,6 +90,11 @@ In the IdP-initiated flow the `RelayState` is the redirect target. With
 `allowed_target_urls`, it must be one of the listed URLs; without it, only a
 relative path (such as `/dashboard`) is followed and any other value redirects
 to `/`.
+
+The signed-in user is keyed on the value of the `user_key_attribute` attribute
+when the assertion carries it (`"idp_user_id"` by default), and on the NameID
+otherwise. Set it to another attribute name, or to `nil` to key on the NameID
+only.
 
 At least one of `signed_assertion_in_resp` and `signed_envelopes_in_resp` must
 be `true`: an IdP configured with both set to `false` is logged as an error and

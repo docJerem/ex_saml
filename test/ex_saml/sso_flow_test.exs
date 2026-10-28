@@ -12,7 +12,15 @@ defmodule ExSaml.SsoFlowTest do
   import Plug.Conn
   import Plug.Test
 
-  alias ExSaml.{AuthHandler, IdpData, RelayStateCache, SPHandler, StubCache}
+  alias ExSaml.{
+    AuthHandler,
+    AuthorizationCodeCache,
+    IdpData,
+    RelayStateCache,
+    SPHandler,
+    StubCache
+  }
+
   alias ExSaml.Core.{IdpMetadata, SpConfig}
 
   @idp_id "acme"
@@ -88,12 +96,24 @@ defmodule ExSaml.SsoFlowTest do
   # An unsigned but otherwise valid Response for our SP: recipient, audience
   # and time conditions all pass, `InResponseTo` marks the SP-initiated flow.
   # Options: `:destination` adds `Response/@Destination`, `:issuer` replaces
-  # the `Response/Issuer`.
+  # the `Response/Issuer`, `:name_id` replaces the NameID (`nil` drops it),
+  # `:attributes` adds attributes, as `{name, value}` pairs.
   defp saml_response(in_response_to, opts \\ []) do
     dest_attr =
       if dest = Keyword.get(opts, :destination), do: ~s( Destination="#{dest}"), else: ""
 
     issuer = Keyword.get(opts, :issuer, @idp_entity_id)
+
+    name_id_el =
+      if name_id = Keyword.get(opts, :name_id, "jane@corp.com"),
+        do: "<saml:NameID>#{name_id}</saml:NameID>",
+        else: ""
+
+    attributes_el =
+      for {name, value} <- Keyword.get(opts, :attributes, []),
+          into: "",
+          do:
+            ~s(<saml:Attribute Name="#{name}"><saml:AttributeValue>#{value}</saml:AttributeValue></saml:Attribute>)
 
     Base.encode64("""
     <samlp:Response #{@ns} ID="_r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z"#{dest_attr}>
@@ -104,7 +124,7 @@ defmodule ExSaml.SsoFlowTest do
       <saml:Assertion ID="_a1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
         <saml:Issuer>#{@idp_entity_id}</saml:Issuer>
         <saml:Subject>
-          <saml:NameID>jane@corp.com</saml:NameID>
+          #{name_id_el}
           <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
             <saml:SubjectConfirmationData NotOnOrAfter="2099-01-01T00:00:00Z"
               Recipient="#{@consume_uri}" InResponseTo="#{in_response_to}"/>
@@ -120,6 +140,7 @@ defmodule ExSaml.SsoFlowTest do
           <saml:Attribute Name="email">
             <saml:AttributeValue>jane@corp.com</saml:AttributeValue>
           </saml:Attribute>
+          #{attributes_el}
         </saml:AttributeStatement>
       </saml:Assertion>
     </samlp:Response>
@@ -345,6 +366,46 @@ defmodule ExSaml.SsoFlowTest do
 
       refute location(conn) =~ "code="
       assert rejected_with(conn) == {:error, :invalid_target_url}
+    end
+  end
+
+  # The assertion is keyed on the value of the IdP's `user_key_attribute` when
+  # the assertion carries it, on the NameID otherwise.
+  describe "user key" do
+    defp sign_in_key(idp_overrides, response_opts) do
+      idp =
+        struct!(
+          idp(),
+          [allow_idp_initiated_flow: true, allowed_target_urls: nil] ++ idp_overrides
+        )
+
+      Application.put_env(:ex_saml, :identity_providers, %{@idp_id => idp})
+
+      body = %{"SAMLResponse" => saml_response("", response_opts), "RelayState" => "/home"}
+      conn = SPHandler.consume_signin_response(acs_conn(body, %{}))
+
+      case conn |> location() |> String.split("?code=", parts: 2) do
+        [_target, code] -> AuthorizationCodeCache.get(code)[:ex_saml_assertion_key]
+        _ -> rejected_with(conn)
+      end
+    end
+
+    test "is the idp_user_id attribute by default" do
+      assert sign_in_key([], attributes: [{"idp_user_id", "u-42"}]) == {@idp_id, "u-42"}
+    end
+
+    test "is the attribute the IdP names" do
+      assert sign_in_key([user_key_attribute: "uid"], attributes: [{"uid", "jdoe"}]) ==
+               {@idp_id, "jdoe"}
+    end
+
+    test "is the NameID when the assertion does not carry the attribute" do
+      assert sign_in_key([], []) == {@idp_id, "jane@corp.com"}
+    end
+
+    test "is the NameID when the IdP names no attribute" do
+      assert sign_in_key([user_key_attribute: nil], attributes: [{"idp_user_id", "u-42"}]) ==
+               {@idp_id, "jane@corp.com"}
     end
   end
 end

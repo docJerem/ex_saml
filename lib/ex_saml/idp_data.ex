@@ -25,6 +25,7 @@ defmodule ExSaml.IdpData do
             allow_idp_initiated_flow: true,
             use_redirect_for_slo: false,
             allowed_target_urls: [],
+            user_key_attribute: "idp_user_id",
             entity_id: "",
             signed_requests: "",
             certs: [],
@@ -53,6 +54,7 @@ defmodule ExSaml.IdpData do
           allow_rsa_1_5_key_transport: boolean(),
           allow_idp_initiated_flow: boolean(),
           allowed_target_urls: nil | [binary()],
+          user_key_attribute: nil | binary(),
           entity_id: binary(),
           signed_requests: binary(),
           certs: certs(),
@@ -131,6 +133,7 @@ defmodule ExSaml.IdpData do
     }
     |> set_metadata(opts_map)
     |> set_allowed_target_urls(opts_map)
+    |> set_user_key_attribute(opts_map)
     |> set_boolean_attr(opts_map, :use_redirect_for_req)
     |> set_boolean_attr(opts_map, :sign_requests)
     |> set_boolean_attr(opts_map, :sign_metadata)
@@ -243,6 +246,21 @@ defmodule ExSaml.IdpData do
       end
 
     %IdpData{idp_data | allowed_target_urls: target_urls}
+  end
+
+  # The attribute whose value keys the user's assertion instead of the NameID;
+  # `nil` keys on the NameID only.
+  defp set_user_key_attribute(%IdpData{} = idp_data, %{} = opts_map) do
+    case Map.fetch(opts_map, :user_key_attribute) do
+      {:ok, attr} when is_nil(attr) or (is_binary(attr) and attr != "") ->
+        %IdpData{idp_data | user_key_attribute: attr}
+
+      {:ok, attr} ->
+        raise ConfigError, %{idp_id: idp_data.id, user_key_attribute: attr}
+
+      :error ->
+        idp_data
+    end
   end
 
   @spec override_nameid_format(%IdpData{}, map()) :: %IdpData{}
