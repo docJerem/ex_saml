@@ -102,7 +102,8 @@ config :ex_saml, ExSaml.State,
 
 ### Cache
 
-Configure the Nebulex cache module used for assertions and relay state:
+Configure the Nebulex cache module used for assertions, relay state,
+authorization codes and the IDs of consumed assertions (replay detection):
 
 ```elixir
 config :ex_saml, cache: MyApp.Cache
@@ -135,11 +136,15 @@ for the full contract, the catalogue of reasons and the 2.0 migration notes.
 
 ### Response validation checks
 
-Beyond signatures, recipient, audience and time conditions, the ACS checks the
-`Issuer`, the `InResponseTo`, the `SessionNotOnOrAfter` and the bearer
-confirmation method of every response (SAML 2.0 Core / Profiles). Each check
-can reject or only log, per `config :ex_saml, enforced_response_checks:`;
-`[]` turns everything log-only. Details and defaults in the
+Beyond signatures, recipient and time conditions, the ACS checks the `Issuer`,
+the `InResponseTo`, the `Destination`, the `Audience` values, the
+`SessionNotOnOrAfter`, the bearer confirmation method and its `NotBefore` of
+every response, and rejects an assertion whose ID it has already consumed
+(SAML 2.0 Core / Bindings / Profiles). Each check can reject or only log, per
+`config :ex_saml, enforced_response_checks:` (default: every check enforced);
+`[]` turns everything log-only. Replay detection records assertion IDs in the
+configured cache through `put_new/3`, so it spans every node sharing that
+cache. Details and defaults in the
 [guide](guides/error_handling_and_debugging.md#response-validation-checks).
 
 ### Debug mode

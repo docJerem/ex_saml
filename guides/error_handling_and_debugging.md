@@ -140,12 +140,13 @@ Step `:decode` (payload and XML)
 | `:bad_version` | | Not SAML 2.0 |
 | `:bad_issuer` | | `Response/Issuer` or `Assertion/Issuer` ≠ the IdP `entityID` from its metadata (Core §2.2.3, Profiles §4.1.4.2). Enforced by default, see [Response validation checks](#response-validation-checks) |
 | `:bad_recipient` | | `SubjectConfirmationData/@Recipient` ≠ ACS URL |
-| `:bad_audience` | | `AudienceRestriction` ≠ SP entity id |
-| `:bad_subject_confirmation` | | `SubjectConfirmation/@Method` is stated and is not bearer (Profiles §4.1.4.2). Enforced by default |
-| `:too_early` | | `NotBefore` in the future (5 s skew tolerated) |
+| `:bad_destination` | | `Response/@Destination` ≠ ACS URL, or absent on a signed `Response` (Core §3.2.2, Bindings §3.5.5.2). Enforced by default |
+| `:bad_audience` | | An `AudienceRestriction` does not name the SP entity id (Core §2.5.1.4), or the assertion has no `Audience` at all (Profiles §4.1.4.2, enforced by default) |
+| `:bad_subject_confirmation` | | `SubjectConfirmation/@Method` is not bearer, or is absent (Profiles §4.1.4.2). Enforced by default |
+| `:too_early` | | `Conditions/@NotBefore` or `SubjectConfirmationData/@NotBefore` in the future (5 s skew tolerated; the latter enforced by default) |
 | `:session_expired` | | `AuthnStatement/@SessionNotOnOrAfter` in the past (Core §2.7.2): the IdP session ended, the user must sign in again. Enforced by default; an unparsable value only warns |
 | `:stale_assertion` | | `NotOnOrAfter` in the past |
-| `:duplicate` | | Rejected by the configured duplicate-detection function |
+| `:duplicate` | | The assertion ID was already consumed and the assertion is still valid (Profiles §4.1.4.5). Enforced by default, always for an assertion with `OneTimeUse` |
 
 Step `:validate_authresp` (flow)
 
@@ -385,12 +386,13 @@ ExSaml.Debug.replay(trace_id)
 
 Signatures are checked against the current IdP metadata: a rotated certificate
 shows up as `:cert_not_accepted`, which is itself the diagnosis. Replay never
-emits an authorization code or touches any session.
+emits an authorization code or touches any session, and neither checks nor
+records the assertion ID (see [Replay detection](#replay-detection-and-the-cache)).
 
 ## Response validation checks
 
-Beyond signatures, recipient, audience and time conditions, the library
-enforces the checks SAML 2.0 Core / Profiles require of a web browser SSO
+Beyond signatures, `Recipient` and the time conditions, the library enforces
+the checks SAML 2.0 Core / Bindings / Profiles require of a web browser SSO
 response. Each one is a `reason` of its own:
 
 | Check | Reason | Spec | Default |
@@ -398,9 +400,18 @@ response. Each one is a `reason` of its own:
 | `Response/Issuer` and `Assertion/Issuer` match the IdP `entityID` from its metadata | `:bad_issuer` | Core §2.2.3, Profiles §4.1.4.2 | enforced |
 | `SubjectConfirmationData/@InResponseTo` matches the ID of the AuthnRequest we sent | `:bad_in_response_to` | Profiles §4.1.4.3 | enforced |
 | `AuthnStatement/@SessionNotOnOrAfter` has not passed | `:session_expired` | Core §2.7.2 | enforced |
-| `SubjectConfirmation/@Method` is bearer | `:bad_subject_confirmation` | Profiles §4.1.4.2 | enforced |
-| `Response/@Destination` matches the ACS URL | `:bad_destination` | Core §3.2.2, Bindings §3.5.5.2 | not yet evaluated |
-| The assertion has not been seen before | `:duplicate` | Profiles §4.1.4.5 | not yet evaluated |
+| `SubjectConfirmation/@Method` is present and bearer | `:bad_subject_confirmation` | Core §2.4.1.1, Profiles §4.1.4.2 | enforced |
+| `Response/@Destination` equals the ACS URL when present, and is present on a signed `Response` | `:bad_destination` | Core §3.2.2, Bindings §3.5.5.2 | enforced |
+| The assertion ID has not been consumed before | `:duplicate` | Profiles §4.1.4.5, Core §2.5.1.5 | enforced (always with `OneTimeUse`) |
+| The assertion carries an `Audience` | `:bad_audience` | Profiles §4.1.4.2 | enforced |
+| `SubjectConfirmationData/@NotBefore` has passed | `:too_early` | Core §2.4.1.2 | enforced |
+
+Two rules are not part of the policy and always reject, as they did before it
+existed: an `AudienceRestriction` that does not name the SP entity id
+(`:bad_audience`; every `AudienceRestriction` must name it, in any of its
+`Audience` values, Core §2.5.1.4) and a future `Conditions/@NotBefore`
+(`:too_early`). The policy only governs what used to be accepted: an assertion
+with no `Audience` at all, and a future `SubjectConfirmationData/@NotBefore`.
 
 ### Enforce or warn
 
@@ -409,13 +420,16 @@ response. A check absent from the list is still evaluated: a failure emits one
 grep-able log line and the sign-in goes on.
 
 ```elixir
-config :ex_saml, enforced_response_checks: [:bad_issuer, :bad_in_response_to, :session_expired, :bad_subject_confirmation]  # default
+config :ex_saml, enforced_response_checks: :all    # the default: every check above
 config :ex_saml, enforced_response_checks: []      # everything log-only: the rollback lever
-config :ex_saml, enforced_response_checks: :all
+config :ex_saml, enforced_response_checks: [:bad_issuer, :bad_in_response_to, :duplicate]  # only these
 ```
 
+An explicit list enforces exactly the checks it names: a check added in a
+later release is log-only for you until you add it.
+
 ```
-[ExSaml] saml_validation check=:bad_issuer enforced=false idp_id="acme" expected="https://idp.example.com" actual="https://idp.example.com/"
+[ExSaml] saml_validation check=:bad_destination enforced=false idp_id="acme" expected="https://sp.example.com/sso/consume/acme" actual="https://sp.example.com/sso/consume/acme/"
 ```
 
 `expected` / `actual` are logged verbatim, unnormalised: the false positives
@@ -427,11 +441,43 @@ Every verdict, enforced or not, is also recorded as a `:validation_check`
 event in the debug trace, so a warning shows up in `ExSaml.Debug.failure/1`
 next to whatever did reject the response.
 
-The defaults enforce the four checks that cannot reject a conformant response.
-`:bad_destination` (our ACS URL must match byte for byte what the IdP was
-configured with) and `:duplicate` (changes what a replayed callback does) will
-ship log-only first, and be turned on once the warn logs show a clean
-population.
+Every check is enforced by default, because none of them rejects a response
+that follows the specifications. `Destination` is compared with the same ACS
+URL as `Recipient`, which has always been compared exactly, so an IdP whose
+responses are accepted today already sends that URL. If a check rejects real
+traffic, drop it from the list (or set `[]`), read the warn lines, and fix the
+IdP or the SP configuration.
+
+### Replay detection and the cache
+
+Every assertion ID the assertion consumer service accepts is recorded in
+`ExSaml.AssertionReplayCache`, keyed by `Assertion/@ID` and its `Issuer`
+(by the digest of the response when the assertion has no ID), until the
+assertion would be rejected as stale anyway: its earliest `NotOnOrAfter`
+(`SubjectConfirmationData` or `Conditions`, else `IssueInstant` + 5 minutes),
+plus the 5 s clock skew. A second response carrying the same assertion within
+that window is rejected with `:duplicate`, whichever flow or node receives it.
+
+- It uses the cache configured with `config :ex_saml, cache:`, already
+  required for relay states and authorization codes, through **`put_new/3`**
+  (Nebulex 2 contract: `true` when written, `false` when the key exists). Any
+  Nebulex cache provides it; a hand-written cache module must add it.
+- Detection spans the nodes that share the cache. With a node-local cache, a
+  response replayed to another node is not detected.
+- `ExSaml.Debug.replay/2` neither checks nor records the ID: replaying the
+  capture of a flow that did sign in returns `{:ok, _}`, and does not block
+  anything.
+- `ExSaml.Core.Sp.validate_assertion/2,3` keep a no-op duplicate function, as
+  they have no cache to rely on. A direct caller passes
+  `ExSaml.AssertionReplayCache.duplicate_fun(sp)` to `validate_assertion/4`.
+
+`OneTimeUse` (Core §2.5.1.5) asks the relying party to use the assertion
+immediately and not to keep it for future use. The library handles it
+through the replay check: for such an assertion, `:duplicate` is enforced
+even when the policy lists it as log-only, so it can never sign anyone in a
+second time. Its attributes reach the consumer once, through a single-use
+authorization code; the decoded copy the state store keeps for the session
+(logout, `ExSaml.State`) is never used to sign in again.
 
 ### Deliberate failure modes
 
@@ -439,19 +485,24 @@ population.
   than rejecting: relay-state entries written before the check existed carry
   no ID, and so does a consumer that drives `validate_authresp/4` without
   going through `ExSaml.AuthHandler`.
-- An **unparsable `SessionNotOnOrAfter`** warns and passes, even when the check
-  is enforced: an IdP formatting bug must not become a rejected login.
+- An **unparsable `SessionNotOnOrAfter` or `SubjectConfirmationData/@NotBefore`**
+  warns and passes, even when the check is enforced: an IdP formatting bug
+  must not become a rejected login.
 - An **absent `Response/Issuer`** is not a failure and does not warn: the
-  element is optional on a `StatusResponseType`.
+  element is optional on a `StatusResponseType`. Neither is an **absent
+  `Destination` on an unsigned `Response`** (Bindings §3.5.5.2).
 - The response-level checks run **after signature verification**, so forged
   traffic the signature check rejects anyway does not pollute the warn logs.
-- **Known limitation**: a missing `SubjectConfirmation/@Method` is decoded as
-  bearer, so `:bad_subject_confirmation` only catches an explicitly non-bearer
-  method.
+  The replay check is the **last** response check, so an assertion that
+  another response check rejects is not recorded. The flow checks
+  (`RelayState`, `InResponseTo`, step `:validate_authresp`) run after it: an
+  assertion they reject has been recorded, and cannot be presented again.
 
 Consumers do not have to supply anything: the IdP `entityID` and id come from
-`%ExSaml.IdpData{}`, the AuthnRequest ID is stored in the relay state and
-mirrored in the session by `ExSaml.AuthHandler`.
+`%ExSaml.IdpData{}`, the ACS URL and the SP entity id from its `sp_config`,
+the AuthnRequest ID is stored in the relay state and mirrored in the session
+by `ExSaml.AuthHandler`.
+
 
 ## 5. Troubleshooting recipes
 
