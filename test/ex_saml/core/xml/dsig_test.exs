@@ -1,6 +1,7 @@
 defmodule ExSaml.Core.Xml.DsigTest do
   use ExUnit.Case, async: true
 
+  alias ExSaml.Core.Util
   alias ExSaml.Core.Xml.C14n
   alias ExSaml.Core.Xml.Dsig
 
@@ -374,6 +375,49 @@ defmodule ExSaml.Core.Xml.DsigTest do
         end)
 
       assert log =~ "Unsupported digest algorithm"
+    end
+
+    for hash_function <- [:sha, :sha256, :sha384, :sha512] do
+      test "verify accepts a {#{inspect(hash_function)}, _} certificate fingerprint" do
+        doc =
+          parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+        {key, cert_bin} = test_sign_256_key()
+        signed_xml = Dsig.sign(doc, key, cert_bin, :rsa_sha256)
+        hash_function = unquote(hash_function)
+
+        assert :ok =
+                 Dsig.verify(signed_xml, [{hash_function, :crypto.hash(hash_function, cert_bin)}])
+
+        assert {:error, :cert_not_accepted} =
+                 Dsig.verify(signed_xml, [{hash_function, :crypto.hash(hash_function, "other")}])
+      end
+    end
+
+    test "verify matches typed fingerprints from Util.convert_fingerprints/1" do
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+      signed_xml = Dsig.sign(doc, key, cert_bin, :rsa_sha512)
+
+      for prefix <- ["SHA384", "SHA512"] do
+        hash_function = prefix |> String.downcase() |> String.to_existing_atom()
+        fp = prefix <> ":" <> Base.encode64(:crypto.hash(hash_function, cert_bin))
+
+        assert :ok = Dsig.verify(signed_xml, Util.convert_fingerprints([fp]))
+      end
+    end
+
+    test "untyped fingerprints are compared as SHA1" do
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+      signed_xml = Dsig.sign(doc, key, cert_bin, :rsa_sha256)
+
+      assert {:error, :cert_not_accepted} =
+               Dsig.verify(signed_xml, [:crypto.hash(:sha256, cert_bin)])
     end
 
     test "signature without X509Certificate returns {:error, :missing_certificate}" do

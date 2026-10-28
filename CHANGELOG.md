@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Signature verification now computes the Reference digest with the algorithm named by its `DigestMethod` instead of reusing the `SignatureMethod` hash, so signatures pairing different algorithms (e.g. RSA-SHA512 over a SHA256 digest) verify instead of failing with `{:error, :bad_digest}`. A SHA1 `DigestMethod` is rejected with `{:error, :insecure_algorithm}`, consistent with RSA-SHA1 signatures, and an unknown one with `{:error, :unsupported_algorithm}`
+- Certificate fingerprints configured with a `SHA384:` or `SHA512:` prefix now match. `ExSaml.Core.Util.convert_fingerprints/1` already parsed them into `{:sha384, _}` / `{:sha512, _}`, but `ExSaml.Core.Xml.Dsig` only compared the certificate's SHA1 and SHA256 hashes, so a correctly signed message from such a trusted certificate failed with `{:error, :cert_not_accepted}`. Untyped fingerprints are still compared as SHA1
 
 ## [1.1.3] - 2026-09-30
 

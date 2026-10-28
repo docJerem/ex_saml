@@ -51,7 +51,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   @type xml :: record(:xmlElement) | record(:xmlDocument)
   @type sig_method :: :rsa_sha1 | :rsa_sha256 | :rsa_sha384 | :rsa_sha512
   @type hash_function :: :sha | :sha256 | :sha384 | :sha512
-  @type fingerprint :: binary() | {:sha | :sha256, binary()}
+  @type fingerprint :: binary() | {hash_function(), binary()}
 
   @digest_methods %{
     "http://www.w3.org/2000/09/xmldsig#sha1" => :sha,
@@ -487,15 +487,20 @@ defmodule ExSaml.Core.Xml.Dsig do
   defp check_fingerprints(_cert_bin, :any), do: :ok
 
   defp check_fingerprints(cert_bin, fingerprints) do
-    cert_hash = :crypto.hash(:sha, cert_bin)
-    cert_hash2 = :crypto.hash(:sha256, cert_bin)
-
-    candidates = [cert_hash, {:sha, cert_hash}, {:sha256, cert_hash2}]
-
-    if Enum.any?(candidates, &(&1 in fingerprints)),
+    if Enum.any?(fingerprints, &fingerprint_matches?(&1, cert_bin)),
       do: :ok,
       else: {:error, :cert_not_accepted}
   end
+
+  # Untyped fingerprints are SHA1, as in esaml.
+  defp fingerprint_matches?({hash_function, fp}, cert_bin)
+       when hash_function in [:sha, :sha256, :sha384, :sha512],
+       do: :crypto.hash(hash_function, cert_bin) == fp
+
+  defp fingerprint_matches?(fp, cert_bin) when is_binary(fp),
+    do: :crypto.hash(:sha, cert_bin) == fp
+
+  defp fingerprint_matches?(_fp, _cert_bin), do: false
 
   # --- Private helpers ---
 
