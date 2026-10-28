@@ -314,6 +314,7 @@ defmodule ExSaml.Core.SamlTest do
               xmlElement(
                 name: :"saml:Subject",
                 content: [
+                  xmlElement(name: :"saml:NameID", content: [xmlText(value: ~c"foobar")]),
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
                     attributes: [xmlAttribute(name: :Method, value: @bearer)],
@@ -381,6 +382,7 @@ defmodule ExSaml.Core.SamlTest do
               xmlElement(
                 name: :"saml:Subject",
                 content: [
+                  xmlElement(name: :"saml:NameID", content: [xmlText(value: ~c"foobar")]),
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
                     attributes: [xmlAttribute(name: :Method, value: @bearer)],
@@ -444,6 +446,7 @@ defmodule ExSaml.Core.SamlTest do
               xmlElement(
                 name: :"saml:Subject",
                 content: [
+                  xmlElement(name: :"saml:NameID", content: [xmlText(value: ~c"foobar")]),
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
                     attributes: [xmlAttribute(name: :Method, value: @bearer)],
@@ -503,6 +506,7 @@ defmodule ExSaml.Core.SamlTest do
               xmlElement(
                 name: :"saml:Subject",
                 content: [
+                  xmlElement(name: :"saml:NameID", content: [xmlText(value: ~c"foobar")]),
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
                     attributes: [xmlAttribute(name: :Method, value: @bearer)],
@@ -624,6 +628,7 @@ defmodule ExSaml.Core.SamlTest do
               xmlElement(
                 name: :"saml:Subject",
                 content: [
+                  xmlElement(name: :"saml:NameID", content: [xmlText(value: ~c"foobar")]),
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
                     attributes: [xmlAttribute(name: :Method, value: @bearer)],

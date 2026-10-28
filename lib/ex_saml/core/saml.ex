@@ -20,9 +20,18 @@ defmodule ExSaml.Core.Saml do
   Record.defrecord(:xmlText, Record.extract(:xmlText, from_lib: "xmerl/include/xmerl.hrl"))
 
   Record.defrecord(
+    :xmlComment,
+    Record.extract(:xmlComment, from_lib: "xmerl/include/xmerl.hrl")
+  )
+
+  Record.defrecord(:xmlPI, Record.extract(:xmlPI, from_lib: "xmerl/include/xmerl.hrl"))
+
+  Record.defrecord(
     :xmlNamespace,
     Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl")
   )
+
+  require Logger
 
   alias ExSaml.Core.{
     Assertion,
@@ -369,7 +378,8 @@ defmodule ExSaml.Core.Saml do
              "/saml:Assertion/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData/@Recipient",
              ns,
              :bad_recipient
-           ) do
+           ),
+         :ok <- check_identity_values(xml, ns) do
       issuer =
         case xpath_text(xml, "/saml:Assertion/saml:Issuer/text()", ns) do
           {:ok, v} -> v
@@ -447,12 +457,36 @@ defmodule ExSaml.Core.Saml do
     end
   end
 
+  # The value of a text element: the concatenation of its text nodes, so a
+  # value split across text and CDATA sections reads whole.
   defp element_text(element) do
     element
     |> xmlElement(:content)
     |> Enum.filter(&Record.is_record(&1, :xmlText))
     |> Enum.map_join(&to_string(xmlText(&1, :value)))
   end
+
+  # The signature digest is computed without comments, so a comment or a
+  # processing instruction can be added to a signed value without breaking the
+  # signature. A NameID or an AttributeValue that contains one is rejected
+  # rather than read in parts.
+  defp check_identity_values(xml, ns) do
+    paths = [
+      "/saml:Assertion/saml:Subject/saml:NameID",
+      "/saml:Assertion/saml:AttributeStatement/saml:Attribute/saml:AttributeValue"
+    ]
+
+    if paths |> Enum.flat_map(&xpath_elems(xml, &1, ns)) |> Enum.any?(&has_comment_or_pi?/1),
+      do: {:error, :bad_assertion},
+      else: :ok
+  end
+
+  defp has_comment_or_pi?(node) when Record.is_record(node, :xmlElement),
+    do: node |> xmlElement(:content) |> Enum.any?(&has_comment_or_pi?/1)
+
+  defp has_comment_or_pi?(node) when Record.is_record(node, :xmlComment), do: true
+  defp has_comment_or_pi?(node) when Record.is_record(node, :xmlPI), do: true
+  defp has_comment_or_pi?(_node), do: false
 
   @doc """
   Decodes a SAML LogoutRequest XML element into an `ExSaml.Core.LogoutRequest` struct.
@@ -606,14 +640,27 @@ defmodule ExSaml.Core.Saml do
     end
   end
 
+  # The NameID is optional (Core §2.4.1) and an EncryptedID is not decrypted:
+  # both read as an empty name. An EncryptedID is logged, so that an operator
+  # knows why the subject has no name.
+  defp warn_encrypted_id(xml, ns) do
+    if xpath_elems(xml, "/saml:Subject/saml:EncryptedID", ns) != [] do
+      Logger.warning(
+        "[ExSaml.Core] Subject/EncryptedID is not supported: the NameID reads as empty"
+      )
+    end
+
+    ""
+  end
+
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp decode_assertion_subject(xml) do
     ns = [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}]
 
     name =
-      case xpath_text(xml, "/saml:Subject/saml:NameID/text()", ns) do
-        {:ok, v} -> v
-        :not_found -> ""
+      case xpath_elems(xml, "/saml:Subject/saml:NameID", ns) do
+        [name_id | _] -> element_text(name_id)
+        [] -> warn_encrypted_id(xml, ns)
       end
 
     name_qualifier =
@@ -742,19 +789,23 @@ defmodule ExSaml.Core.Saml do
     end
   end
 
+  # One value per `AttributeValue` holding text, read whole; a single value is
+  # returned as a string, several as a list.
   defp extract_attribute_values(name_str, attr_elem, acc, ns) do
-    case :xmerl_xpath.string(~c"saml:AttributeValue/text()", attr_elem, [{:namespace, ns}]) do
-      [text] when Record.is_record(text, :xmlText) ->
-        [{common_attrib_map(name_str), to_string(xmlText(text, :value))} | acc]
+    values =
+      for value <- xpath_elems(attr_elem, "saml:AttributeValue", ns),
+          has_text?(value),
+          do: element_text(value)
 
-      [_ | _] = list ->
-        values = for x <- list, Record.is_record(x, :xmlText), do: to_string(xmlText(x, :value))
-        [{common_attrib_map(name_str), values} | acc]
-
-      _ ->
-        acc
+    case values do
+      [] -> acc
+      [value] -> [{common_attrib_map(name_str), value} | acc]
+      values -> [{common_attrib_map(name_str), values} | acc]
     end
   end
+
+  defp has_text?(element),
+    do: element |> xmlElement(:content) |> Enum.any?(&Record.is_record(&1, :xmlText))
 
   defp decode_assertion_authn(xml) do
     ns = [{~c"saml", :"urn:oasis:names:tc:SAML:2.0:assertion"}]
@@ -977,6 +1028,8 @@ defmodule ExSaml.Core.Saml do
   defp validate_version(%Assertion{version: "2.0"}), do: :ok
   defp validate_version(_), do: {:error, :bad_version}
 
+  # The NameID identifies the user: an assertion without one, or with an empty
+  # one, is rejected.
   defp validate_recipient(%Assertion{recipient: r}, recipient) do
     if to_string(r) == to_string(recipient) do
       :ok

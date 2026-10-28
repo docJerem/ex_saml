@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The configured cache must implement `put_new/3` (Nebulex 2 contract: `true` when written, `false` when the key exists), used by the replay check. Every Nebulex cache does; a hand-written cache module must add it (#55)
 - `provider_type: :adfs`, `:ping_federate` and `:ping_one` no longer change `signed_assertion_in_resp` and `signed_envelopes_in_resp`: they keep their configured value, `signed_assertion_in_resp: true` by default. An IdP of these types that signs only the Response must be configured with `signed_assertion_in_resp: false, signed_envelopes_in_resp: true`. The other options `:adfs` sets are unchanged
 - An IdP configured with both `signed_assertion_in_resp: false` and `signed_envelopes_in_resp: false` is invalid: it is logged as an error and skipped when the providers are loaded
+- `NameID` and each `AttributeValue` are read as the concatenation of their text nodes, so a value split across text and CDATA sections reads whole; a value split in several text nodes used to read as `""` for `NameID` and as a list of parts for an attribute
 
 ### Security
 
@@ -46,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject an assertion whose ID was already consumed while it is still valid (`:duplicate`), whatever the policy for an assertion carrying `OneTimeUse` (#55)
 - Require an `Audience` and evaluate every `Audience` value of every `AudienceRestriction` (`:bad_audience`) (#55)
 - Require a signature on every Response: `provider_type` no longer turns off the configured signature requirements, and an IdP that requires neither an assertion nor an envelope signature is rejected at load
+- Reject an assertion whose `NameID` or `AttributeValue` contains an XML comment or a processing instruction (`:bad_assertion`)
 
 ## [1.2.0] - 2026-10-28
 

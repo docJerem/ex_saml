@@ -230,6 +230,7 @@ ExSaml includes hardened defaults for SAML processing:
 - **NotBefore validation** — Assertions are rejected if issued in the future (with 5s clock skew tolerance)
 - **Algorithm whitelist** — RSA-SHA256/384/512 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; unknown signature algorithms return a clean error instead of crashing; RSA-SHA1 is rejected
 - **Namespace-conformant parsing** — XML is parsed with `namespace_conformant: true`
+- **Identity values read whole** — `NameID` and `AttributeValue` are read as the concatenation of their text nodes; an assertion whose `NameID` or `AttributeValue` contains a comment or a processing instruction is rejected with `:bad_assertion`
 - **Response validation** — `Issuer`, `InResponseTo`, `Destination`, `Audience`, `SessionNotOnOrAfter`, the bearer confirmation method and its `NotBefore` are checked on every response, and an assertion is accepted only once (see [Response validation checks](#response-validation-checks))
 - **Encrypted assertions** — AES-128/192/256 in GCM or CBC mode, with the key transported in RSA-OAEP (`rsa-oaep-mgf1p` or XML Encryption 1.1 `rsa-oaep`, with their digest, MGF and OAEP parameters). RSA-1_5 key transport is rejected unless an IdP is configured with `allow_rsa_1_5_key_transport: true`. When the IdP signs the Response (`signed_envelopes_in_resp: true`), its signature is verified before the assertion is decrypted; prefer AES-GCM over AES-CBC
 

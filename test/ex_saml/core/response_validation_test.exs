@@ -343,6 +343,7 @@ defmodule ExSaml.Core.ResponseValidationTest do
       <saml:Assertion#{id_attr} Version="2.0" IssueInstant="#{in_secs(-10)}">
         <saml:Issuer>#{@idp_entity_id}</saml:Issuer>
         <saml:Subject>
+          <saml:NameID>user@example.com</saml:NameID>
           <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
             <saml:SubjectConfirmationData Recipient="#{@recipient}" NotOnOrAfter="#{in_secs(300)}"/>
           </saml:SubjectConfirmation>
