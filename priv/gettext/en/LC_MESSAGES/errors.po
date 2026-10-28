@@ -49,3 +49,6 @@ msgstr "The session established by the identity provider has expired. Please sig
 
 msgid "duplicate"
 msgstr "This SAML response has already been used. Please start the sign-in again."
+
+msgid "bad_name_id"
+msgstr "This response does not identify the user: the assertion has no NameID or it is empty. Check the NameID (or user identifier) your IdP sends."

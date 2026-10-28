@@ -24,7 +24,7 @@ defmodule ExSaml.ErrorMessages do
   @envelop_signature {:envelope, {:error, :no_signature}}
   @envelope_missing_certificate {:envelope, {:error, :missing_certificate}}
   @name_id_errors {:saml_error, ~c"urn:oasis:names:tc:SAML:2.0:status:Requester", :undefined}
-  @errors ~w(bad_digest assertion_cert_not_accepted missing_assertion_key bad_audience cert_no_accepted invalid_nameid_policy invalid_nonce missing_assertion_signature missing_certificate missing_envelope_signature status_responder bad_issuer bad_in_response_to bad_destination bad_subject_confirmation session_expired duplicate)a
+  @errors ~w(bad_digest assertion_cert_not_accepted missing_assertion_key bad_audience cert_no_accepted invalid_nameid_policy invalid_nonce missing_assertion_signature missing_certificate missing_envelope_signature status_responder bad_issuer bad_in_response_to bad_destination bad_subject_confirmation session_expired duplicate bad_name_id)a
 
   @doc false
   def get(error, locale \\ "en")

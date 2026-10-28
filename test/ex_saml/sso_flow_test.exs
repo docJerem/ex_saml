@@ -407,5 +407,29 @@ defmodule ExSaml.SsoFlowTest do
       assert sign_in_key([user_key_attribute: nil], attributes: [{"idp_user_id", "u-42"}]) ==
                {@idp_id, "jane@corp.com"}
     end
+
+    test "is the attribute when the assertion has no NameID" do
+      assert sign_in_key([], name_id: nil, attributes: [{"idp_user_id", "u-42"}]) ==
+               {@idp_id, "u-42"}
+    end
+
+    test "is the NameID when the attribute is blank" do
+      assert sign_in_key([], attributes: [{"idp_user_id", " "}]) == {@idp_id, "jane@corp.com"}
+    end
+
+    # An empty key would key every user of the IdP the same. One sign-in per
+    # test: the replay check consumes the assertion ID.
+    for {label, idp_overrides, response_opts} <- [
+          {"no NameID", [], [name_id: nil]},
+          {"a blank NameID", [], [name_id: "  "]},
+          {"no NameID and no attribute named", [user_key_attribute: nil], [name_id: nil]},
+          {"no NameID and the attribute not named", [user_key_attribute: nil],
+           [name_id: nil, attributes: [{"idp_user_id", "u-42"}]]}
+        ] do
+      test "rejects the sign-in with :bad_name_id on #{label}" do
+        assert sign_in_key(unquote(idp_overrides), unquote(response_opts)) ==
+                 {:error, :bad_name_id}
+      end
+    end
   end
 end

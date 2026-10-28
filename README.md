@@ -94,7 +94,8 @@ to `/`.
 The signed-in user is keyed on the value of the `user_key_attribute` attribute
 when the assertion carries it (`"idp_user_id"` by default), and on the NameID
 otherwise. Set it to another attribute name, or to `nil` to key on the NameID
-only.
+only. A sign-in for which neither gives a non-blank value is rejected with
+`:bad_name_id`.
 
 At least one of `signed_assertion_in_resp` and `signed_envelopes_in_resp` must
 be `true`: an IdP configured with both set to `false` is logged as an error and

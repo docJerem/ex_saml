@@ -76,7 +76,9 @@ defmodule ExSaml.SPHandler do
   `:invalid_idp_id`, `:bad_in_response_to`, and `:access_denied`, as well as
   the response validation reasons (`:bad_issuer`, `:bad_destination`,
   `:bad_audience`, `:bad_subject_confirmation`, `:session_expired`,
-  `:too_early`, `:duplicate`, …).
+  `:too_early`, `:duplicate`, …). The router clause also returns
+  `:bad_name_id` when neither the `user_key_attribute` nor the NameID gives
+  the signed-in user a key.
   """
   # Router-facing clause: matches when the SP router dispatched here with
   # `idp_id` in path params. Performs the full SAML flow AND handles the
@@ -90,9 +92,9 @@ defmodule ExSaml.SPHandler do
 
     with :ok <- maybe_redirect_to_start_url(conn, rls),
          {:ok, %{assertion: assertion, nonce: nonce}} <-
-           consume_signin_response(conn, idp_data) do
-      nameid = assertion.subject.name
-      assertion_key = {idp_data.id, user_key_attribute(assertion, idp_data) || nameid}
+           consume_signin_response(conn, idp_data),
+         {:ok, user_key} <- user_key(assertion, idp_data) do
+      assertion_key = {idp_data.id, user_key}
       conn = State.put_assertion(conn, assertion_key, assertion)
       target_url = auth_target_url(conn, idp_data, assertion, relay_state)
 
@@ -143,6 +145,20 @@ defmodule ExSaml.SPHandler do
       {:error, error} -> {:error, error}
     end
   end
+
+  # The user part of the assertion key: the `user_key_attribute` value, else the
+  # NameID. The NameID is optional (Core §2.4.1), but an empty key would key
+  # every user of the IdP the same, so such a sign-in is rejected.
+  defp user_key(assertion, idp_data) do
+    case present(user_key_attribute(assertion, idp_data)) || present(assertion.subject.name) do
+      nil -> {:error, :bad_name_id}
+      key -> {:ok, key}
+    end
+  end
+
+  defp present(value) when is_binary(value), do: if(String.trim(value) != "", do: value)
+  defp present([_ | _] = values), do: values
+  defp present(_), do: nil
 
   # The value of the IdP's `user_key_attribute`, which keys the assertion
   # instead of the NameID when the assertion carries it.
