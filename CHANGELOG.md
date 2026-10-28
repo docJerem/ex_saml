@@ -14,12 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `ExSaml.Core.Xml.Dsig.sign/3,4` raise an `ArgumentError` for an unknown signature method, or for a private key of another type than the method names, such as an EC key with `sign/3` and its default `rsa-sha256`. They used to raise a `MatchError` for the former, and for the latter to produce a document that no verifier accepts
+- `ExSaml.Core.Xml.Dsig.sign/3,4` raise an `ArgumentError` for an unknown signature method, or for a private key of another type than the method names, such as an EC key with `sign/3` and its default `rsa-sha256`. They used to raise a `MatchError` for the former, and for the latter to produce a document that no verifier accepts (#73)
 
 ### Security
 
-- ECDSA verification enforces the P-256, P-384 and P-521 whitelist the documentation states. `ExSaml.Core.Xml.Dsig.verify/2` accepted a certificate on any curve `:crypto` supports, such as secp256k1, brainpoolP256r1 or the 112-bit secp224r1, and split a `SignatureValue` of any even length in two halves; it now rejects them with `:bad_signature`, and requires each of r and s to be the curve's field size (RFC 4051)
-- `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :bad_signature}` instead of raising on a crafted certificate: an EC key with unknown, implicit or explicit curve parameters, or with a point not on its curve, and a key neither RSA nor EC (e.g. Ed25519), which was decoded as RSA. The certificate's `SubjectPublicKeyInfo` algorithm must now match the key type of the signature method
+- ECDSA verification enforces the P-256, P-384 and P-521 whitelist the documentation states. `ExSaml.Core.Xml.Dsig.verify/2` accepted a certificate on any curve `:crypto` supports, such as secp256k1, brainpoolP256r1 or the 112-bit secp224r1, and split a `SignatureValue` of any even length in two halves; it now rejects them with `:bad_signature`, and requires each of r and s to be the curve's field size (RFC 4051) (#73)
+- `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :bad_signature}` instead of raising on a crafted certificate: an EC key with unknown, implicit or explicit curve parameters, or with a point not on its curve, and a key neither RSA nor EC (e.g. Ed25519), which was decoded as RSA. The certificate's `SubjectPublicKeyInfo` algorithm must now match the key type of the signature method (#73)
 
 ## [1.1.3] - 2026-09-30
 
