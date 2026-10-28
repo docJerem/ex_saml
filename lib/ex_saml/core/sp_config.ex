@@ -23,6 +23,7 @@ defmodule ExSaml.Core.SpConfig do
             consume_uri: "",
             logout_uri: nil,
             encrypt_mandatory: false,
+            allow_rsa_1_5_key_transport: false,
             entity_id: nil
 
   @type t :: %__MODULE__{
@@ -41,6 +42,7 @@ defmodule ExSaml.Core.SpConfig do
           consume_uri: String.t(),
           logout_uri: String.t() | nil,
           encrypt_mandatory: boolean(),
+          allow_rsa_1_5_key_transport: boolean(),
           entity_id: String.t() | nil
         }
 end
