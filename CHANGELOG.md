@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ECDSA signatures (`ecdsa-sha256`, `ecdsa-sha384`, `ecdsa-sha512`) on the P-256, P-384 and P-521 curves. An IdP whose signing certificate holds an EC key (e.g. a PingFederate `…-EC-…` signing key) had every Response rejected with `:unsupported_algorithm`, and its key was decoded as RSA. `ExSaml.Core.Xml.Dsig.verify/2` now reads EC keys and converts the XML-DSig `r || s` `SignatureValue` (RFC 4051) to the DER form `:public_key` verifies; `sign/4` does the reverse with an EC private key. A signature method naming another key type than the certificate's is rejected with `:bad_signature` (#67)
+- RSA-SHA384 and RSA-SHA512 signatures (`rsa-sha384`, `rsa-sha512`, RFC 6931). An IdP signing with either had every Response rejected with `:unsupported_algorithm`; `ExSaml.Core.Xml.Dsig.verify/2` now accepts them and `sign/4` takes `:rsa_sha384` and `:rsa_sha512` (#68)
+
+### Changed
+
+- `ExSaml.Core.Xml.Dsig.sign/3,4` raise an `ArgumentError` for an unknown signature method, or for a private key of another type than the method names, such as an EC key with `sign/3` and its default `rsa-sha256`. They used to raise a `MatchError` for the former, and for the latter to produce a document that no verifier accepts (#68)
+
+### Security
+
+- ECDSA verification enforces the P-256, P-384 and P-521 whitelist the documentation states. `ExSaml.Core.Xml.Dsig.verify/2` accepted a certificate on any curve `:crypto` supports, such as secp256k1, brainpoolP256r1 or the 112-bit secp224r1, and split a `SignatureValue` of any even length in two halves; it now rejects them with `:bad_signature`, and requires each of r and s to be the curve's field size (RFC 4051) (#68)
+- `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :bad_signature}` instead of raising on a crafted certificate: an EC key with unknown, implicit or explicit curve parameters, or with a point not on its curve, and a key neither RSA nor EC (e.g. Ed25519), which was decoded as RSA. The certificate's `SubjectPublicKeyInfo` algorithm must now match the key type of the signature method (#68)
+
 ## [1.1.3] - 2026-09-30
 
 ### Fixed
