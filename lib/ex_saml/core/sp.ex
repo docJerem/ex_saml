@@ -231,7 +231,10 @@ defmodule ExSaml.Core.Sp do
   @doc """
   Validates and decodes a SAML Response XML element.
 
-  Uses a no-op duplicate detection function.
+  Uses a no-op duplicate detection function: the replay check (Profiles
+  §4.1.4.5) needs the configured cache, so it is wired by
+  `ExSaml.SPHandler`. A direct caller passes
+  `ExSaml.AssertionReplayCache.duplicate_fun/2` to `validate_assertion/4`.
   """
   @spec validate_assertion(xml(), SpConfig.t()) ::
           {:ok, ExSaml.Core.Assertion.t()} | {:error, term()}
@@ -278,6 +281,7 @@ defmodule ExSaml.Core.Sp do
          :ok <- verify_envelope_signature(xml, sp),
          :ok <- verify_assertion_signature(assertion_xml, sp),
          :ok <- check_response_issuer(xml, ns, ctx),
+         :ok <- check_destination(xml, ctx),
          {:ok, assertion} <- Saml.validate_assertion(assertion_xml, ctx),
          :ok <- check_duplicate(assertion, xml, duplicate_fun) do
       {:ok, assertion}
@@ -487,6 +491,48 @@ defmodule ExSaml.Core.Sp do
         nil
     end
   end
+
+  # Core §3.2.2 and Bindings §3.5.5.2: a `Destination` must be the URL the
+  # response was delivered to, our ACS URL, compared verbatim like `Recipient`.
+  # It is optional on an unsigned response and required on a signed one.
+  # Skipped when the ACS URL is unknown.
+  defp check_destination(xml, %ValidationContext{} = ctx) do
+    expected = to_string(ctx.destination)
+    ns = @protocol_ns ++ @dsig_ns
+
+    case {expected, response_destination(xml, ns)} do
+      {"", _} ->
+        :ok
+
+      {_, nil} ->
+        if response_signed?(xml, ns),
+          do:
+            ValidationContext.verdict(ctx, {:error, :bad_destination},
+              reason: :missing,
+              expected: expected
+            ),
+          else: :ok
+
+      {expected, expected} ->
+        :ok
+
+      {expected, actual} ->
+        ValidationContext.verdict(ctx, {:error, :bad_destination},
+          expected: expected,
+          actual: actual
+        )
+    end
+  end
+
+  defp response_destination(xml, ns) do
+    case :xmerl_xpath.string(~c"/samlp:Response/@Destination", xml, [{:namespace, ns}]) do
+      [attr] when Record.is_record(attr, :xmlAttribute) -> to_string(xmlAttribute(attr, :value))
+      _ -> nil
+    end
+  end
+
+  defp response_signed?(xml, ns),
+    do: :xmerl_xpath.string(~c"/samlp:Response/ds:Signature", xml, [{:namespace, ns}]) != []
 
   @doc """
   Returns the `ID` attribute of a generated request element, or `nil`.

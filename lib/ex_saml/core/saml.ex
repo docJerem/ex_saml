@@ -371,6 +371,12 @@ defmodule ExSaml.Core.Saml do
           :not_found -> ""
         end
 
+      id =
+        case xpath_attr(xml, "/saml:Assertion/@ID", ns) do
+          {:ok, v} -> v
+          :not_found -> ""
+        end
+
       subject =
         decode_optional_sub(
           xml,
@@ -409,16 +415,38 @@ defmodule ExSaml.Core.Saml do
 
       {:ok,
        %Assertion{
+         id: id,
          version: version,
          issue_instant: issue_instant,
          recipient: recipient,
          issuer: issuer,
          subject: subject,
          conditions: conditions,
+         audience_restrictions: audience_restrictions(xml, ns),
+         one_time_use:
+           xpath_elems(xml, "/saml:Assertion/saml:Conditions/saml:OneTimeUse", ns) != [],
          attributes: attributes,
          authn: authn
        }}
     end
+  end
+
+  # One list of `Audience` values per `AudienceRestriction` (Core §2.5.1.4).
+  # Each value is the concatenation of every text node of its element, so a
+  # value split by a comment or a CDATA section reads as the whole value
+  # rather than as absent.
+  defp audience_restrictions(xml, ns) do
+    for restriction <-
+          xpath_elems(xml, "/saml:Assertion/saml:Conditions/saml:AudienceRestriction", ns) do
+      for audience <- xpath_elems(restriction, "saml:Audience", ns), do: element_text(audience)
+    end
+  end
+
+  defp element_text(element) do
+    element
+    |> xmlElement(:content)
+    |> Enum.filter(&Record.is_record(&1, :xmlText))
+    |> Enum.map_join(&to_string(xmlText(&1, :value)))
   end
 
   @doc """
@@ -601,10 +629,22 @@ defmodule ExSaml.Core.Saml do
         :not_found -> nil
       end
 
+    # `Method` is required on `SubjectConfirmation` (Core §2.4.1.1): an absent
+    # one is not bearer.
     confirmation_method =
       case xpath_attr(xml, "/saml:Subject/saml:SubjectConfirmation/@Method", ns) do
         {:ok, v} -> subject_method_map(v)
-        :not_found -> :bearer
+        :not_found -> :unknown
+      end
+
+    notbefore =
+      case xpath_attr(
+             xml,
+             "/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData/@NotBefore",
+             ns
+           ) do
+        {:ok, v} -> v
+        :not_found -> ""
       end
 
     notonorafter =
@@ -634,6 +674,7 @@ defmodule ExSaml.Core.Saml do
        sp_name_qualifier: sp_name_qualifier,
        name_format: name_format,
        confirmation_method: confirmation_method,
+       notbefore: notbefore,
        notonorafter: notonorafter,
        in_response_to: in_response_to
      }}
@@ -646,15 +687,19 @@ defmodule ExSaml.Core.Saml do
       []
       |> maybe_add_condition(xml, "/saml:Conditions/@NotBefore", ns, :not_before, :attr)
       |> maybe_add_condition(xml, "/saml:Conditions/@NotOnOrAfter", ns, :not_on_or_after, :attr)
-      |> maybe_add_condition(
-        xml,
-        "/saml:Conditions/saml:AudienceRestriction/saml:Audience/text()",
-        ns,
-        :audience,
-        :text
-      )
+      |> maybe_add_first_audience(xml, ns)
 
     {:ok, conditions}
+  end
+
+  # `conditions[:audience]` is informational and kept for compatibility: the
+  # first `Audience` value. The audience check reads every value from
+  # `Assertion.audience_restrictions`.
+  defp maybe_add_first_audience(acc, xml, ns) do
+    case xpath_elems(xml, "/saml:Conditions/saml:AudienceRestriction/saml:Audience", ns) do
+      [first | _] -> [{:audience, element_text(first)} | acc]
+      [] -> acc
+    end
   end
 
   defp maybe_add_condition(acc, xml, path, ns, key, :attr) do
@@ -806,9 +851,11 @@ defmodule ExSaml.Core.Saml do
   Validates a SAML assertion XML element against a `ValidationContext`.
 
   Decodes the assertion and validates, in order: version, `Issuer` against the
-  IdP `entityID` (Core §2.2.3, Profiles §4.1.4.2), `Recipient`, `Audience`,
-  `SubjectConfirmation/@Method` is bearer (Profiles §4.1.4.2), `NotBefore` has
-  passed within the clock-skew tolerance, `SessionNotOnOrAfter` has not passed
+  IdP `entityID` (Core §2.2.3, Profiles §4.1.4.2), `Recipient`, `Audience`
+  (every `AudienceRestriction` names the SP, Core §2.5.1.4, Profiles §4.1.4.2),
+  `SubjectConfirmation/@Method` is bearer (Profiles §4.1.4.2), `Conditions/@NotBefore`
+  and `SubjectConfirmationData/@NotBefore` have passed within the clock-skew
+  tolerance (Core §2.5.1.2, §2.4.1.2), `SessionNotOnOrAfter` has not passed
   (Core §2.7.2), and the assertion is not stale. Time conditions are evaluated
   at `ctx.now` (see `ExSaml.Core.ValidationContext`).
 
@@ -828,9 +875,10 @@ defmodule ExSaml.Core.Saml do
         with :ok <- validate_version(assertion),
              :ok <- validate_issuer(assertion, ctx),
              :ok <- validate_recipient(assertion, ctx.recipient),
-             :ok <- validate_audience(assertion, ctx.audience),
+             :ok <- validate_audience(assertion, ctx),
              :ok <- validate_subject_confirmation(assertion, ctx),
              :ok <- check_not_before(assertion, now),
+             :ok <- check_subject_not_before(assertion, ctx, now),
              :ok <- check_session_expiry(assertion, ctx, now),
              :ok <- check_stale(assertion, now) do
           {:ok, assertion}
@@ -875,9 +923,8 @@ defmodule ExSaml.Core.Saml do
     end
   end
 
-  # Profiles §4.1.4.2 requires the bearer method for web browser SSO. A missing
-  # `@Method` decodes to `:bearer` (see `subject_method_map/1`), so this only
-  # rejects a method the IdP stated and that is not bearer.
+  # Profiles §4.1.4.2 requires the bearer method for web browser SSO. Both a
+  # method other than bearer and a missing `@Method` decode to `:unknown`.
   defp validate_subject_confirmation(%Assertion{subject: subject}, %ValidationContext{} = ctx) do
     case subject.confirmation_method do
       :bearer ->
@@ -938,14 +985,32 @@ defmodule ExSaml.Core.Saml do
     end
   end
 
-  defp validate_audience(%Assertion{conditions: conds}, audience) do
-    original_aud = conds |> Keyword.get(:audience) |> to_string()
-    challenged_aud = to_string(audience)
+  # Core §2.5.1.4: the assertion is addressed to us only if every
+  # `AudienceRestriction` names us in one of its `Audience` values, compared
+  # verbatim. A restriction that does not is always rejected, as a mismatched
+  # single audience always was. An assertion with no `Audience` at all breaks
+  # Profiles §4.1.4.2 and goes through the enforce / warn policy: it was
+  # accepted before this check existed. The absence is not reported when the
+  # SP entity id is unknown (`audience: ""`): there is nothing to compare.
+  defp validate_audience(%Assertion{audience_restrictions: restrictions}, ctx) do
+    expected = to_string(ctx.audience)
+    audiences = List.flatten(restrictions)
 
-    case original_aud do
-      "" -> :ok
-      ^challenged_aud -> :ok
-      _ -> {:error, :bad_audience}
+    cond do
+      audiences == [] and expected == "" ->
+        :ok
+
+      audiences == [] ->
+        ValidationContext.verdict(ctx, {:error, :bad_audience},
+          reason: :missing,
+          expected: expected
+        )
+
+      Enum.all?(restrictions, &(expected in &1)) ->
+        :ok
+
+      true ->
+        {:error, :bad_audience}
     end
   end
 
@@ -968,6 +1033,33 @@ defmodule ExSaml.Core.Saml do
         end
     end
   end
+
+  # Core §2.4.1.2: the subject cannot be confirmed before
+  # `SubjectConfirmationData/@NotBefore`. Same clock and skew as
+  # `Conditions/@NotBefore`, but under the enforce / warn policy (`:too_early`)
+  # since it was ignored before; an unparsable value warns and passes, like
+  # `SessionNotOnOrAfter`.
+  defp check_subject_not_before(%Assertion{subject: %Subject{notbefore: ""}}, _ctx, _now),
+    do: :ok
+
+  defp check_subject_not_before(%Assertion{subject: %Subject{notbefore: stamp}}, ctx, now_secs) do
+    case safe_to_secs(stamp) do
+      :error ->
+        ValidationContext.warn(ctx, :too_early, reason: :unparsable, actual: stamp)
+
+      {:ok, nb_secs} when now_secs >= nb_secs - @clock_skew_secs ->
+        :ok
+
+      {:ok, _} ->
+        ValidationContext.verdict(ctx, {:error, :too_early},
+          element: :subject_confirmation_data,
+          actual: stamp
+        )
+    end
+  end
+
+  @doc false
+  def clock_skew_secs, do: @clock_skew_secs
 
   @doc false
   defp check_stale(%Assertion{} = a, now_secs) do

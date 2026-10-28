@@ -98,9 +98,13 @@ defmodule ExSaml.SsoFlowTest do
 
   # An unsigned but otherwise valid Response for our SP: recipient, audience
   # and time conditions all pass, `InResponseTo` marks the SP-initiated flow.
-  defp saml_response(in_response_to) do
+  # `destination:` adds `Response/@Destination`.
+  defp saml_response(in_response_to, opts \\ []) do
+    dest_attr =
+      if dest = Keyword.get(opts, :destination), do: ~s( Destination="#{dest}"), else: ""
+
     Base.encode64("""
-    <samlp:Response #{@ns} ID="_r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
+    <samlp:Response #{@ns} ID="_r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z"#{dest_attr}>
       <saml:Issuer>https://idp.example.com</saml:Issuer>
       <samlp:Status>
         <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>
@@ -339,6 +343,116 @@ defmodule ExSaml.SsoFlowTest do
                List.keyfind(Debug.trace(relay_state), :validation_check, 0)
 
       assert {:code_issued, _} = List.keyfind(Debug.trace(relay_state), :code_issued, 0)
+    end
+  end
+
+  # Second half of #55, end to end: assertion replay (Profiles §4.1.4.5) through
+  # the configured cache, and Response/@Destination (Bindings §3.5.5.2).
+  describe "replay and Destination checks end to end" do
+    setup do
+      previous = Application.get_env(:ex_saml, :enforced_response_checks)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:ex_saml, :enforced_response_checks, previous),
+          else: Application.delete_env(:ex_saml, :enforced_response_checks)
+      end)
+
+      :ok
+    end
+
+    # Posts `payload` with the session the browser holds for `relay_state`.
+    defp post_payload(relay_state, payload) do
+      body = %{"SAMLResponse" => payload, "RelayState" => relay_state}
+
+      session = %{
+        "relay_state" => relay_state,
+        "idp_id" => @idp_id,
+        "target_url" => @target_url,
+        "authn_request_id" => authn_request_id(relay_state)
+      }
+
+      conn = SPHandler.consume_signin_response(acs_conn(body, session))
+      assert conn.status == 302
+      [location] = get_resp_header(conn, "location")
+      location
+    end
+
+    test "a re-posted response is rejected as :duplicate (enforced by default)" do
+      {_conn, relay_state} = start_sso()
+      payload = response_payload(relay_state)
+
+      assert post_payload(relay_state, payload) =~ "code="
+      assert post_payload(relay_state, payload) =~ "error_id="
+
+      assert {:ok, %Error{reason: :duplicate, step: :decode, idp_id: @idp_id}} =
+               Error.get_from_id(relay_state)
+    end
+
+    test "with the check in warn mode a re-post signs in again, the warning is logged and traced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      Debug.enable(idp_id: @idp_id, log: :silent)
+      {_conn, relay_state} = start_sso()
+      payload = response_payload(relay_state)
+
+      assert post_payload(relay_state, payload) =~ "code="
+
+      log = capture_log(fn -> assert post_payload(relay_state, payload) =~ "code=" end)
+
+      assert log =~ "saml_validation check=:duplicate enforced=false"
+      assert log =~ ~s(assertion_id="_a1")
+
+      assert {:validation_check, %{check: :duplicate, enforced: false}} =
+               List.keyfind(Debug.trace(relay_state), :validation_check, 0)
+    end
+
+    test "Debug.replay/2 of a consumed response neither reports nor records the ID" do
+      Debug.enable(idp_id: @idp_id, log: :silent)
+      {_conn, relay_state} = start_sso()
+      payload = response_payload(relay_state)
+
+      assert post_payload(relay_state, payload) =~ "code="
+      assert {:ok, _} = Debug.replay(relay_state)
+      assert {:ok, _} = Debug.replay(relay_state)
+
+      # The live flow is unaffected: the ID stays consumed.
+      assert post_payload(relay_state, payload) =~ "error_id="
+      assert {:ok, %Error{reason: :duplicate}} = Error.get_from_id(relay_state)
+    end
+
+    test "a Destination equal to the ACS URL signs in" do
+      {_conn, relay_state} = start_sso()
+      payload = saml_response(authn_request_id(relay_state), destination: @consume_uri)
+      assert post_payload(relay_state, payload) =~ "code="
+    end
+
+    test "a Destination other than the ACS URL is rejected (enforced by default)" do
+      {_conn, relay_state} = start_sso()
+
+      payload =
+        saml_response(authn_request_id(relay_state),
+          destination: "https://other.example.com/sso/consume/acme"
+        )
+
+      assert post_payload(relay_state, payload) =~ "error_id="
+
+      assert {:ok, %Error{reason: :bad_destination, step: :decode, idp_id: @idp_id}} =
+               Error.get_from_id(relay_state)
+    end
+
+    test "with the check in warn mode a wrong Destination signs in and is logged" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      {_conn, relay_state} = start_sso()
+
+      payload =
+        saml_response(authn_request_id(relay_state),
+          destination: "https://other.example.com/sso/consume/acme"
+        )
+
+      log = capture_log(fn -> assert post_payload(relay_state, payload) =~ "code=" end)
+
+      assert log =~ "saml_validation check=:bad_destination enforced=false"
+      assert log =~ ~s(expected="#{@consume_uri}")
     end
   end
 end

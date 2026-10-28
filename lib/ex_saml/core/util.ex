@@ -474,7 +474,9 @@ defmodule ExSaml.Core.Util do
   ETS table and `false` is returned. If it already exists, returns `true`.
 
   This is a simplified local-only version — the original Erlang implementation
-  used `rpc:multicall` across all nodes.
+  used `rpc:multicall` across all nodes. The library does not use it: the
+  replay check of the sign-in flow is `ExSaml.AssertionReplayCache`, backed by
+  the configured cache.
   """
   @spec check_dupe_ets(binary(), integer()) :: boolean()
   def check_dupe_ets(digest, _ttl) do

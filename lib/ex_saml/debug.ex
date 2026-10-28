@@ -591,7 +591,13 @@ defmodule ExSaml.Debug do
       now = Keyword.get(opts, :now, capture.received_at)
       put_context(capture.idp_id, nil)
 
-      case Helper.decode_idp_auth_resp(sp, capture.saml_encoding, payload, now: now) do
+      # Diagnostic only: the assertion ID is neither checked nor recorded, so a
+      # replay neither reports the live flow's own consumption as `:duplicate`
+      # nor blocks a later sign-in.
+      case Helper.decode_idp_auth_resp(sp, capture.saml_encoding, payload,
+             now: now,
+             replay_check: false
+           ) do
         {:ok, assertion} ->
           {:ok, assertion}
 

@@ -55,6 +55,15 @@ defmodule ExSaml.StubCache do
     end
   end
 
+  # Nebulex 2 contract: `true` when written, `false` when the key exists.
+  def put_new(key, value, opts \\ []) do
+    entry = {value, Keyword.get(opts, :ttl, :infinity)}
+
+    Agent.get_and_update(__MODULE__, fn s ->
+      if Map.has_key?(s, key), do: {false, s}, else: {true, Map.put(s, key, entry)}
+    end)
+  end
+
   def take(key) do
     Agent.get_and_update(__MODULE__, fn s ->
       {s |> Map.get(key) |> value(), Map.delete(s, key)}
@@ -94,6 +103,7 @@ defmodule ExSaml.RaisingCache do
   def get(_), do: raise("cache down")
   def put(_, _, _ \\ []), do: raise("cache down")
   def put_new!(_, _, _ \\ []), do: raise("cache down")
+  def put_new(_, _, _ \\ []), do: raise("cache down")
   def take(_), do: raise("cache down")
   def delete(_), do: raise("cache down")
   def ttl(_), do: raise("cache down")

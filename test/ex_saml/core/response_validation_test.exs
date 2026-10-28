@@ -12,8 +12,8 @@ defmodule ExSaml.Core.ResponseValidationTest do
 
   import ExUnit.CaptureLog
 
+  alias ExSaml.{AssertionReplayCache, Debug, Helper, StubCache}
   alias ExSaml.Core.{Saml, Sp, SpConfig, Util, ValidationContext}
-  alias ExSaml.{Debug, StubCache}
 
   @idp_entity_id "https://idp.example.com/entity"
   @recipient "https://sp.example.com/consume"
@@ -55,29 +55,39 @@ defmodule ExSaml.Core.ResponseValidationTest do
     |> Util.datetime_to_saml()
   end
 
+  @default_conditions "<saml:AudienceRestriction><saml:Audience>#{@audience}</saml:Audience></saml:AudienceRestriction>"
+
   defp assertion_xml(opts \\ []) do
     issuer = Keyword.get(opts, :issuer, @idp_entity_id)
     method = Keyword.get(opts, :method, "urn:oasis:names:tc:SAML:2.0:cm:bearer")
     session = Keyword.get(opts, :session_not_on_or_after)
+    conditions = Keyword.get(opts, :conditions, @default_conditions)
+    scd_not_before = Keyword.get(opts, :scd_not_before)
 
     session_attr = if session, do: ~s( SessionNotOnOrAfter="#{session}"), else: ""
+    method_attr = if method, do: ~s( Method="#{method}"), else: ""
+    scd_nb_attr = if scd_not_before, do: ~s( NotBefore="#{scd_not_before}"), else: ""
 
     """
-    <saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" Version="2.0" IssueInstant="#{in_secs(-10)}">
+    <saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="#{Keyword.get(opts, :id, "_a1")}" Version="2.0" IssueInstant="#{in_secs(-10)}">
       <saml:Issuer>#{issuer}</saml:Issuer>
       <saml:Subject>
         <saml:NameID>user@example.com</saml:NameID>
-        <saml:SubjectConfirmation Method="#{method}">
-          <saml:SubjectConfirmationData Recipient="#{@recipient}" NotOnOrAfter="#{in_secs(300)}"/>
+        <saml:SubjectConfirmation#{method_attr}>
+          <saml:SubjectConfirmationData Recipient="#{@recipient}" NotOnOrAfter="#{in_secs(300)}"#{scd_nb_attr}/>
         </saml:SubjectConfirmation>
       </saml:Subject>
-      <saml:Conditions NotOnOrAfter="#{in_secs(300)}">
-        <saml:AudienceRestriction><saml:Audience>#{@audience}</saml:Audience></saml:AudienceRestriction>
-      </saml:Conditions>
+      <saml:Conditions NotOnOrAfter="#{in_secs(300)}">#{conditions}</saml:Conditions>
       <saml:AuthnStatement AuthnInstant="#{in_secs(-10)}"#{session_attr}/>
     </saml:Assertion>
     """
     |> parse()
+  end
+
+  defp restriction(audiences) do
+    "<saml:AudienceRestriction>" <>
+      Enum.map_join(audiences, &"<saml:Audience>#{&1}</saml:Audience>") <>
+      "</saml:AudienceRestriction>"
   end
 
   defp ctx(overrides \\ []) do
@@ -143,24 +153,24 @@ defmodule ExSaml.Core.ResponseValidationTest do
       assert {:error, :bad_subject_confirmation} = Saml.validate_assertion(xml, ctx())
     end
 
-    # Documents a known limitation rather than asserting desired behaviour: the
-    # decoder defaults a missing @Method to :bearer, so this check cannot see
-    # the difference between "absent" and "bearer". Tracked separately.
-    test "a missing method is treated as bearer" do
-      xml =
-        """
-        <saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" Version="2.0" IssueInstant="#{in_secs(-10)}">
-          <saml:Issuer>#{@idp_entity_id}</saml:Issuer>
-          <saml:Subject>
-            <saml:SubjectConfirmation>
-              <saml:SubjectConfirmationData Recipient="#{@recipient}" NotOnOrAfter="#{in_secs(300)}"/>
-            </saml:SubjectConfirmation>
-          </saml:Subject>
-        </saml:Assertion>
-        """
-        |> parse()
+    # `Method` is required on SubjectConfirmation (Core §2.4.1.1): an absent
+    # one is not bearer.
+    test "a missing method decodes as :unknown and is rejected" do
+      xml = assertion_xml(method: nil)
 
-      assert {:ok, _} = Saml.validate_assertion(xml, ctx())
+      assert {:ok, %{subject: %{confirmation_method: :unknown}}} = Saml.decode_assertion(xml)
+      assert {:error, :bad_subject_confirmation} = Saml.validate_assertion(xml, ctx())
+    end
+
+    test "a missing method only warns when the check is not enforced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, _} = Saml.validate_assertion(assertion_xml(method: nil), ctx(enforce: nil))
+        end)
+
+      assert log =~ "check=:bad_subject_confirmation enforced=false"
     end
   end
 
@@ -230,17 +240,24 @@ defmodule ExSaml.Core.ResponseValidationTest do
       assert log =~ ~s(actual="https://evil.example.com")
     end
 
-    test "the default enforces the four safe checks and leaves the risky ones off" do
+    test "the default enforces every check" do
       Application.delete_env(:ex_saml, :enforced_response_checks)
       enforced = ValidationContext.enforced_checks()
 
-      for check <- [:bad_issuer, :bad_in_response_to, :bad_subject_confirmation, :session_expired] do
+      for check <- [
+            :bad_audience,
+            :bad_destination,
+            :bad_in_response_to,
+            :bad_issuer,
+            :bad_subject_confirmation,
+            :duplicate,
+            :session_expired,
+            :too_early
+          ] do
         assert check in enforced
       end
 
-      for check <- [:bad_destination, :duplicate] do
-        refute check in enforced
-      end
+      assert Enum.sort(enforced) == Enum.sort(ValidationContext.all_checks())
     end
 
     test ":all enforces every known check, and a garbage value falls back to the default" do
@@ -249,7 +266,13 @@ defmodule ExSaml.Core.ResponseValidationTest do
 
       Application.put_env(:ex_saml, :enforced_response_checks, "nonsense")
       assert :bad_issuer in ValidationContext.enforced_checks()
-      refute :bad_destination in ValidationContext.enforced_checks()
+      assert :duplicate in ValidationContext.enforced_checks()
+    end
+
+    test "always_enforce/2 enforces one check on top of a log-only policy" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      forced = ValidationContext.always_enforce(ctx(enforce: nil), :duplicate)
+      assert forced.enforce == [:duplicate]
     end
 
     test "from_sp_config/2 maps the SP configuration and the clock onto the context" do
@@ -321,31 +344,52 @@ defmodule ExSaml.Core.ResponseValidationTest do
   # :bad_issuer — Response/Issuer, via Core.Sp
   # ---------------------------------------------------------------------------
 
-  describe ":bad_issuer on the response envelope" do
-    defp response_xml(issuer) do
-      issuer_el = if issuer, do: "<saml:Issuer>#{issuer}</saml:Issuer>", else: ""
+  # Options: `:destination` (attribute value, absent by default), `:signed`
+  # (adds an unverified `ds:Signature` child: `unsigned_sp/0` does not check
+  # it, but its presence makes `Destination` mandatory), `:id` and
+  # `:one_time_use` for the assertion.
+  defp response_xml(issuer, opts \\ []) do
+    issuer_el = if issuer, do: "<saml:Issuer>#{issuer}</saml:Issuer>", else: ""
+    dest = Keyword.get(opts, :destination)
+    dest_attr = if dest, do: ~s( Destination="#{dest}"), else: ""
 
-      """
-      <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" Version="2.0">
-        #{issuer_el}
-        <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
-        <saml:Assertion Version="2.0" IssueInstant="#{in_secs(-10)}">
-          <saml:Issuer>#{@idp_entity_id}</saml:Issuer>
-          <saml:Subject>
-            <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
-              <saml:SubjectConfirmationData Recipient="#{@recipient}" NotOnOrAfter="#{in_secs(300)}"/>
-            </saml:SubjectConfirmation>
-          </saml:Subject>
-          <saml:Conditions NotOnOrAfter="#{in_secs(300)}">
-            <saml:AudienceRestriction><saml:Audience>#{@audience}</saml:Audience></saml:AudienceRestriction>
-          </saml:Conditions>
-        </saml:Assertion>
-      </samlp:Response>
-      """
-      |> parse()
-    end
+    signature =
+      if Keyword.get(opts, :signed),
+        do: ~s(<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#"/>),
+        else: ""
 
-    defp unsigned_sp do
+    id_attr =
+      case Keyword.get(opts, :id, "_a1") do
+        nil -> ""
+        id -> ~s( ID="#{id}")
+      end
+
+    one_time_use = if Keyword.get(opts, :one_time_use), do: "<saml:OneTimeUse/>", else: ""
+
+    """
+    <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1" Version="2.0"#{dest_attr}>
+      #{issuer_el}
+      #{signature}
+      <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+      <saml:Assertion#{id_attr} Version="2.0" IssueInstant="#{in_secs(-10)}">
+        <saml:Issuer>#{@idp_entity_id}</saml:Issuer>
+        <saml:Subject>
+          <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+            <saml:SubjectConfirmationData Recipient="#{@recipient}" NotOnOrAfter="#{in_secs(300)}"/>
+          </saml:SubjectConfirmation>
+        </saml:Subject>
+        <saml:Conditions NotOnOrAfter="#{in_secs(300)}">
+          <saml:AudienceRestriction><saml:Audience>#{@audience}</saml:Audience></saml:AudienceRestriction>
+          #{one_time_use}
+        </saml:Conditions>
+      </saml:Assertion>
+    </samlp:Response>
+    """
+    |> parse()
+  end
+
+  defp unsigned_sp(overrides \\ []) do
+    struct!(
       %SpConfig{
         consume_uri: @recipient,
         entity_id: @audience,
@@ -353,9 +397,12 @@ defmodule ExSaml.Core.ResponseValidationTest do
         idp_id: "idp-1",
         idp_signs_assertions: false,
         idp_signs_envelopes: false
-      }
-    end
+      },
+      overrides
+    )
+  end
 
+  describe ":bad_issuer on the response envelope" do
     test "a matching response issuer passes" do
       assert {:ok, _} = Sp.validate_assertion(response_xml(@idp_entity_id), unsigned_sp())
     end
@@ -374,6 +421,301 @@ defmodule ExSaml.Core.ResponseValidationTest do
         end)
 
       refute log =~ "saml_validation"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # :bad_destination — Response/@Destination, via Core.Sp
+  # ---------------------------------------------------------------------------
+
+  describe ":bad_destination" do
+    test "a Destination equal to the ACS URL passes" do
+      xml = response_xml(@idp_entity_id, destination: @recipient, signed: true)
+      assert {:ok, _} = Sp.validate_assertion(xml, unsigned_sp())
+    end
+
+    test "a different Destination is rejected" do
+      xml = response_xml(@idp_entity_id, destination: "https://other.example.com/consume")
+      assert {:error, :bad_destination} = Sp.validate_assertion(xml, unsigned_sp())
+    end
+
+    test "the comparison is verbatim, like Recipient" do
+      xml = response_xml(@idp_entity_id, destination: @recipient <> "/")
+      assert {:error, :bad_destination} = Sp.validate_assertion(xml, unsigned_sp())
+    end
+
+    test "a different Destination only warns when the check is not enforced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      xml = response_xml(@idp_entity_id, destination: "https://other.example.com/consume")
+
+      log = capture_log(fn -> assert {:ok, _} = Sp.validate_assertion(xml, unsigned_sp()) end)
+
+      assert log =~ "[ExSaml] saml_validation check=:bad_destination enforced=false"
+      assert log =~ ~s(expected="#{@recipient}")
+      assert log =~ ~s(actual="https://other.example.com/consume")
+    end
+
+    # Bindings §3.5.5.2: optional on an unsigned response.
+    test "an absent Destination on an unsigned response passes silently" do
+      log =
+        capture_log(fn ->
+          assert {:ok, _} = Sp.validate_assertion(response_xml(@idp_entity_id), unsigned_sp())
+        end)
+
+      refute log =~ "saml_validation"
+    end
+
+    # Bindings §3.5.5.2: required on a signed response.
+    test "an absent Destination on a signed response is rejected" do
+      xml = response_xml(@idp_entity_id, signed: true)
+      assert {:error, :bad_destination} = Sp.validate_assertion(xml, unsigned_sp())
+    end
+
+    test "an absent Destination on a signed response only warns when not enforced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      xml = response_xml(@idp_entity_id, signed: true)
+
+      log = capture_log(fn -> assert {:ok, _} = Sp.validate_assertion(xml, unsigned_sp()) end)
+
+      assert log =~ "check=:bad_destination enforced=false"
+      assert log =~ "reason=:missing"
+    end
+
+    test "an SP with no ACS URL skips the check" do
+      xml = response_xml(@idp_entity_id, destination: "https://other.example.com/consume")
+      sp = unsigned_sp(consume_uri: "")
+      # The Recipient check still applies; only Destination is skipped.
+      assert {:error, :bad_recipient} = Sp.validate_assertion(xml, sp)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # :bad_audience — every AudienceRestriction must name the SP
+  # ---------------------------------------------------------------------------
+
+  describe ":bad_audience" do
+    test "the SP among several Audience values passes" do
+      xml = assertion_xml(conditions: restriction(["https://a.example.com", @audience]))
+      assert {:ok, _} = Saml.validate_assertion(xml, ctx())
+    end
+
+    test "several Audience values none of which is the SP are rejected" do
+      xml =
+        assertion_xml(conditions: restriction(["https://a.example.com", "https://b.example.com"]))
+
+      assert {:error, :bad_audience} = Saml.validate_assertion(xml, ctx())
+    end
+
+    test "a mismatched Audience is rejected even when the policy is log-only" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      xml = assertion_xml(conditions: restriction(["https://a.example.com"]))
+      assert {:error, :bad_audience} = Saml.validate_assertion(xml, ctx(enforce: nil))
+    end
+
+    # Core §2.5.1.4: the SP must be in every AudienceRestriction.
+    test "the SP missing from one of two AudienceRestriction elements is rejected" do
+      xml =
+        assertion_xml(
+          conditions: restriction([@audience]) <> restriction(["https://a.example.com"])
+        )
+
+      assert {:error, :bad_audience} = Saml.validate_assertion(xml, ctx())
+    end
+
+    test "the SP named in every AudienceRestriction passes" do
+      xml =
+        assertion_xml(
+          conditions:
+            restriction([@audience]) <> restriction(["https://a.example.com", @audience])
+        )
+
+      assert {:ok, _} = Saml.validate_assertion(xml, ctx())
+    end
+
+    test "an Audience split by an XML comment is read whole" do
+      [head, tail] = String.split(@audience, "example", parts: 2)
+      split = head <> "<!-- c -->example" <> tail
+
+      assert {:ok, assertion} =
+               Saml.validate_assertion(assertion_xml(conditions: restriction([split])), ctx())
+
+      assert assertion.audience_restrictions == [[@audience]]
+      assert {:audience, @audience} in assertion.conditions
+
+      other = "https://other.<!-- c -->example.com/sp"
+
+      assert {:error, :bad_audience} =
+               Saml.validate_assertion(assertion_xml(conditions: restriction([other])), ctx())
+    end
+
+    test "conditions[:audience] keeps the first Audience value" do
+      xml = assertion_xml(conditions: restriction(["https://a.example.com", @audience]))
+      assert {:ok, assertion} = Saml.validate_assertion(xml, ctx())
+      assert {:audience, "https://a.example.com"} in assertion.conditions
+    end
+
+    # Profiles §4.1.4.2: a bearer assertion MUST carry an AudienceRestriction
+    # naming the SP.
+    test "an assertion with no Audience is rejected" do
+      xml = assertion_xml(conditions: "")
+      assert {:error, :bad_audience} = Saml.validate_assertion(xml, ctx())
+    end
+
+    test "an assertion with no Audience only warns when the check is not enforced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, _} =
+                   Saml.validate_assertion(assertion_xml(conditions: ""), ctx(enforce: nil))
+        end)
+
+      assert log =~ "check=:bad_audience enforced=false"
+      assert log =~ "reason=:missing"
+    end
+
+    test "an unknown SP entity id does not report a missing Audience" do
+      log =
+        capture_log(fn ->
+          assert {:ok, _} =
+                   Saml.validate_assertion(assertion_xml(conditions: ""), ctx(audience: ""))
+        end)
+
+      refute log =~ "saml_validation"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # :too_early — SubjectConfirmationData/@NotBefore
+  # ---------------------------------------------------------------------------
+
+  describe ":too_early on SubjectConfirmationData" do
+    test "a past NotBefore passes" do
+      assert {:ok, _} =
+               Saml.validate_assertion(assertion_xml(scd_not_before: in_secs(-60)), ctx())
+    end
+
+    test "a future NotBefore is rejected" do
+      xml = assertion_xml(scd_not_before: in_secs(120))
+      assert {:error, :too_early} = Saml.validate_assertion(xml, ctx())
+    end
+
+    test "the clock skew of Conditions/@NotBefore applies" do
+      assert {:ok, _} = Saml.validate_assertion(assertion_xml(scd_not_before: in_secs(3)), ctx())
+    end
+
+    test "is evaluated at ctx.now" do
+      xml = assertion_xml(scd_not_before: in_secs(120))
+      later = DateTime.add(DateTime.utc_now(), 200, :second)
+      assert {:ok, _} = Saml.validate_assertion(xml, ctx(now: later))
+    end
+
+    test "a future NotBefore only warns when the check is not enforced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, _} =
+                   Saml.validate_assertion(
+                     assertion_xml(scd_not_before: in_secs(120)),
+                     ctx(enforce: nil)
+                   )
+        end)
+
+      assert log =~ "check=:too_early enforced=false"
+      assert log =~ "element=:subject_confirmation_data"
+    end
+
+    test "an unparsable NotBefore warns and passes, even when enforced" do
+      log =
+        capture_log(fn ->
+          assert {:ok, _} =
+                   Saml.validate_assertion(assertion_xml(scd_not_before: "not-a-time"), ctx())
+        end)
+
+      assert log =~ "check=:too_early"
+      assert log =~ "reason=:unparsable"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # :duplicate — assertion replay, via ExSaml.AssertionReplayCache
+  # ---------------------------------------------------------------------------
+
+  describe ":duplicate" do
+    defp consume(xml, sp \\ unsigned_sp()),
+      do: Sp.validate_assertion(xml, AssertionReplayCache.duplicate_fun(sp), sp, [])
+
+    test "an assertion ID is accepted once, then rejected" do
+      xml = response_xml(@idp_entity_id)
+      assert {:ok, _} = consume(xml)
+      assert {:error, :duplicate} = consume(xml)
+    end
+
+    test "different assertion IDs do not collide" do
+      assert {:ok, _} = consume(response_xml(@idp_entity_id, id: "_a1"))
+      assert {:ok, _} = consume(response_xml(@idp_entity_id, id: "_a2"))
+    end
+
+    test "a replay only warns when the check is not enforced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      xml = response_xml(@idp_entity_id)
+      assert {:ok, _} = consume(xml)
+
+      log = capture_log(fn -> assert {:ok, _} = consume(xml) end)
+
+      assert log =~ "[ExSaml] saml_validation check=:duplicate enforced=false"
+      assert log =~ ~s(assertion_id="_a1")
+    end
+
+    # Core §2.5.1.5.
+    test "OneTimeUse makes the check enforced whatever the policy" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      xml = response_xml(@idp_entity_id, one_time_use: true)
+
+      assert {:ok, %{one_time_use: true}} = consume(xml)
+      assert {:error, :duplicate} = consume(xml)
+    end
+
+    test "the ID is kept until the assertion would be stale, plus the skew" do
+      xml = response_xml(@idp_entity_id)
+      assert {:ok, assertion} = consume(xml)
+
+      key = {AssertionReplayCache, AssertionReplayCache.key(assertion, "")}
+      ttl = StubCache.ttl(key)
+
+      # NotOnOrAfter is 300 s ahead; the skew is 5 s.
+      assert ttl in (300_000 - 5_000)..((300 + 5) * 1000)
+    end
+
+    test "an assertion without an ID is keyed by the response digest" do
+      xml = response_xml(@idp_entity_id, id: nil)
+      assert {:ok, %{id: ""}} = consume(xml)
+      assert {:error, :duplicate} = consume(xml)
+    end
+
+    test "the default duplicate function of Core.Sp is still a no-op" do
+      xml = response_xml(@idp_entity_id)
+      assert {:ok, _} = Sp.validate_assertion(xml, unsigned_sp())
+      assert {:ok, _} = Sp.validate_assertion(xml, unsigned_sp())
+    end
+
+    test "the handler path records the ID, and replay_check: false neither records nor checks it" do
+      payload =
+        response_xml(@idp_entity_id)
+        |> List.wrap()
+        |> :xmerl.export_simple(:xmerl_xml)
+        |> :unicode.characters_to_binary()
+        |> Base.encode64()
+
+      assert {:ok, _} =
+               Helper.decode_idp_auth_resp(unsigned_sp(), nil, payload, replay_check: false)
+
+      assert {:ok, _} = Helper.decode_idp_auth_resp(unsigned_sp(), nil, payload)
+      assert {:error, :duplicate} = Helper.decode_idp_auth_resp(unsigned_sp(), nil, payload)
+
+      assert {:ok, _} =
+               Helper.decode_idp_auth_resp(unsigned_sp(), nil, payload, replay_check: false)
     end
   end
 end

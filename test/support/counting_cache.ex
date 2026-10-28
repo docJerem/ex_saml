@@ -37,6 +37,9 @@ defmodule ExSaml.CountingCache do
   def put_new!(key, value, opts \\ []),
     do: record(:put_new!, key) && StubCache.put_new!(key, value, opts)
 
+  def put_new(key, value, opts \\ []),
+    do: record(:put_new, key) && StubCache.put_new(key, value, opts)
+
   def take(key), do: record(:take, key) && StubCache.take(key)
   def delete(key), do: record(:delete, key) && StubCache.delete(key)
   def ttl(key), do: record(:ttl, key) && StubCache.ttl(key)

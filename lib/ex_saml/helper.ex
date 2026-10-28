@@ -1,7 +1,7 @@
 defmodule ExSaml.Helper do
   @moduledoc false
 
-  alias ExSaml.{Assertion, IdpData}
+  alias ExSaml.{Assertion, AssertionReplayCache, IdpData}
   alias ExSaml.Core
 
   @spec get_idp(binary) :: nil | IdpData.t()
@@ -77,9 +77,26 @@ defmodule ExSaml.Helper do
   @spec authn_request_id(tuple()) :: String.t() | nil
   def authn_request_id(req_xml_frag), do: Core.Sp.xml_id(req_xml_frag)
 
+  @doc """
+  Decodes and validates a `SAMLResponse` posted to the assertion consumer
+  service.
+
+  Every assertion ID is recorded in `ExSaml.AssertionReplayCache`, and an ID
+  seen before fails the `:duplicate` check (Profiles §4.1.4.5). Options:
+  `:now` (see `ExSaml.Core.Sp.validate_assertion/4`), and `replay_check: false`
+  to neither record nor check the ID, for a diagnostic decoding such as
+  `ExSaml.Debug.replay/2`.
+  """
   def decode_idp_auth_resp(sp, saml_encoding, saml_response, opts \\ []) do
+    {replay_check?, opts} = Keyword.pop(opts, :replay_check, true)
+
+    duplicate_fun =
+      if replay_check?,
+        do: AssertionReplayCache.duplicate_fun(sp, opts),
+        else: fn _assertion, _digest -> :ok end
+
     with {:ok, xml_frag} <- decode_saml_payload(saml_encoding, saml_response),
-         {:ok, core_assertion} <- Core.Sp.validate_assertion(xml_frag, sp, opts) do
+         {:ok, core_assertion} <- Core.Sp.validate_assertion(xml_frag, duplicate_fun, sp, opts) do
       {:ok, Assertion.from_core(core_assertion)}
     else
       {:error, reason} -> {:error, reason}

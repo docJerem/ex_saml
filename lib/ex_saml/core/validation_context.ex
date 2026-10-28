@@ -24,6 +24,13 @@ defmodule ExSaml.Core.ValidationContext do
   | Session still valid | `:session_expired` | `AuthnStatement/@SessionNotOnOrAfter` |
   | Assertion not replayed | `:duplicate` | `Assertion/@ID` |
   | Subject confirmation is bearer | `:bad_subject_confirmation` | `SubjectConfirmation/@Method` |
+  | The assertion names an audience | `:bad_audience` | `AudienceRestriction/Audience` |
+  | Subject confirmation already valid | `:too_early` | `SubjectConfirmationData/@NotBefore` |
+
+  `:bad_audience` and `:too_early` predate this policy: an `Audience` that does
+  not name the SP and a future `Conditions/@NotBefore` are always rejected. The
+  policy only governs what used to be accepted: an assertion with no
+  `Audience`, and a future `SubjectConfirmationData/@NotBefore`.
 
   ## Enforce or warn
 
@@ -32,11 +39,11 @@ defmodule ExSaml.Core.ValidationContext do
   change the outcome, which is how a check can be observed against real IdP
   traffic before it starts refusing logins.
 
-  The default enforces the checks that cannot plausibly reject a conformant
-  response. `:bad_destination` and `:duplicate` are deliberately absent: the
-  first depends on our ACS URL matching byte for byte what the IdP was
-  configured with, the second changes what happens when a browser replays a
-  callback. Both need evidence from the warn logs before they can be turned on.
+  The default enforces every check: none of them rejects a response that
+  follows SAML 2.0 Core, Bindings and the Web Browser SSO Profile, and
+  `:bad_destination` compares with the same ACS URL as the `Recipient` check,
+  which has always been exact. `:duplicate` is enforced regardless of the list
+  for an assertion carrying `Conditions/OneTimeUse` (Core §2.5.1.5).
 
   Setting the list to `[]` downgrades every check to log-only — the rollback
   lever if an enforcing check turns out to reject real traffic.
@@ -67,12 +74,14 @@ defmodule ExSaml.Core.ValidationContext do
             recipient: ""
 
   @type check ::
-          :bad_destination
+          :bad_audience
+          | :bad_destination
           | :bad_in_response_to
           | :bad_issuer
           | :bad_subject_confirmation
           | :duplicate
           | :session_expired
+          | :too_early
 
   @type now :: DateTime.t() | :calendar.datetime() | nil
 
@@ -87,20 +96,19 @@ defmodule ExSaml.Core.ValidationContext do
         }
 
   @all_checks [
+    :bad_audience,
     :bad_destination,
     :bad_in_response_to,
     :bad_issuer,
     :bad_subject_confirmation,
     :duplicate,
-    :session_expired
+    :session_expired,
+    :too_early
   ]
 
-  @default_enforced [
-    :bad_in_response_to,
-    :bad_issuer,
-    :bad_subject_confirmation,
-    :session_expired
-  ]
+  # Every check, today. Kept distinct from `@all_checks` so a future check can
+  # ship log-only first.
+  @default_enforced @all_checks
 
   @doc """
   Builds a context from the SP configuration for one IdP.
@@ -155,6 +163,14 @@ defmodule ExSaml.Core.ValidationContext do
       _ -> @default_enforced
     end
   end
+
+  @doc """
+  The context with `check` enforced whatever the configured policy, for an
+  assertion that demands it (`OneTimeUse` and `:duplicate`).
+  """
+  @spec always_enforce(t(), check()) :: t()
+  def always_enforce(%__MODULE__{} = ctx, check),
+    do: %{ctx | enforce: Enum.uniq([check | ctx.enforce || enforced_checks()])}
 
   @doc "Every check this module knows about, enforced or not."
   @spec all_checks() :: [check()]
