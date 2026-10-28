@@ -279,4 +279,72 @@ defmodule ExSaml.SsoFlowTest do
       assert rejected_with(conn) == {:error, :bad_issuer}
     end
   end
+
+  # IdP-initiated flow: the RelayState is the redirect target. Without
+  # `allowed_target_urls`, only a relative path is followed.
+  describe "IdP-initiated RelayState target" do
+    defp use_idp(overrides) do
+      idp = struct!(idp(), [allow_idp_initiated_flow: true] ++ overrides)
+      Application.put_env(:ex_saml, :identity_providers, %{@idp_id => idp})
+    end
+
+    defp post_unsolicited(relay_state) do
+      body = %{"SAMLResponse" => saml_response(""), "RelayState" => relay_state}
+      conn = SPHandler.consume_signin_response(acs_conn(body, %{}))
+      assert conn.status == 302
+      conn
+    end
+
+    defp redirected_with_code_to(conn) do
+      [target, query] = conn |> location() |> String.split("?code=", parts: 2)
+      assert query != ""
+      target
+    end
+
+    test "without a list, a relative path is kept" do
+      use_idp(allowed_target_urls: nil)
+      assert "/dashboard" |> post_unsolicited() |> redirected_with_code_to() == "/dashboard"
+    end
+
+    for relay_state <- [
+          "https://elsewhere.example.com/landing",
+          "//elsewhere.example.com/landing",
+          "/\\elsewhere.example.com/landing",
+          "/\telsewhere.example.com",
+          "ftp://elsewhere.example.com/landing",
+          "elsewhere.example.com"
+        ] do
+      test "without a list, #{inspect(relay_state)} falls back to the default target" do
+        use_idp(allowed_target_urls: nil)
+
+        log =
+          capture_log(fn ->
+            assert unquote(relay_state) |> post_unsolicited() |> redirected_with_code_to() == "/"
+          end)
+
+        assert log =~ "is not a relative path and allowed_target_urls is not set"
+      end
+    end
+
+    test "without a list, an empty RelayState goes to the default target" do
+      use_idp(allowed_target_urls: nil)
+      assert "" |> post_unsolicited() |> redirected_with_code_to() == "/"
+    end
+
+    test "with a list, a listed absolute URL is kept" do
+      use_idp(allowed_target_urls: ["https://app.example.com/dashboard"])
+
+      assert "https://app.example.com/dashboard"
+             |> post_unsolicited()
+             |> redirected_with_code_to() == "https://app.example.com/dashboard"
+    end
+
+    test "with a list, a URL outside it is rejected" do
+      use_idp(allowed_target_urls: ["https://app.example.com/dashboard"])
+      conn = post_unsolicited("https://elsewhere.example.com/landing")
+
+      refute location(conn) =~ "code="
+      assert rejected_with(conn) == {:error, :invalid_target_url}
+    end
+  end
 end

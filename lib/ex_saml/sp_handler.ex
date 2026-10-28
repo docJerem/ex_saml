@@ -94,7 +94,7 @@ defmodule ExSaml.SPHandler do
       nameid = assertion.subject.name
       assertion_key = {idp_data.id, maybe_idp_user_id(assertion) || nameid}
       conn = State.put_assertion(conn, assertion_key, assertion)
-      target_url = auth_target_url(conn, assertion, relay_state)
+      target_url = auth_target_url(conn, idp_data, assertion, relay_state)
 
       RelayStateCache.delete(relay_state)
 
@@ -180,11 +180,42 @@ defmodule ExSaml.SPHandler do
     |> redirect(302, target_url(conn, relay_state))
   end
 
-  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, ""), do: "/"
-  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, url), do: url
+  # IdP-initiated flow: the RelayState is the target. `validate_authresp/4`
+  # has already checked it against `allowed_target_urls` when the list is set;
+  # without a list, only a relative path is followed, anything else falls back
+  # to the default target.
+  defp auth_target_url(_conn, _idp_data, %{subject: %{in_response_to: ""}}, ""), do: "/"
 
-  defp auth_target_url(conn, _assertion, relay_state) do
+  defp auth_target_url(
+         _conn,
+         %IdpData{id: idp_id, allowed_target_urls: nil},
+         %{subject: %{in_response_to: ""}},
+         url
+       ) do
+    if relative_path?(url) do
+      url
+    else
+      Logger.warning(
+        "[ExSaml] IdP-initiated RelayState #{inspect(url)} for #{inspect(idp_id)} is not a " <>
+          "relative path and allowed_target_urls is not set: redirecting to \"/\""
+      )
+
+      "/"
+    end
+  end
+
+  defp auth_target_url(_conn, _idp_data, %{subject: %{in_response_to: ""}}, url), do: url
+
+  defp auth_target_url(conn, _idp_data, _assertion, relay_state) do
     get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] || "/"
+  end
+
+  # A path on this host: a single leading `/`, no scheme or authority, and
+  # nothing a browser could read as one (backslashes, control characters).
+  defp relative_path?(url) do
+    String.starts_with?(url, "/") and not String.starts_with?(url, "//") and
+      not String.contains?(url, "\\") and not String.match?(url, ~r/[\x00-\x1F\x7F]/) and
+      match?(%URI{scheme: nil, host: nil}, URI.parse(url))
   end
 
   # IdP-initiated flow auth response. Tagged as `:idp_initiated` with a `nil`

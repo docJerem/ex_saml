@@ -84,6 +84,11 @@ config :ex_saml, ExSaml.Provider,
 
 Supported `nameid_format` values: `:email`, `:x509`, `:windows`, `:krb`, `:persistent`, `:transient`.
 
+In the IdP-initiated flow the `RelayState` is the redirect target. With
+`allowed_target_urls`, it must be one of the listed URLs; without it, only a
+relative path (such as `/dashboard`) is followed and any other value redirects
+to `/`.
+
 At least one of `signed_assertion_in_resp` and `signed_envelopes_in_resp` must
 be `true`: an IdP configured with both set to `false` is logged as an error and
 skipped. `provider_type` never changes these two options.
