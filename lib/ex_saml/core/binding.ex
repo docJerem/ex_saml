@@ -58,31 +58,31 @@ defmodule ExSaml.Core.Binding do
   Unpack and parse a SAMLResponse with the given encoding.
 
   When the encoding is the DEFLATE URI, the response is base64-decoded then
-  zlib-unzipped. For any other encoding the response is base64-decoded and an
-  unzip is attempted, falling back to the raw decoded data if decompression
-  fails. The resulting XML string is then parsed with `:xmerl_scan`.
+  inflated with `ExSaml.Core.Xml.SafeXml.inflate/1`. For any other encoding
+  (HTTP-POST, base64 only per SAML Bindings §3.5) the response is
+  base64-decoded and, for compatibility with IdPs that compress it anyway,
+  inflated with `ExSaml.Core.Xml.SafeXml.inflate_if_deflated/1`, which keeps
+  the decoded data as is when it is not a DEFLATE stream. Both inflate
+  within the `:max_document_size` limit. The resulting document is then
+  parsed with `ExSaml.Core.Xml.SafeXml.scan/1`.
+
+  Returns `{:error, :invalid_xml}` when the payload is not valid base64, is
+  not a valid DEFLATE stream (DEFLATE encoding), exceeds the size limit, or
+  is rejected by `ExSaml.Core.Xml.SafeXml.scan/1`.
   """
   @spec decode_response(binary(), binary()) :: {:ok, xml()} | {:error, :invalid_xml}
   def decode_response(@deflate, saml_response) do
-    saml_response
-    |> :base64.decode()
-    |> :zlib.unzip()
-    |> SafeXml.scan()
+    with {:ok, data} <- decode_base64(saml_response),
+         {:ok, xml} <- SafeXml.inflate(data) do
+      SafeXml.scan(xml)
+    end
   end
 
   def decode_response(_encoding, saml_response) do
-    data = :base64.decode(saml_response)
-
-    xml_data =
-      try do
-        :zlib.unzip(data)
-      rescue
-        _e -> data
-      catch
-        _kind, _reason -> data
-      end
-
-    SafeXml.scan(xml_data)
+    with {:ok, data} <- decode_base64(saml_response),
+         {:ok, xml} <- SafeXml.inflate_if_deflated(data) do
+      SafeXml.scan(xml)
+    end
   end
 
   @doc """
@@ -168,6 +168,12 @@ defmodule ExSaml.Core.Binding do
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  defp decode_base64(encoded) do
+    {:ok, :base64.decode(encoded)}
+  rescue
+    _ -> {:error, :invalid_xml}
+  end
 
   @spec xml_payload_type(xml()) :: binary()
   defp xml_payload_type(rec) when Record.is_record(rec, :xmlDocument) do
