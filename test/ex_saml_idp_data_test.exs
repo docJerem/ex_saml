@@ -68,6 +68,22 @@ defmodule ExSamlIdpDataTest do
     assert idp_data.valid?
   end
 
+  test "metadata is parsed through SafeXml: a DOCTYPE is rejected", %{sps: sps} do
+    metadata =
+      "test/data/idp_metadata.xml"
+      |> File.read!()
+      |> String.replace(
+        ~r/^<\?xml[^>]*\?>/,
+        ~s(<?xml version="1.0"?><!DOCTYPE md:EntityDescriptor>)
+      )
+
+    assert metadata =~ "<!DOCTYPE"
+
+    assert_raise ExSaml.ConfigError, ~r/invalid_xml/, fn ->
+      IdpData.load_provider(Map.put(@idp_config1, :metadata, metadata), sps)
+    end
+  end
+
   # verify defaults
   test "valid-idp-config-2", %{sps: sps} do
     %IdpData{} = idp_data = IdpData.load_provider(@idp_config1, sps)
