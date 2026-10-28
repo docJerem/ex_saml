@@ -36,6 +36,11 @@ defmodule ExSaml.AuthHandler do
     session_id = get_session(conn, :session_id)
     target_url = conn.private[:ex_saml_target_url] || "/"
 
+    {idp_signin_url, req_xml_frag} =
+      Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
+
+    authn_request_id = Helper.authn_request_id(req_xml_frag)
+
     RelayStateCache.put(
       relay_state,
       %{
@@ -45,13 +50,12 @@ defmodule ExSaml.AuthHandler do
         idp_id: idp_id,
         user_token: get_session(conn, :user_token),
         redirect_uri: get_session(conn, :redirect_uri),
-        target_url: target_url
+        target_url: target_url,
+        # Matched against the response's `InResponseTo` (Profiles §4.1.4.3).
+        authn_request_id: authn_request_id
       },
       ttl: @relay_state_cache_ttl
     )
-
-    {idp_signin_url, req_xml_frag} =
-      Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
 
     conn
     |> State.delete_assertion(assertion_key)
@@ -61,6 +65,7 @@ defmodule ExSaml.AuthHandler do
     |> put_session("relay_state", relay_state)
     |> put_session("idp_id", idp_id)
     |> put_session("target_url", target_url)
+    |> put_session("authn_request_id", authn_request_id)
     |> send_saml_request(
       idp_signin_url,
       idp.use_redirect_for_req,
@@ -93,6 +98,11 @@ defmodule ExSaml.AuthHandler do
 
         session_id = get_session(conn, :session_id)
 
+        {idp_signin_url, req_xml_frag} =
+          Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
+
+        authn_request_id = Helper.authn_request_id(req_xml_frag)
+
         RelayStateCache.put(
           relay_state,
           %{
@@ -102,13 +112,12 @@ defmodule ExSaml.AuthHandler do
             idp_id: idp_id,
             target_url: target_url,
             user_token: get_session(conn, :user_token),
-            redirect_uri: get_session(conn, :redirect_uri)
+            redirect_uri: get_session(conn, :redirect_uri),
+            # Matched against the response's `InResponseTo` (Profiles §4.1.4.3).
+            authn_request_id: authn_request_id
           },
           ttl: @relay_state_cache_ttl
         )
-
-        {idp_signin_url, req_xml_frag} =
-          Helper.gen_idp_signin_req(sp, idp_meta, Map.get(idp, :nameid_format))
 
         conn
         |> State.delete_assertion(assertion_key)
@@ -116,6 +125,7 @@ defmodule ExSaml.AuthHandler do
         |> put_session("relay_state", relay_state)
         |> put_session("idp_id", idp_id)
         |> put_session("target_url", target_url)
+        |> put_session("authn_request_id", authn_request_id)
         |> send_saml_request(
           idp_signin_url,
           idp.use_redirect_for_req,

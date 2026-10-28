@@ -1,7 +1,7 @@
 defmodule ExSaml.Helper do
   @moduledoc false
 
-  alias ExSaml.{Assertion, IdpData}
+  alias ExSaml.{Assertion, AssertionReplayCache, IdpData}
   alias ExSaml.Core
 
   @spec get_idp(binary) :: nil | IdpData.t()
@@ -67,9 +67,28 @@ defmodule ExSaml.Helper do
     {idp_signout_url, xml_frag}
   end
 
+  @doc """
+  The `ID` of a generated AuthnRequest, to be matched against the `InResponseTo`
+  of the response it comes back with.
+
+  A separate accessor rather than a third element in `gen_idp_signin_req/3`'s
+  tuple, so existing callers keep working unchanged.
+  """
+  @spec authn_request_id(tuple()) :: String.t() | nil
+  def authn_request_id(req_xml_frag), do: Core.Sp.xml_id(req_xml_frag)
+
+  @doc """
+  Decodes and validates a `SAMLResponse` posted to the assertion consumer
+  service.
+
+  Every assertion ID is recorded in `ExSaml.AssertionReplayCache`, and an ID
+  seen before fails the `:duplicate` check (Profiles §4.1.4.5).
+  """
   def decode_idp_auth_resp(sp, saml_encoding, saml_response) do
+    duplicate_fun = AssertionReplayCache.duplicate_fun(sp)
+
     with {:ok, xml_frag} <- decode_saml_payload(saml_encoding, saml_response),
-         {:ok, core_assertion} <- Core.Sp.validate_assertion(xml_frag, sp) do
+         {:ok, core_assertion} <- Core.Sp.validate_assertion(xml_frag, duplicate_fun, sp) do
       {:ok, Assertion.from_core(core_assertion)}
     else
       {:error, reason} -> {:error, reason}

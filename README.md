@@ -104,11 +104,16 @@ config :ex_saml, ExSaml.State,
 
 ### Cache
 
-Configure the Nebulex cache module used for assertions and relay state:
+Configure the Nebulex cache module used for assertions, relay state,
+authorization codes and the IDs of consumed assertions (replay detection):
 
 ```elixir
 config :ex_saml, cache: MyApp.Cache
 ```
+
+A custom cache module must provide `put_new/3` with the Nebulex 2 contract
+(`true` when the key was written, `false` when it already exists); every
+Nebulex cache does.
 
 ### Dynamic Provider Loading
 
@@ -221,6 +226,7 @@ ExSaml includes hardened defaults for SAML processing:
 - **NotBefore validation** — Assertions are rejected if issued in the future (with 5s clock skew tolerance)
 - **Algorithm whitelist** — RSA-SHA256/384/512 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; unknown signature algorithms return a clean error instead of crashing; RSA-SHA1 is rejected
 - **Namespace-conformant parsing** — XML is parsed with `namespace_conformant: true`
+- **Response validation** — `Issuer`, `InResponseTo`, `Destination`, `Audience`, `SessionNotOnOrAfter`, the bearer confirmation method and its `NotBefore` are checked on every response, and an assertion is accepted only once (see [Response validation checks](#response-validation-checks))
 - **Encrypted assertions** — AES-128/192/256 in GCM or CBC mode, with the key transported in RSA-OAEP (`rsa-oaep-mgf1p` or XML Encryption 1.1 `rsa-oaep`, with their digest, MGF and OAEP parameters). RSA-1_5 key transport is rejected unless an IdP is configured with `allow_rsa_1_5_key_transport: true`. When the IdP signs the Response (`signed_envelopes_in_resp: true`), its signature is verified before the assertion is decrypted; prefer AES-GCM over AES-CBC
 
 To report a security issue, email security@cryptr.co.
@@ -259,6 +265,75 @@ draws from it the first time each name is seen; declare them with
 When the budget is spent, documents introducing new names are rejected
 (`kind: :rejected, payload: :atom_budget_exhausted` in the `:on_error` hook)
 and a warning is logged once.
+
+### Response validation checks
+
+Beyond signatures, `Recipient` and the time conditions, the assertion consumer
+service performs the checks SAML 2.0 Core, Bindings and the Web Browser SSO
+Profile require of a response. Each one has an error reason of its own:
+
+| Check | Reason | Spec |
+|---|---|---|
+| `Response/Issuer` and `Assertion/Issuer` match the IdP `entityID` from its metadata | `:bad_issuer` | Core §2.2.3, Profiles §4.1.4.2 |
+| `SubjectConfirmationData/@InResponseTo` matches the ID of the AuthnRequest the SP sent | `:bad_in_response_to` | Profiles §4.1.4.3 |
+| `AuthnStatement/@SessionNotOnOrAfter` has not passed | `:session_expired` | Core §2.7.2 |
+| `SubjectConfirmation/@Method` is present and bearer | `:bad_subject_confirmation` | Core §2.4.1.1, Profiles §4.1.4.2 |
+| `Response/@Destination` equals the ACS URL when present, and is present on a signed `Response` | `:bad_destination` | Core §3.2.2, Bindings §3.5.5.2 |
+| The assertion ID has not been consumed before | `:duplicate` | Profiles §4.1.4.5, Core §2.5.1.5 |
+| The assertion carries an `Audience` | `:bad_audience` | Profiles §4.1.4.2 |
+| `SubjectConfirmationData/@NotBefore` has passed (5 s clock skew) | `:too_early` | Core §2.4.1.2 |
+
+Two rules are outside the policy below and always reject: an
+`AudienceRestriction` that does not name the SP entity id (every
+`AudienceRestriction` must name it in one of its `Audience` values, Core
+§2.5.1.4) and a future `Conditions/@NotBefore`.
+
+`config :ex_saml, :enforced_response_checks` lists the checks that reject a
+response. A check absent from the list is still evaluated: a failure logs one
+line and the sign-in goes on.
+
+```elixir
+config :ex_saml, enforced_response_checks: :all   # the default: every check above
+config :ex_saml, enforced_response_checks: []     # everything log-only
+config :ex_saml, enforced_response_checks: [:bad_issuer, :duplicate]  # exactly these
+```
+
+```
+[ExSaml] saml_validation check=:bad_destination enforced=false idp_id="acme" expected="https://sp.example.com/sso/consume/acme" actual="https://sp.example.com/sso/consume/acme/"
+```
+
+`expected` and `actual` are logged verbatim. An explicit list enforces
+exactly the checks it names: a check added in a later release stays log-only
+until it is added to the list.
+
+**Replay detection.** Every assertion the assertion consumer service accepts
+is recorded in `ExSaml.AssertionReplayCache`, keyed by `Assertion/@ID` and its
+`Issuer` (by the digest of the response when the assertion has no ID), until
+the assertion would be rejected as stale: its earliest `NotOnOrAfter`, else
+`IssueInstant` + 5 minutes, plus the clock skew. It uses the configured cache
+through `put_new/3`, so detection spans every node sharing that cache; with a
+node-local cache it is per node. For an assertion carrying `OneTimeUse`,
+`:duplicate` is enforced whatever the policy. `ExSaml.Core.Sp.validate_assertion/2`
+keeps a no-op duplicate function; a direct caller passes
+`ExSaml.AssertionReplayCache.duplicate_fun(sp)` to `validate_assertion/3`.
+
+**Deliberate failure modes.**
+
+- A missing stored AuthnRequest ID skips the `InResponseTo` check: relay
+  states written before the check existed carry none, and neither does a
+  consumer that drives `ExSaml.SPHandler.validate_authresp/4` without going
+  through `ExSaml.AuthHandler`.
+- An unparsable `SessionNotOnOrAfter` or `SubjectConfirmationData/@NotBefore`
+  logs and passes, even when the check is enforced.
+- An absent `Response/Issuer` is accepted silently (the element is optional),
+  and so is an absent `Destination` on an unsigned `Response`.
+- The response checks run after signature verification, and the replay check
+  runs last among them, so an assertion another check rejects is not recorded.
+
+Consumers supply nothing new: the IdP `entityID` and id come from
+`%ExSaml.IdpData{}`, the ACS URL and the SP entity id from its `sp_config`,
+and the AuthnRequest ID is stored in the relay state and the session by
+`ExSaml.AuthHandler`.
 
 ## Migrating from Samly
 

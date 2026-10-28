@@ -24,6 +24,8 @@ defmodule ExSaml.SPHandler do
     Subject
   }
 
+  alias ExSaml.Core.ValidationContext
+
   import ExSaml.Helper, only: [get_idp: 1]
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
 
@@ -71,7 +73,10 @@ defmodule ExSaml.SPHandler do
 
   On failure returns `{:error, reason}`. Possible reasons include
   `:idp_initiated_not_allowed`, `:invalid_target_url`, `:invalid_relay_state`,
-  `:invalid_idp_id`, and `:access_denied`.
+  `:invalid_idp_id`, `:bad_in_response_to`, and `:access_denied`, as well as
+  the response validation reasons (`:bad_issuer`, `:bad_destination`,
+  `:bad_audience`, `:bad_subject_confirmation`, `:session_expired`,
+  `:too_early`, `:duplicate`, …).
   """
   # Router-facing clause: matches when the SP router dispatched here with
   # `idp_id` in path params. Performs the full SAML flow AND handles the
@@ -199,14 +204,12 @@ defmodule ExSaml.SPHandler do
   end
 
   # SP-initiated flow auth response.
-  def validate_authresp(conn, %IdpData{id: idp_id}, _assertion, relay_state) do
-    rs_in_session =
-      get_session(conn, "relay_state") || RelayStateCache.get(relay_state)[:relay_state]
-
-    idp_id_in_session = get_session(conn, "idp_id") || RelayStateCache.get(relay_state)[:idp_id]
-
-    saml_nonce_in_session =
-      get_session(conn, "saml_nonce") || RelayStateCache.get(relay_state)[:saml_nonce]
+  def validate_authresp(conn, %IdpData{id: idp_id}, assertion, relay_state) do
+    cached = RelayStateCache.get(relay_state)
+    rs_in_session = session_or_cached(conn, cached, :relay_state)
+    idp_id_in_session = session_or_cached(conn, cached, :idp_id)
+    saml_nonce_in_session = session_or_cached(conn, cached, :saml_nonce)
+    authn_request_id = session_or_cached(conn, cached, :authn_request_id)
 
     cond do
       rs_in_session == nil || rs_in_session != relay_state ->
@@ -215,8 +218,37 @@ defmodule ExSaml.SPHandler do
       idp_id_in_session == nil || idp_id_in_session != idp_id ->
         {:error, :invalid_idp_id}
 
+      not in_response_to_ok?(authn_request_id, assertion, idp_id) ->
+        {:error, :bad_in_response_to}
+
       true ->
         {:ok, :sp_initiated, saml_nonce_in_session}
+    end
+  end
+
+  # The session value when set, else the one stored with the relay state.
+  defp session_or_cached(conn, cached, key),
+    do: get_session(conn, Atom.to_string(key)) || cached[key]
+
+  # Profiles §4.1.4.3. A stored `nil` means the relay-state entry predates
+  # AuthnRequest-id tracking — a rolling deploy, or a consumer driving
+  # `validate_authresp/4` without going through `ExSaml.AuthHandler` — so it
+  # skips rather than rejects. An empty `InResponseTo` is an unsolicited
+  # response and is handled by the IdP-initiated clause above, never here.
+  # The enforce / warn policy applies like for the other checks.
+  defp in_response_to_ok?(nil, _assertion, _idp_id), do: true
+  defp in_response_to_ok?(_expected, %{subject: %{in_response_to: ""}}, _idp_id), do: true
+
+  defp in_response_to_ok?(expected, %{subject: %{in_response_to: actual}}, idp_id) do
+    if to_string(expected) == to_string(actual) do
+      true
+    else
+      ctx = %ValidationContext{idp_id: idp_id}
+
+      ValidationContext.verdict(ctx, {:error, :bad_in_response_to},
+        expected: expected,
+        actual: actual
+      ) == :ok
     end
   end
 

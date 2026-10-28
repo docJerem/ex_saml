@@ -24,7 +24,9 @@ defmodule ExSaml.Core.SpConfig do
             logout_uri: nil,
             encrypt_mandatory: false,
             allow_rsa_1_5_key_transport: false,
-            entity_id: nil
+            entity_id: nil,
+            idp_entity_id: nil,
+            idp_id: nil
 
   @type t :: %__MODULE__{
           org: Org.t(),
@@ -43,6 +45,16 @@ defmodule ExSaml.Core.SpConfig do
           logout_uri: String.t() | nil,
           encrypt_mandatory: boolean(),
           allow_rsa_1_5_key_transport: boolean(),
-          entity_id: String.t() | nil
+          entity_id: String.t() | nil,
+          idp_entity_id: String.t() | nil,
+          idp_id: String.t() | nil
         }
+
+  @doc """
+  The SP entity id used as the assertion audience and as the issuer of the
+  requests we generate, falling back to the metadata URI when none is configured.
+  """
+  @spec entity_id(t()) :: String.t() | charlist()
+  def entity_id(%__MODULE__{entity_id: nil, metadata_uri: metadata_uri}), do: metadata_uri
+  def entity_id(%__MODULE__{entity_id: entity_id}), do: entity_id
 end

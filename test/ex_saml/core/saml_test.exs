@@ -14,6 +14,10 @@ defmodule ExSaml.Core.SamlTest do
 
   Record.defrecord(:xmlText, Record.extract(:xmlText, from_lib: "xmerl/include/xmerl.hrl"))
 
+  # `SubjectConfirmation/@Method` is required (Core §2.4.1.1) and no longer
+  # decodes as bearer when absent.
+  @bearer ~c"urn:oasis:names:tc:SAML:2.0:cm:bearer"
+
   Record.defrecord(
     :xmlNamespace,
     Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl")
@@ -312,6 +316,7 @@ defmodule ExSaml.Core.SamlTest do
                 content: [
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
+                    attributes: [xmlAttribute(name: :Method, value: @bearer)],
                     content: [
                       xmlElement(
                         name: :"saml:SubjectConfirmationData",
@@ -378,6 +383,7 @@ defmodule ExSaml.Core.SamlTest do
                 content: [
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
+                    attributes: [xmlAttribute(name: :Method, value: @bearer)],
                     content: [
                       xmlElement(
                         name: :"saml:SubjectConfirmationData",
@@ -440,6 +446,7 @@ defmodule ExSaml.Core.SamlTest do
                 content: [
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
+                    attributes: [xmlAttribute(name: :Method, value: @bearer)],
                     content: [
                       xmlElement(
                         name: :"saml:SubjectConfirmationData",
@@ -498,6 +505,7 @@ defmodule ExSaml.Core.SamlTest do
                 content: [
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
+                    attributes: [xmlAttribute(name: :Method, value: @bearer)],
                     content: []
                   )
                 ]
@@ -618,6 +626,7 @@ defmodule ExSaml.Core.SamlTest do
                 content: [
                   xmlElement(
                     name: :"saml:SubjectConfirmation",
+                    attributes: [xmlAttribute(name: :Method, value: @bearer)],
                     content: [
                       xmlElement(
                         name: :"saml:SubjectConfirmationData",
@@ -629,6 +638,19 @@ defmodule ExSaml.Core.SamlTest do
                           )
                         ]
                       )
+                    ]
+                  )
+                ]
+              ),
+              # Profiles §4.1.4.2: an assertion without an Audience is now
+              # rejected before its staleness is evaluated.
+              xmlElement(
+                name: :"saml:Conditions",
+                content: [
+                  xmlElement(
+                    name: :"saml:AudienceRestriction",
+                    content: [
+                      xmlElement(name: :"saml:Audience", content: [xmlText(value: ~c"foo")])
                     ]
                   )
                 ]

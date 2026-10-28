@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ExSaml.Core.Xml.SafeXml`, the single entry point for parsing XML: SAML messages, decrypted assertions and IdP metadata all go through `SafeXml.scan/1`, which returns `{:ok, xml}` or `{:error, :invalid_xml}` and never raises. `SafeXml.inflate/1` and `SafeXml.inflate_if_deflated/1` inflate DEFLATE-compressed messages within a size limit (#29)
 - `config :ex_saml, :safe_xml` with the keys `:max_document_size`, `:max_new_atoms`, `:extra_prefixes`, `:extra_names` and `:on_error`, an arity-1 hook receiving `%{reason: :invalid_xml, kind: :error | :exit | :throw | :rejected, payload: …}` on every rejected or unparsable document, e.g. to forward it to a SIEM. See "XML parsing limits" in the README (#29)
 - Encrypted assertions in AES-192-CBC, AES-192-GCM and AES-256-GCM, and with the key transported in XML Encryption 1.1 `rsa-oaep`. The `ds:DigestMethod`, `xenc11:MGF` and `xenc:OAEPparams` of an RSA-OAEP `EncryptedKey` are now honoured, so a key wrapped with RSA-OAEP over SHA-256 decrypts; they used to be ignored and every such assertion was rejected with `:bad_assertion`
+- `config :ex_saml, :enforced_response_checks` lists the response checks that reject a response: `:all` (the default) enforces every check, `[]` makes every check log-only, an explicit list enforces exactly the checks it names. A check that is not enforced logs one `[ExSaml] saml_validation check=… enforced=false expected=… actual=…` line and lets the sign-in go on. See "Response validation checks" in the README (#55)
+- `ExSaml.AssertionReplayCache`, which records the consumed assertion IDs in the configured cache until the assertion would be stale, plus the clock skew. `ExSaml.SPHandler` uses it on every response; `ExSaml.AssertionReplayCache.duplicate_fun/1` can be passed to `ExSaml.Core.Sp.validate_assertion/3` (#55)
+- `ExSaml.Core.ValidationContext` and `ExSaml.Core.Saml.validate_assertion/2`, which validates an assertion against it; `ExSaml.Core.SpConfig` gains `idp_entity_id`, `idp_id` (filled from `%ExSaml.IdpData{}`) and `SpConfig.entity_id/1`; `ExSaml.Core.Sp.xml_id/1` reads back the ID of a generated request, which `ExSaml.AuthHandler` stores in the relay state and in the session (`"authn_request_id"`). `ExSaml.Core.Assertion` gains `id`, `audience_restrictions` and `one_time_use`, `ExSaml.Core.Subject` gains `notbefore` (#55)
+- Error messages in English and French for `:bad_issuer`, `:bad_in_response_to`, `:bad_destination`, `:bad_subject_confirmation`, `:session_expired` and `:duplicate` (#55)
 
 ### Changed
 
@@ -19,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `{:invalid_response, reason}` error of the sign-in and sign-out flows now carries the atom `:invalid_xml` instead of an inspected exception string (#29)
 - IdP metadata is parsed with `SafeXml.scan/1` instead of `SweetXml.parse/2`. Whitespace in text nodes is no longer normalised and comments are kept in the parsed tree; the values `ex_saml` reads from metadata are trimmed as before. Metadata that cannot be parsed raises `ExSaml.ConfigError` when the provider is loaded, instead of an exit from `:xmerl_scan` (#29)
 - RSA-1_5 key transport is rejected by default: `Sp.validate_assertion/2` returns `{:error, :bad_assertion}` and logs why. XML Encryption 1.1 §5.5.1 advises against RSA-1_5; an IdP that still uses it can be allowed with the new `allow_rsa_1_5_key_transport: true` IdP option
+- A `SubjectConfirmation` without `@Method` decodes as `:unknown` instead of `:bearer` and is rejected with `:bad_subject_confirmation`. Every `Audience` value is read whole, including a value split by a comment, and the SP entity id must be named in every `AudienceRestriction`; `conditions[:audience]` holds the first value. An assertion without `Audience`, a signed `Response` without `Destination` and a re-posted `SAMLResponse` are rejected; each can be made log-only with `:enforced_response_checks` (#55)
+- The configured cache must implement `put_new/3` (Nebulex 2 contract: `true` when written, `false` when the key exists), used by the replay check. Every Nebulex cache does; a hand-written cache module must add it (#55)
 
 ### Security
 
@@ -30,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parse IdP metadata through `SafeXml.scan/1`, with the same options and limits as SAML messages (#29)
 - `Sp.validate_assertion/2` verifies the Response signature, when the IdP signs it, before decrypting an `EncryptedAssertion`
 - The AES-CBC padding is removed by the length its last byte gives (XML Encryption §5.4.1), and an invalid length is rejected
+- Validate the `Response/Issuer` and `Assertion/Issuer` against the IdP `entityID` (`:bad_issuer`) (#55)
+- Validate `SubjectConfirmationData/@InResponseTo` against the ID of the AuthnRequest the SP sent (`:bad_in_response_to`) (#55)
+- Validate `AuthnStatement/@SessionNotOnOrAfter` (`:session_expired`) and `SubjectConfirmationData/@NotBefore` (`:too_early`), with the 5 s clock skew of `Conditions/@NotBefore` (#55)
+- Require the bearer `SubjectConfirmation/@Method` (`:bad_subject_confirmation`) (#55)
+- Validate the `Response/@Destination` against the ACS URL, and require it on a signed `Response` (`:bad_destination`) (#55)
+- Reject an assertion whose ID was already consumed while it is still valid (`:duplicate`), whatever the policy for an assertion carrying `OneTimeUse` (#55)
+- Require an `Audience` and evaluate every `Audience` value of every `AudienceRestriction` (`:bad_audience`) (#55)
 
 ## [1.2.0] - 2026-10-28
 
