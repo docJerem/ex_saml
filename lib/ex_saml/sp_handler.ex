@@ -9,6 +9,20 @@ defmodule ExSaml.SPHandler do
     * `consume_signin_response/2` - Processes the IdP sign-in response and returns the assertion
     * `handle_logout_response/1` - Processes the IdP logout response
     * `handle_logout_request/1` - Processes an IdP-initiated logout request
+
+  ## Callback contract
+
+  After consuming the IdP response, the router-facing `consume_signin_response/1`
+  always redirects the browser to the target URL with exactly one of:
+
+    * `?code=<authorization_code>` on success — exchange it once with
+      `ExSaml.Assertion.get_from_code/1`
+    * `?error_id=<trace_id>` on failure — look it up once with `ExSaml.Error.get_from_id/1`
+
+  Both are random, single-use and expire. The failure path also keeps the legacy
+  `ex_saml_error` session entry (now holding `{:error, %ExSaml.Error{}}`) for
+  existing consumers, but the session is not a reliable channel across the
+  cross-site IdP POST: prefer `error_id`.
   """
 
   require Logger
@@ -17,6 +31,8 @@ defmodule ExSaml.SPHandler do
   alias ExSaml.{
     Assertion,
     AuthorizationCodeCache,
+    Debug,
+    Error,
     Helper,
     IdpData,
     RelayStateCache,
@@ -25,7 +41,9 @@ defmodule ExSaml.SPHandler do
   }
 
   import ExSaml.Helper, only: [get_idp: 1]
-  import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
+
+  import ExSaml.RouterUtil,
+    only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3, append_query: 3]
 
   @doc "Returns the SP metadata XML for the IdP in `conn.private[:ex_saml_idp]`."
   # metadata is generated from SP config by Helper.sp_metadata/1, not from user input.
@@ -39,26 +57,13 @@ defmodule ExSaml.SPHandler do
     conn
     |> put_resp_header("content-type", "text/xml")
     |> send_resp(200, metadata)
-
-    # NOTE: We should avoid this, as you can not decorate the
-    # behaviour.
-    # rescue
-    #   error ->
-    #     Logger.error("#{inspect error}")
-    #     conn |> send_resp(500, "request_failed")
-
-    # PROPOSAL:
-    # rescue
-    #   error ->
-    #     Logger.error("#{inspect error}")
-    #     {:error, saml: :request_metadata_failed}
   end
 
   @doc """
   Processes the IdP sign-in response and extracts the SAML assertion.
 
   On success returns
-  `{:ok, %{flow: flow, assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri}}`
+  `{:ok, %{flow: flow, assertion: assertion, nonce: nonce, user_token: token, redirect_uri: uri, trace_id: trace_id}}`
   where:
 
     * `flow` is `:idp_initiated` or `:sp_initiated` and reflects which SAML flow
@@ -68,37 +73,166 @@ defmodule ExSaml.SPHandler do
       `nil` for IdP-initiated flows (no AuthnRequest exists in that case, so no
       nonce is generated; downstream consumers must accept `nil` for the
       IdP-initiated case).
+    * `trace_id` identifies the flow (see `ExSaml.Debug`).
 
-  On failure returns `{:error, reason}`. Possible reasons include
-  `:idp_initiated_not_allowed`, `:invalid_target_url`, `:invalid_relay_state`,
-  `:invalid_idp_id`, and `:access_denied`.
+  On failure returns `{:error, %ExSaml.Error{}}` whose `reason` is always an
+  atom (`:invalid_relay_state`, `:bad_digest` with `scope: :assertion`,
+  `:saml_error` with the IdP status fields, …). See `ExSaml.Error` and the
+  error handling guide for the catalogue.
   """
   # Router-facing clause: matches when the SP router dispatched here with
   # `idp_id` in path params. Performs the full SAML flow AND handles the
   # connection: persists the assertion, generates an authorization code,
   # and redirects to the target URL. Always returns a `%Plug.Conn{}`.
+  #
+  # Fails closed: any exception raised while consuming the response is turned
+  # into an `error_id` redirect (never a bare 500), so the consumer always gets
+  # something to diagnose.
   def consume_signin_response(%{params: %{"idp_id" => idp_id}} = conn)
       when is_bitstring(idp_id) do
-    idp_data = get_idp(idp_id)
     rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
     relay_state = safe_decode_www_form(rls)
 
-    with :ok <- maybe_redirect_to_start_url(conn, rls),
-         {:ok, %{assertion: assertion, nonce: nonce}} <-
-           consume_signin_response(conn, idp_data) do
+    # The trace id is established before anything can fail, and the process
+    # context is cleared on the way out: a request must never inherit the
+    # trace of the previous one served by the same process.
+    trace_id = trace_id(conn, relay_state)
+    Debug.put_context(idp_id, trace_id)
+
+    try do
+      do_consume_signin_response(conn, idp_id, rls, relay_state, trace_id)
+    rescue
+      e ->
+        unexpected_error(conn, idp_id, relay_state, trace_id, :error, e, __STACKTRACE__)
+    catch
+      kind, value ->
+        unexpected_error(conn, idp_id, relay_state, trace_id, kind, value, __STACKTRACE__)
+    after
+      Debug.clear_context()
+    end
+  end
+
+  # Library-facing clause: pure decode+validate. Returns the assertion data
+  # as a tuple — caller is responsible for any conn handling. Useful when
+  # an app wants to drive the post-consume flow itself.
+  def consume_signin_response(conn, %IdpData{id: idp_id} = idp_data) do
+    rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
+    trace_id = trace_id(conn, safe_decode_www_form(rls))
+    Debug.put_context(idp_id, trace_id)
+
+    try do
+      consume_response(conn, idp_data, trace_id)
+    after
+      Debug.clear_context()
+    end
+  end
+
+  # Shared by both public clauses; `trace_id` is the flow's identifier,
+  # established by the caller (the router clause computes it before anything
+  # can fail so that every error, however early, is filed under it).
+  defp consume_response(conn, %IdpData{id: idp_id, sp_config: sp_cfg} = idp_data, trace_id) do
+    sp = ensure_sp_uris_set(sp_cfg, conn)
+
+    saml_encoding = conn.body_params["SAMLEncoding"]
+    saml_response = conn.body_params["SAMLResponse"]
+
+    rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
+    relay_state = safe_decode_www_form(rls)
+    relay_entry = RelayStateCache.get(relay_state)
+    user_token = relay_entry[:user_token]
+    redirect_uri = relay_entry[:redirect_uri]
+
+    Debug.stash_capture(idp_id, trace_id, %{
+      saml_response: saml_response,
+      saml_encoding: saml_encoding,
+      relay_state: relay_state,
+      consume_uri: sp.consume_uri,
+      entity_id: sp.entity_id || sp.metadata_uri,
+      received_at: DateTime.utc_now()
+    })
+
+    Debug.log(:response_received, idp_id, fn ->
+      %{
+        idp_id: idp_id,
+        trace_id: trace_id,
+        relay_state_raw: rls,
+        relay_state: relay_state,
+        relay_cache_hit: not is_nil(relay_entry),
+        relay_cache_entry: relay_entry,
+        method: conn.method,
+        host: conn.host,
+        request_path: conn.request_path,
+        origin: get_req_header(conn, "origin"),
+        referer: get_req_header(conn, "referer"),
+        user_agent: get_req_header(conn, "user-agent"),
+        cookie_names: conn |> fetch_cookies() |> Map.get(:req_cookies) |> Map.keys(),
+        body_param_keys: Map.keys(conn.body_params),
+        saml_encoding: saml_encoding,
+        # The raw payload lives only in the capture (`Debug.saml_response/2`).
+        saml_response_bytes: saml_response && byte_size(saml_response),
+        session: session_snapshot(conn),
+        consume_uri: sp.consume_uri,
+        entity_id: sp.entity_id
+      }
+    end)
+
+    decoded = Helper.decode_idp_auth_resp(sp, saml_encoding, saml_response)
+
+    Debug.log(:decode_result, idp_id, fn ->
+      case decoded do
+        {:ok, assertion} -> %{result: :ok, assertion: assertion}
+        {:error, reason} -> %{result: :error, reason: reason}
+      end
+    end)
+
+    context = %{idp_id: idp_id, relay_state: relay_state, trace_id: trace_id}
+
+    with {:ok, assertion} <- step(decoded, :decode, context),
+         {:ok, flow, nonce} <-
+           step(
+             validate_authresp(conn, idp_data, assertion, relay_state),
+             :validate_authresp,
+             context
+           ) do
+      {:ok,
+       %{
+         flow: flow,
+         assertion: %Assertion{assertion | idp_id: idp_id},
+         nonce: nonce,
+         user_token: user_token,
+         redirect_uri: redirect_uri,
+         trace_id: trace_id
+       }}
+    end
+  end
+
+  defp do_consume_signin_response(conn, idp_id, rls, relay_state, trace_id) do
+    with {:ok, idp_data} <- fetch_idp(idp_id, relay_state, trace_id),
+         :ok <- maybe_redirect_to_start_url(conn, rls),
+         {:ok, %{assertion: assertion, nonce: nonce, flow: flow}} <-
+           consume_response(conn, idp_data, trace_id) do
       nameid = assertion.subject.name
       assertion_key = {idp_data.id, maybe_idp_user_id(assertion) || nameid}
       conn = State.put_assertion(conn, assertion_key, assertion)
-      target_url = auth_target_url(conn, assertion, relay_state)
+      {target_url, target_source} = auth_target_url(conn, assertion, relay_state)
 
       RelayStateCache.delete(relay_state)
 
-      redirect_with_authorization_code(conn, target_url, assertion_key, nonce)
+      redirect_with_authorization_code(conn, %{
+        idp_id: idp_data.id,
+        flow: flow,
+        target_url: target_url,
+        target_source: target_source,
+        assertion_key: assertion_key,
+        nonce: nonce,
+        relay_state: relay_state,
+        trace_id: trace_id
+      })
     else
       {:halted, conn} ->
         conn
 
-      {:error, error} ->
+      {:error, %Error{} = error} ->
         redirect_with_error(conn, relay_state, error)
 
       # Defensive fallback: unreachable today (Dialyzer flags it as such), but
@@ -110,34 +244,28 @@ defmodule ExSaml.SPHandler do
     end
   end
 
-  # Library-facing clause: pure decode+validate. Returns the assertion data
-  # as a tuple — caller is responsible for any conn handling. Useful when
-  # an app wants to drive the post-consume flow itself.
-  def consume_signin_response(conn, %IdpData{id: idp_id, sp_config: sp_cfg} = idp_data) do
-    sp = ensure_sp_uris_set(sp_cfg, conn)
+  defp fetch_idp(idp_id, relay_state, trace_id) do
+    case get_idp(idp_id) do
+      %IdpData{} = idp ->
+        {:ok, idp}
 
-    saml_encoding = conn.body_params["SAMLEncoding"]
-    saml_response = conn.body_params["SAMLResponse"]
-
-    rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
-    relay_state = safe_decode_www_form(rls)
-    user_token = RelayStateCache.get(relay_state)[:user_token]
-    redirect_uri = RelayStateCache.get(relay_state)[:redirect_uri]
-
-    with {:ok, assertion} <- Helper.decode_idp_auth_resp(sp, saml_encoding, saml_response),
-         {:ok, flow, nonce} <- validate_authresp(conn, idp_data, assertion, relay_state) do
-      {:ok,
-       %{
-         flow: flow,
-         assertion: %Assertion{assertion | idp_id: idp_id},
-         nonce: nonce,
-         user_token: user_token,
-         redirect_uri: redirect_uri
-       }}
-    else
-      {:error, error} -> {:error, error}
+      _ ->
+        {:error,
+         Error.from_reason({:unknown_idp, idp_id}, %{
+           step: :idp_lookup,
+           relay_state: relay_state,
+           trace_id: trace_id
+         })}
     end
   end
+
+  # Normalises a step's failure into `%ExSaml.Error{}` tagged with the step.
+  defp step({:error, reason}, step, context) do
+    step = if reason == :invalid_target_url, do: :target_url, else: step
+    {:error, Error.from_reason(reason, Map.merge(context, %{step: step, flow: flow_for(reason)}))}
+  end
+
+  defp step(other, _step, _context), do: other
 
   defp maybe_idp_user_id(%{attributes: %{"idp_user_id" => idp_user_id}}), do: idp_user_id
   defp maybe_idp_user_id(_), do: nil
@@ -152,73 +280,241 @@ defmodule ExSaml.SPHandler do
     end
   end
 
-  defp redirect_with_authorization_code(conn, target_url, assertion_key, nonce) do
+  defp redirect_with_authorization_code(conn, ctx) do
     code = State.gen_id()
 
+    if Debug.enabled?(ctx.idp_id), do: Debug.link_code(code, ctx.trace_id, ctx.idp_id)
+
     AuthorizationCodeCache.put_new!(code, %{
-      ex_saml_assertion_key: assertion_key,
-      saml_nonce_candidate: nonce
+      ex_saml_assertion_key: ctx.assertion_key,
+      saml_nonce_candidate: ctx.nonce,
+      trace_id: ctx.trace_id
     })
 
-    redirect(conn, 302, "#{target_url}?code=#{code}")
+    Debug.log(:code_issued, ctx.idp_id, fn ->
+      %{
+        idp_id: ctx.idp_id,
+        trace_id: ctx.trace_id,
+        code: code,
+        assertion_key: ctx.assertion_key,
+        nonce: ctx.nonce,
+        flow: ctx.flow,
+        target_url: ctx.target_url,
+        target_source: ctx.target_source,
+        relay_state: ctx.relay_state,
+        code_ttl: AuthorizationCodeCache.ttl()
+      }
+    end)
+
+    redirect(conn, 302, append_query(ctx.target_url, "code", code))
   end
 
-  defp redirect_with_error(conn, _, :invalid_target_url) do
+  # Failure path, symmetric with the success path: the error is stored under
+  # its `trace_id` (single use) and the browser is redirected with
+  # `?error_id=<trace_id>`. The legacy session entry is kept for compatibility.
+  defp redirect_with_error(conn, relay_state, %Error{} = error) do
+    {target_url, target_source} =
+      case error.reason do
+        :invalid_target_url -> {target_url(), :fallback}
+        _ -> target_url_with_source(conn, relay_state)
+      end
+
+    # The error carries its own trace_id and idp_id (set by `step/3`,
+    # `fetch_idp/3` or `unexpected_error/7`); the process context is never
+    # read here, so nothing can leak from a previous request.
+    idp_id = error.idp_id
+
+    error =
+      %{error | relay_state: error.relay_state || relay_state}
+      |> Error.new()
+      |> Error.issue()
+
+    Debug.promote(error.trace_id, error, :error)
+
+    Debug.log(:error_issued, idp_id, fn ->
+      %{
+        idp_id: idp_id,
+        trace_id: error.trace_id,
+        reason: error.reason,
+        scope: error.scope,
+        step: error.step,
+        detail: error.detail,
+        target_url: target_url,
+        target_source: target_source,
+        session: session_snapshot(conn),
+        error_ttl: ExSaml.ErrorCache.ttl()
+      }
+    end)
+
     conn
-    |> put_session("ex_saml_error", {:error, :invalid_target_url})
-    |> redirect(302, target_url())
+    |> put_session("ex_saml_error", {:error, Error.for_session(error)})
+    |> redirect(302, Error.append_error_id(target_url, error.trace_id))
   end
 
-  defp redirect_with_error(conn, relay_state, error) do
+  defp unexpected_error(conn, idp_id, relay_state, trace_id, kind, value, stacktrace) do
+    formatted = Exception.format(kind, value, stacktrace)
+    Logger.error("[ExSaml] consume_signin_response crashed: #{formatted}")
+
+    Debug.log(:unexpected_error, idp_id, %{
+      idp_id: idp_id,
+      trace_id: trace_id,
+      relay_state: relay_state,
+      stacktrace: formatted
+    })
+
+    message =
+      case kind do
+        :error -> Exception.message(Exception.normalize(:error, value, stacktrace))
+        _ -> inspect(value)
+      end
+
+    error =
+      Error.from_reason({:exception, message}, %{
+        step: :unexpected,
+        idp_id: idp_id,
+        relay_state: relay_state,
+        trace_id: trace_id
+      })
+
+    # Last resort: if issuing the error itself fails (cache down, session
+    # store failure), still fail closed with a 403 rather than a bare 500.
+    try do
+      redirect_with_error(conn, relay_state, error)
+    rescue
+      e -> access_denied(conn, Exception.format(:error, e, __STACKTRACE__))
+    catch
+      kind, value -> access_denied(conn, Exception.format(kind, value, __STACKTRACE__))
+    end
+  end
+
+  defp access_denied(%Plug.Conn{state: :sent} = conn, formatted) do
+    Logger.error("[ExSaml] could not issue error_id: #{formatted}")
     conn
-    |> put_session("ex_saml_error", {:error, error})
-    |> redirect(302, target_url(conn, relay_state))
   end
 
-  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, ""), do: "/"
-  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, url), do: url
+  defp access_denied(conn, formatted) do
+    Logger.error("[ExSaml] could not issue error_id: #{formatted}")
+    conn |> send_resp(403, "access_denied") |> halt()
+  end
+
+  defp flow_for(:idp_initiated_not_allowed), do: :idp_initiated
+  defp flow_for(:invalid_target_url), do: :idp_initiated
+  defp flow_for(:invalid_relay_state), do: :sp_initiated
+  defp flow_for(:invalid_idp_id), do: :sp_initiated
+  defp flow_for(_), do: nil
+
+  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, ""), do: {"/", :default}
+  defp auth_target_url(_conn, %{subject: %{in_response_to: ""}}, url), do: {url, :relay_state}
 
   defp auth_target_url(conn, _assertion, relay_state) do
-    get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] || "/"
+    cond do
+      url = get_session(conn, "target_url") -> {url, :session}
+      url = RelayStateCache.get(relay_state)[:target_url] -> {url, :cache}
+      true -> {"/", :default}
+    end
+  end
+
+  # SP-initiated flows reuse the relay state as trace id (it was generated by
+  # `ExSaml.AuthHandler` and already carries the AuthnRequest event). IdP-initiated
+  # flows have no relay state of ours, so a fresh id is generated per request.
+  defp trace_id(conn, relay_state) do
+    ours? =
+      relay_state != "" and
+        (get_session(conn, "relay_state") == relay_state or
+           not is_nil(RelayStateCache.get(relay_state)))
+
+    if ours?, do: relay_state, else: State.gen_id()
+  end
+
+  defp session_snapshot(conn) do
+    %{
+      relay_state: get_session(conn, "relay_state"),
+      idp_id: get_session(conn, "idp_id"),
+      target_url: get_session(conn, "target_url"),
+      saml_nonce_present: not is_nil(get_session(conn, "saml_nonce")),
+      assertion_key_present: not is_nil(get_session(conn, "ex_saml_assertion_key"))
+    }
+  rescue
+    # `get_session/2` raises when the session was never fetched on this conn.
+    ArgumentError -> %{unavailable: true}
   end
 
   # IdP-initiated flow auth response. Tagged as `:idp_initiated` with a `nil`
   # nonce since there is no AuthnRequest to bind a nonce to in this flow.
   @doc false
   def validate_authresp(_conn, idp_data, %{subject: %{in_response_to: ""}}, relay_state) do
-    cond do
-      !idp_data.allow_idp_initiated_flow ->
-        {:error, :idp_initiated_not_allowed}
+    result =
+      cond do
+        !idp_data.allow_idp_initiated_flow ->
+          {:error, :idp_initiated_not_allowed}
 
-      idp_data.allowed_target_urls && relay_state not in idp_data.allowed_target_urls ->
-        {:error, :invalid_target_url}
+        idp_data.allowed_target_urls && relay_state not in idp_data.allowed_target_urls ->
+          {:error, :invalid_target_url}
 
-      true ->
-        {:ok, :idp_initiated, nil}
-    end
+        true ->
+          {:ok, :idp_initiated, nil}
+      end
+
+    Debug.log(:validate_authresp_result, idp_data.id, fn ->
+      %{
+        idp_id: idp_data.id,
+        flow: :idp_initiated,
+        result: result,
+        relay_state: relay_state,
+        allow_idp_initiated_flow: idp_data.allow_idp_initiated_flow,
+        allowed_target_urls: idp_data.allowed_target_urls
+      }
+    end)
+
+    result
   end
 
   # SP-initiated flow auth response.
   def validate_authresp(conn, %IdpData{id: idp_id}, _assertion, relay_state) do
-    rs_in_session =
-      get_session(conn, "relay_state") || RelayStateCache.get(relay_state)[:relay_state]
+    cached = RelayStateCache.get(relay_state)
 
-    idp_id_in_session = get_session(conn, "idp_id") || RelayStateCache.get(relay_state)[:idp_id]
+    {rs_in_session, rs_source} =
+      with_source(get_session(conn, "relay_state"), cached[:relay_state])
 
-    saml_nonce_in_session =
-      get_session(conn, "saml_nonce") || RelayStateCache.get(relay_state)[:saml_nonce]
+    {idp_id_in_session, idp_source} = with_source(get_session(conn, "idp_id"), cached[:idp_id])
 
-    cond do
-      rs_in_session == nil || rs_in_session != relay_state ->
-        {:error, :invalid_relay_state}
+    {saml_nonce_in_session, nonce_source} =
+      with_source(get_session(conn, "saml_nonce"), cached[:saml_nonce])
 
-      idp_id_in_session == nil || idp_id_in_session != idp_id ->
-        {:error, :invalid_idp_id}
+    result =
+      cond do
+        rs_in_session == nil || rs_in_session != relay_state ->
+          {:error, :invalid_relay_state}
 
-      true ->
-        {:ok, :sp_initiated, saml_nonce_in_session}
-    end
+        idp_id_in_session == nil || idp_id_in_session != idp_id ->
+          {:error, :invalid_idp_id}
+
+        true ->
+          {:ok, :sp_initiated, saml_nonce_in_session}
+      end
+
+    Debug.log(:validate_authresp_result, idp_id, fn ->
+      %{
+        idp_id: idp_id,
+        flow: :sp_initiated,
+        result: result,
+        relay_state: relay_state,
+        relay_cache_hit: not is_nil(cached),
+        relay_state_expected: rs_in_session,
+        relay_state_source: rs_source,
+        idp_id_expected: idp_id_in_session,
+        idp_id_source: idp_source,
+        saml_nonce: saml_nonce_in_session,
+        saml_nonce_source: nonce_source
+      }
+    end)
+
+    result
   end
+
+  defp with_source(nil, nil), do: {nil, :none}
+  defp with_source(nil, cached), do: {cached, :cache}
+  defp with_source(value, _), do: {value, :session}
 
   @doc "Processes the IdP logout response and redirects to the target URL."
   # Error details are logged server-side only; the response body is a static string, not user input.
@@ -244,13 +540,20 @@ defmodule ExSaml.SPHandler do
     else
       error ->
         Logger.error("[ExSaml] Logout response validation failed: #{inspect(error)}")
+
+        Debug.log(:logout_response_failed, idp_id, fn ->
+          %{
+            idp_id: idp_id,
+            error: error,
+            relay_state: relay_state,
+            saml_encoding: saml_encoding,
+            saml_response_bytes: saml_response && byte_size(saml_response),
+            session: session_snapshot(conn)
+          }
+        end)
+
         conn |> send_resp(403, "invalid_request")
     end
-
-    # rescue
-    #   error ->
-    #     Logger.error("#{inspect error}")
-    #     conn |> send_resp(500, "request_failed")
   end
 
   @doc "Handles an IdP-initiated logout request."
@@ -292,6 +595,17 @@ defmodule ExSaml.SPHandler do
 
       error ->
         Logger.error("#{inspect(error)}")
+
+        Debug.log(:logout_request_failed, idp_id, fn ->
+          %{
+            idp_id: idp_id,
+            error: error,
+            relay_state: relay_state,
+            saml_encoding: saml_encoding,
+            saml_request_bytes: saml_request && byte_size(saml_request)
+          }
+        end)
+
         {idp_signout_url, resp_xml_frag} = Helper.gen_idp_signout_resp(sp, idp_meta, :denied)
 
         conn
@@ -302,11 +616,6 @@ defmodule ExSaml.SPHandler do
           relay_state
         )
     end
-
-    # rescue
-    #   error ->
-    #     Logger.error("#{inspect error}")
-    #     conn |> send_resp(500, "request_failed")
   end
 
   @doc """
@@ -316,12 +625,20 @@ defmodule ExSaml.SPHandler do
   result to `Plug.Conn.put_resp_header/3`.
   """
   def target_url(conn, relay_state) do
-    get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] ||
-      target_url()
+    {url, _source} = target_url_with_source(conn, relay_state)
+    url
   end
 
   @doc "Returns the fallback target URL from application config (defaults to `\"/\"`)."
   def target_url, do: Application.get_env(:ex_saml, :fallback_target_url, "/")
+
+  defp target_url_with_source(conn, relay_state) do
+    cond do
+      url = get_session(conn, "target_url") -> {url, :session}
+      url = RelayStateCache.get(relay_state)[:target_url] -> {url, :cache}
+      true -> {target_url(), :fallback}
+    end
+  end
 
   defp safe_decode_www_form(nil), do: ""
   defp safe_decode_www_form(data), do: URI.decode_www_form(data)

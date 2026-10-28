@@ -123,6 +123,34 @@ defmodule ExSaml.RouterUtil do
     end
   end
 
+  @doc """
+  Appends a query parameter to a URL, preserving an existing query string and
+  fragment. Used for every redirect the library builds to the consumer's
+  target URL (`?code=` on success, `?error_id=` on failure), so a `target_url`
+  that already carries a query (`/cb?x=1`) yields `/cb?x=1&code=…`, never
+  `/cb?x=1?code=…`.
+
+      iex> ExSaml.RouterUtil.append_query("/cb", "code", "abc")
+      "/cb?code=abc"
+
+      iex> ExSaml.RouterUtil.append_query("https://app.example.com/cb?x=1#top", "code", "a b")
+      "https://app.example.com/cb?x=1&code=a+b#top"
+  """
+  @spec append_query(binary(), binary(), binary()) :: binary()
+  def append_query(url, key, value) when is_binary(url) and is_binary(key) and is_binary(value) do
+    uri = URI.parse(url)
+    param = URI.encode_query(%{key => value})
+
+    query =
+      case uri.query do
+        nil -> param
+        "" -> param
+        existing -> existing <> "&" <> param
+      end
+
+    URI.to_string(%{uri | query: query})
+  end
+
   def redirect(conn, status_code, dest) do
     conn
     |> Conn.put_resp_header("location", dest)

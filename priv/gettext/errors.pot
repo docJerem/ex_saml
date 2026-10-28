@@ -1,8 +1,10 @@
+## Legacy codes
+
 msgid "bad_audience"
 msgstr "Make sure that the entity_id in configuration is correct"
 
 msgid "cert_no_accepted"
-msgstr "Make sure the Identity Provider metadata XML file you are using in the config setting is correct and corresponds to the IdP you are attempting to talk to. You get this error if the certificate used by the IdP to sign the SAML responses has changed and you don't have the updated IdP metadata XML file"
+msgstr "Make sure the Identity Provider metadata XML file you are using in the config setting is correct and corresponds to the IdP you are attempting to talk to, you get this error if the certificate used by the IdP to sign the SAML responses has changed and you don't have the updated IdP metadata XML file"
 
 msgid "status_responder"
 msgstr "Make sure the Identity Provider metadata XML file you are using in the config setting is correct and corresponds to the IdP you are attempting to talk to. You get this error if the certificate used by the IdP to sign the SAML responses is invalid or if the IdP is unable to verify its signature"
@@ -17,10 +19,165 @@ msgid "missing_certificate"
 msgstr "No X.509 certificate was found in the SAML signature. Please configure your Identity Provider to include its signing certificate in signed responses and assertions."
 
 msgid "missing_envelope_signature"
-msgstr "Missing envelope signature. Please make sure you uploaded correctly the Cryptr Certificate to your IdP."
+msgstr "Missing envelope signature. Please make sure you uploaded correctly the Cryptr Certificate to your IdP"
 
 msgid "invalid_nameid_policy"
 msgstr "Name ID Policy is invalid. Please make sure you used the correct Key and Format for the NameID"
 
+msgid "invalid_nonce"
+msgstr "You are probably replaying the request twice if the challenge nonce for the anti-replay attack is invalid or missing"
+
+msgid "missing_assertion_key"
+msgstr "Unauthorized authentication, invalid auth response or Relay State"
+
 msgid "bad_digest"
 msgstr "Please make sure that you selected the correct Signature Algorithm (SHA-256)"
+
+## Signature verification
+
+msgid "no_signature"
+msgstr "The SAML response is not signed. Please make sure your IdP signs the response or the assertion."
+
+msgid "bad_signature"
+msgstr "The SAML signature could not be verified. The response may have been altered or signed with an unexpected key."
+
+msgid "cert_not_accepted"
+msgstr "The certificate used to sign the SAML response does not match the IdP metadata. Update the IdP metadata if the certificate was rotated."
+
+msgid "multiple_signatures"
+msgstr "The SAML response contains several signatures on the same element, which is not allowed."
+
+msgid "insecure_algorithm"
+msgstr "The SAML response is signed with an insecure algorithm (SHA-1). Please configure your IdP to use SHA-256."
+
+msgid "unsupported_algorithm"
+msgstr "The SAML response is signed with an algorithm this service does not support."
+
+## Response decoding and assertion validation
+
+msgid "invalid_response"
+msgstr "The SAML response could not be decoded. Make sure your IdP uses the HTTP-POST binding with a base64-encoded SAMLResponse."
+
+msgid "missing_saml_response"
+msgstr "No SAMLResponse was received. The IdP must POST the SAML response to the assertion consumer service."
+
+msgid "bad_saml"
+msgstr "The SAML response is malformed: it has no Status element."
+
+msgid "bad_assertion"
+msgstr "The SAML response does not contain a single readable Assertion. If the assertion is encrypted, make sure it is encrypted for this service provider."
+
+msgid "bad_version"
+msgstr "The SAML response uses an unsupported SAML version. Only SAML 2.0 is supported."
+
+msgid "bad_recipient"
+msgstr "The assertion Recipient does not match this service's assertion consumer URL. Check the ACS URL configured on your IdP."
+
+msgid "too_early"
+msgstr "The assertion is not valid yet (NotBefore is in the future). Check the clock of your IdP."
+
+msgid "stale_assertion"
+msgstr "The assertion has expired (NotOnOrAfter is in the past). Check the clock of your IdP or retry the sign-in."
+
+msgid "duplicate"
+msgstr "This assertion has already been used. Please start the sign-in again."
+
+## Flow validation
+
+msgid "idp_initiated_not_allowed"
+msgstr "IdP-initiated sign-in is not enabled for this identity provider."
+
+msgid "invalid_target_url"
+msgstr "The requested target URL is not allowed for this identity provider."
+
+msgid "invalid_relay_state"
+msgstr "The sign-in session could not be matched with the IdP response (invalid or expired RelayState). Please start the sign-in again."
+
+msgid "invalid_idp_id"
+msgstr "The IdP response does not match the identity provider that started the sign-in."
+
+msgid "unknown_idp"
+msgstr "Unknown identity provider."
+
+msgid "exception"
+msgstr "An unexpected error occurred while processing the IdP response."
+
+msgid "access_denied"
+msgstr "Access denied."
+
+msgid "authorization_code_not_found"
+msgstr "The authorization code is unknown, expired or was already used. Please start the sign-in again."
+
+msgid "assertion_not_found"
+msgstr "The authorization code was valid but the authentication data has expired. Please start the sign-in again."
+
+msgid "error_not_found"
+msgstr "The error reference is unknown, expired or was already consulted."
+
+msgid "capture_not_found"
+msgstr "No capture exists for this trace: debug mode was off when the flow ran, or the capture has expired."
+
+msgid "payload_not_captured"
+msgstr "The capture of this flow holds no SAMLResponse (capture: :none was active)."
+
+msgid "unknown_error"
+msgstr "An unknown SAML error occurred."
+
+## IdP second-level StatusCode (SAML 2.0 Core §3.2.2.2)
+
+msgid "saml_status_authn_failed"
+msgstr "The identity provider could not authenticate the user (AuthnFailed)."
+
+msgid "saml_status_invalid_attr_name_or_value"
+msgstr "The identity provider rejected an attribute name or value in the request (InvalidAttrNameOrValue)."
+
+msgid "saml_status_invalid_nameid_policy"
+msgstr "The identity provider cannot provide a NameID in the requested format (InvalidNameIDPolicy). Check the NameID format configured on both sides."
+
+msgid "saml_status_no_authn_context"
+msgstr "The identity provider cannot satisfy the requested authentication context (NoAuthnContext)."
+
+msgid "saml_status_no_available_idp"
+msgstr "No identity provider is available to handle the request (NoAvailableIDP)."
+
+msgid "saml_status_no_passive"
+msgstr "The identity provider cannot authenticate the user passively (NoPassive)."
+
+msgid "saml_status_no_supported_idp"
+msgstr "None of the identity providers in the request are supported (NoSupportedIDP)."
+
+msgid "saml_status_partial_logout"
+msgstr "The identity provider could only log the user out of some sessions (PartialLogout)."
+
+msgid "saml_status_proxy_count_exceeded"
+msgstr "The identity provider could not authenticate the user because the proxy count was exceeded (ProxyCountExceeded)."
+
+msgid "saml_status_request_denied"
+msgstr "The identity provider denied the request (RequestDenied). The user may not be authorised for this application."
+
+msgid "saml_status_request_unsupported"
+msgstr "The identity provider does not support the request (RequestUnsupported)."
+
+msgid "saml_status_request_version_deprecated"
+msgstr "The identity provider no longer supports the SAML version of the request (RequestVersionDeprecated)."
+
+msgid "saml_status_request_version_too_high"
+msgstr "The identity provider does not support the SAML version of the request, which is too high (RequestVersionTooHigh)."
+
+msgid "saml_status_request_version_too_low"
+msgstr "The identity provider does not support the SAML version of the request, which is too low (RequestVersionTooLow)."
+
+msgid "saml_status_resource_not_recognized"
+msgstr "The identity provider does not recognise the requested resource (ResourceNotRecognized)."
+
+msgid "saml_status_too_many_responses"
+msgstr "The identity provider would have to return too many responses (TooManyResponses)."
+
+msgid "saml_status_unknown_attr_profile"
+msgstr "The identity provider does not recognise the attribute profile in the request (UnknownAttrProfile)."
+
+msgid "saml_status_unknown_principal"
+msgstr "The identity provider does not recognise the user (UnknownPrincipal)."
+
+msgid "saml_status_unsupported_binding"
+msgstr "The identity provider does not support the requested SAML binding (UnsupportedBinding)."
