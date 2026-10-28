@@ -1,6 +1,7 @@
 defmodule ExSaml.Core.Xml.DsigTest do
   use ExUnit.Case, async: true
 
+  alias ExSaml.Core.Xml.C14n
   alias ExSaml.Core.Xml.Dsig
 
   require Record
@@ -25,6 +26,35 @@ defmodule ExSaml.Core.Xml.DsigTest do
       :xmerl_scan.string(String.to_charlist(xml_string), namespace_conformant: true)
 
     doc
+  end
+
+  defp to_xml_string(doc) do
+    [doc] |> :xmerl.export(:xmerl_xml) |> List.flatten() |> to_string()
+  end
+
+  defp algorithm(doc, path) do
+    ds_ns = [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}]
+    [attr] = :xmerl_xpath.string(path, doc, namespace: ds_ns)
+    to_string(xmlAttribute(attr, :value))
+  end
+
+  # Applies `fun` to the serialized document, then recomputes SignatureValue
+  # so that edits inside SignedInfo still carry a valid signature.
+  defp edit_and_resign(signed_xml, key, hash_function, fun) do
+    edited = signed_xml |> to_xml_string() |> fun.() |> parse_xml()
+
+    ds_ns = [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}]
+    [sig_info] = :xmerl_xpath.string(~c"ds:Signature/ds:SignedInfo", edited, namespace: ds_ns)
+    data = :unicode.characters_to_binary(C14n.c14n(sig_info), :unicode, :utf8)
+    sig64 = data |> :public_key.sign(hash_function, key) |> Base.encode64()
+
+    edited
+    |> to_xml_string()
+    |> String.replace(
+      ~r|<ds:SignatureValue>.*</ds:SignatureValue>|s,
+      "<ds:SignatureValue>#{sig64}</ds:SignatureValue>"
+    )
+    |> parse_xml()
   end
 
   defp test_sign_key do
@@ -219,6 +249,131 @@ defmodule ExSaml.Core.Xml.DsigTest do
       signed_xml = Dsig.sign(doc, key, cert_bin, :rsa_sha256)
 
       assert :ok = Dsig.verify(signed_xml, [:crypto.hash(:sha, cert_bin)])
+    end
+
+    for {sig_method, sig_uri, digest_uri} <- [
+          {:rsa_sha384, "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384",
+           "http://www.w3.org/2001/04/xmldsig-more#sha384"},
+          {:rsa_sha512, "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512",
+           "http://www.w3.org/2001/04/xmlenc#sha512"}
+        ] do
+      test "sign with #{sig_method} and verify" do
+        doc =
+          parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+        {key, cert_bin} = test_sign_256_key()
+        signed_xml = Dsig.sign(doc, key, cert_bin, unquote(sig_method))
+
+        assert algorithm(signed_xml, ~c"ds:Signature/ds:SignedInfo/ds:SignatureMethod/@Algorithm") ==
+                 unquote(sig_uri)
+
+        assert algorithm(
+                 signed_xml,
+                 ~c"ds:Signature/ds:SignedInfo/ds:Reference/ds:DigestMethod/@Algorithm"
+               ) == unquote(digest_uri)
+
+        assert :ok = Dsig.verify(signed_xml, [:crypto.hash(:sha, cert_bin)])
+      end
+
+      test "sign with #{sig_method} URI string and verify" do
+        doc =
+          parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+        {key, cert_bin} = test_sign_256_key()
+        signed_xml = Dsig.sign(doc, key, cert_bin, unquote(sig_uri))
+
+        assert :ok = Dsig.verify(signed_xml, [{:sha256, :crypto.hash(:sha256, cert_bin)}])
+      end
+    end
+
+    test "rsa-sha512 tampered content returns {:error, :bad_digest}" do
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+
+      tampered =
+        doc
+        |> Dsig.sign(key, cert_bin, :rsa_sha512)
+        |> to_xml_string()
+        |> String.replace("<x:name>blah</x:name>", "<x:name>b1ah</x:name>")
+        |> parse_xml()
+
+      assert {:error, :bad_digest} = Dsig.verify(tampered)
+    end
+
+    test "rsa-sha512 signature with a SHA256 digest verifies" do
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+
+      mixed =
+        doc
+        |> Dsig.sign(key, cert_bin, :rsa_sha256)
+        |> edit_and_resign(key, :sha512, fn xml ->
+          String.replace(
+            xml,
+            "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+            "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"
+          )
+        end)
+
+      assert :ok = Dsig.verify(mixed, [:crypto.hash(:sha, cert_bin)])
+    end
+
+    test "SHA1 digest under an rsa-sha256 signature is rejected as insecure" do
+      import ExUnit.CaptureLog
+
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+
+      sha1_digest =
+        doc
+        |> Dsig.sign(key, cert_bin, :rsa_sha256)
+        |> edit_and_resign(key, :sha256, fn xml ->
+          String.replace(
+            xml,
+            "http://www.w3.org/2001/04/xmlenc#sha256",
+            "http://www.w3.org/2000/09/xmldsig#sha1"
+          )
+        end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :insecure_algorithm} = Dsig.verify(sha1_digest)
+        end)
+
+      assert log =~ "SHA1 digest rejected"
+    end
+
+    test "unknown digest algorithm returns {:error, :unsupported_algorithm}" do
+      import ExUnit.CaptureLog
+
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+
+      unknown_digest =
+        doc
+        |> Dsig.sign(key, cert_bin, :rsa_sha256)
+        |> edit_and_resign(key, :sha256, fn xml ->
+          String.replace(
+            xml,
+            "http://www.w3.org/2001/04/xmlenc#sha256",
+            "http://www.w3.org/2001/04/xmldsig-more#md5"
+          )
+        end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :unsupported_algorithm} = Dsig.verify(unknown_digest)
+        end)
+
+      assert log =~ "Unsupported digest algorithm"
     end
 
     test "signature without X509Certificate returns {:error, :missing_certificate}" do

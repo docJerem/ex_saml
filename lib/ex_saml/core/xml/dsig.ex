@@ -5,7 +5,8 @@ defmodule ExSaml.Core.Xml.Dsig do
   Implements enveloped XML digital signature generation and verification
   as specified at http://www.w3.org/TR/xmldsig-core/
 
-  Currently supports RSA + SHA1|SHA256 signatures.
+  Currently supports RSA + SHA1|SHA256|SHA384|SHA512 signatures. SHA1 can
+  still be used for signing, but is rejected on verification.
   """
 
   alias ExSaml.Core.Util
@@ -48,8 +49,16 @@ defmodule ExSaml.Core.Xml.Dsig do
   )
 
   @type xml :: record(:xmlElement) | record(:xmlDocument)
-  @type sig_method :: :rsa_sha1 | :rsa_sha256
+  @type sig_method :: :rsa_sha1 | :rsa_sha256 | :rsa_sha384 | :rsa_sha512
+  @type hash_function :: :sha | :sha256 | :sha384 | :sha512
   @type fingerprint :: binary() | {:sha | :sha256, binary()}
+
+  @digest_methods %{
+    "http://www.w3.org/2000/09/xmldsig#sha1" => :sha,
+    "http://www.w3.org/2001/04/xmlenc#sha256" => :sha256,
+    "http://www.w3.org/2001/04/xmldsig-more#sha384" => :sha384,
+    "http://www.w3.org/2001/04/xmlenc#sha512" => :sha512
+  }
 
   @doc """
   Returns an element without any ds:Signature elements inside it.
@@ -250,7 +259,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   @spec digest(record(:xmlElement)) :: binary()
   def digest(element), do: digest(element, :sha256)
 
-  @spec digest(record(:xmlElement), :sha | :sha256) :: binary()
+  @spec digest(record(:xmlElement), hash_function()) :: binary()
   def digest(element, hash_function) do
     ds_ns = [
       {~c"ds", :"http://www.w3.org/2000/09/xmldsig#"},
@@ -350,12 +359,48 @@ defmodule ExSaml.Core.Xml.Dsig do
   end
 
   defp do_verify(element, fingerprints, hash_function, ds_ns) do
-    incl_ns = extract_inclusive_ns(element, ds_ns)
-    computed_digest = compute_digest(element, hash_function, incl_ns)
-    expected_digest = extract_expected_digest(element, ds_ns)
-
-    with :ok <- verify_digest(computed_digest, expected_digest) do
+    # The Reference digest uses its own DigestMethod, which may differ from
+    # the SignatureMethod hash (e.g. rsa-sha512 over a sha256 digest).
+    with {:ok, digest_function} <- extract_digest_function(element, ds_ns),
+         incl_ns = extract_inclusive_ns(element, ds_ns),
+         computed_digest = compute_digest(element, digest_function, incl_ns),
+         expected_digest = extract_expected_digest(element, ds_ns),
+         :ok <- verify_digest(computed_digest, expected_digest) do
       verify_signature(element, hash_function, ds_ns, fingerprints)
+    end
+  end
+
+  defp extract_digest_function(element, ds_ns) do
+    case :xmerl_xpath.string(
+           ~c"ds:Signature/ds:SignedInfo/ds:Reference/ds:DigestMethod/@Algorithm",
+           element,
+           namespace: ds_ns
+         ) do
+      [algo_attr] when Record.is_record(algo_attr, :xmlAttribute) ->
+        algo = algo_attr |> xmlAttribute(:value) |> to_string()
+
+        case Map.fetch(@digest_methods, algo) do
+          {:ok, :sha} ->
+            require Logger
+
+            Logger.error(
+              "[ExSaml.Core] SHA1 digest rejected: algorithm is cryptographically broken. " <>
+                "The IdP must be configured to use SHA256 or stronger."
+            )
+
+            {:error, :insecure_algorithm}
+
+          {:ok, digest_function} ->
+            {:ok, digest_function}
+
+          :error ->
+            require Logger
+            Logger.error("[ExSaml.Core] Unsupported digest algorithm: #{algo}")
+            {:error, :unsupported_algorithm}
+        end
+
+      _ ->
+        {:error, :unsupported_algorithm}
     end
   end
 
@@ -481,6 +526,28 @@ defmodule ExSaml.Core.Xml.Dsig do
   def signature_props(:rsa_sha256) do
     {:sha256, "http://www.w3.org/2001/04/xmlenc#sha256",
      "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"}
+  end
+
+  def signature_props("http://www.w3.org/2001/04/xmldsig-more#rsa-sha384"),
+    do: signature_props(:rsa_sha384)
+
+  def signature_props(~c"http://www.w3.org/2001/04/xmldsig-more#rsa-sha384"),
+    do: signature_props(:rsa_sha384)
+
+  def signature_props(:rsa_sha384) do
+    {:sha384, "http://www.w3.org/2001/04/xmldsig-more#sha384",
+     "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384"}
+  end
+
+  def signature_props("http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"),
+    do: signature_props(:rsa_sha512)
+
+  def signature_props(~c"http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"),
+    do: signature_props(:rsa_sha512)
+
+  def signature_props(:rsa_sha512) do
+    {:sha512, "http://www.w3.org/2001/04/xmlenc#sha512",
+     "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"}
   end
 
   def signature_props(_unknown), do: :unsupported_algorithm

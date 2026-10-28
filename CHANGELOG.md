@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- RSA-SHA384 (`http://www.w3.org/2001/04/xmldsig-more#rsa-sha384`) and RSA-SHA512 (`http://www.w3.org/2001/04/xmldsig-more#rsa-sha512`) signatures are now accepted when verifying IdP Responses and Assertions; previously they were rejected with `{:error, :unsupported_algorithm}`. `ExSaml.Core.Xml.Dsig.sign/4` also accepts `:rsa_sha384` / `:rsa_sha512` (or their URIs), emitting the matching SHA384 / SHA512 `DigestMethod`
+
+### Fixed
+
+- Signature verification now computes the Reference digest with the algorithm named by its `DigestMethod` instead of reusing the `SignatureMethod` hash, so signatures pairing different algorithms (e.g. RSA-SHA512 over a SHA256 digest) verify instead of failing with `{:error, :bad_digest}`. A SHA1 `DigestMethod` is rejected with `{:error, :insecure_algorithm}`, consistent with RSA-SHA1 signatures, and an unknown one with `{:error, :unsupported_algorithm}`
+
 ## [1.1.3] - 2026-09-30
 
 ### Fixed
