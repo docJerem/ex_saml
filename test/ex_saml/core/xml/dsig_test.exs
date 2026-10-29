@@ -696,4 +696,83 @@ defmodule ExSaml.Core.Xml.DsigTest do
       assert uri_value == [?# | root_id]
     end
   end
+
+  # A Signature that is well-formed XML but not a well-formed XML-DSig is
+  # attacker-controlled input on the ACS: it must come back as an error, never
+  # as an exception.
+  describe "a malformed Signature" do
+    defp mutated_signature(mutate) do
+      {key, cert_bin} = ec_key(:secp256r1)
+
+      key
+      |> signed_foo(cert_bin, :ecdsa_sha256)
+      |> to_xml_string()
+      |> mutate.()
+      |> parse_xml()
+    end
+
+    test "without the exclusive-c14n Transform is :bad_signature" do
+      xml =
+        mutated_signature(fn s ->
+          String.replace(
+            s,
+            ~S|<ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>|,
+            ~S|<ds:Transform Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/>|
+          )
+        end)
+
+      assert {:error, :bad_signature} = Dsig.verify(xml)
+    end
+
+    test "with two References is :bad_signature" do
+      xml =
+        mutated_signature(fn s ->
+          [pre, rest] = String.split(s, "<ds:Reference", parts: 2)
+          [ref, post] = String.split(rest, "</ds:Reference>", parts: 2)
+          reference = "<ds:Reference" <> ref <> "</ds:Reference>"
+          pre <> reference <> reference <> post
+        end)
+
+      assert {:error, :bad_signature} = Dsig.verify(xml)
+    end
+
+    test "with a DigestValue that is not base64 is :bad_signature" do
+      xml =
+        mutated_signature(
+          &String.replace(
+            &1,
+            ~r|<ds:DigestValue>[^<]*</ds:DigestValue>|,
+            "<ds:DigestValue>!!!</ds:DigestValue>"
+          )
+        )
+
+      assert {:error, :bad_signature} = Dsig.verify(xml)
+    end
+
+    test "with a SignatureValue that is not base64 is :bad_signature" do
+      xml =
+        mutated_signature(
+          &String.replace(
+            &1,
+            ~r|<ds:SignatureValue>[^<]*</ds:SignatureValue>|,
+            "<ds:SignatureValue>!!!</ds:SignatureValue>"
+          )
+        )
+
+      assert {:error, :bad_signature} = Dsig.verify(xml)
+    end
+
+    test "with a certificate that is not DER is :bad_signature" do
+      xml =
+        mutated_signature(
+          &String.replace(
+            &1,
+            ~r|<ds:X509Certificate>[^<]*</ds:X509Certificate>|,
+            "<ds:X509Certificate>QUJD</ds:X509Certificate>"
+          )
+        )
+
+      assert {:error, :bad_signature} = Dsig.verify(xml)
+    end
+  end
 end

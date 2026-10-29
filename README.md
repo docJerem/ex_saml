@@ -241,7 +241,7 @@ ExSaml includes hardened defaults for SAML processing:
 - **Bounded input** — Documents and DEFLATE-compressed messages are limited to `:max_document_size` bytes (1 MiB by default); compressed messages are inflated incrementally and rejected as soon as they exceed the limit
 - **Bounded atom creation** — The XML parser creates an atom per element name, attribute name and namespace; names outside the SAML, XML-DSig, XML-Enc and metadata vocabularies draw from a node-wide budget (`:max_new_atoms`) and documents exceeding it are rejected (see [XML parsing limits](#xml-parsing-limits))
 - **NotBefore validation** — Assertions are rejected if issued in the future (with 5s clock skew tolerance)
-- **Algorithm whitelist** — RSA-SHA256/384/512 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; unknown signature algorithms return a clean error instead of crashing; RSA-SHA1 is rejected
+- **Algorithm whitelist** — RSA-SHA256/384/512 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; an unknown signature algorithm or a malformed `ds:Signature` returns a clean error instead of crashing; RSA-SHA1 is rejected
 - **Namespace-conformant parsing** — XML is parsed with `namespace_conformant: true`
 - **Identity values read whole** — `NameID` and `AttributeValue` are read as the concatenation of their text nodes; an assertion whose `NameID` or `AttributeValue` contains a comment or a processing instruction is rejected with `:bad_assertion`
 - **Response validation** — `Issuer`, `InResponseTo`, `Destination`, `Audience`, `SessionNotOnOrAfter`, the bearer confirmation method and its `NotBefore` are checked on every response, and an assertion is accepted only once (see [Response validation checks](#response-validation-checks))

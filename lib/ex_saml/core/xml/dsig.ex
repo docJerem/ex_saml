@@ -410,7 +410,7 @@ defmodule ExSaml.Core.Xml.Dsig do
             {:error, :insecure_algorithm}
 
           {:ok, {hash_function, _, _, key_algorithm}} ->
-            do_verify(element, fingerprints, {hash_function, key_algorithm}, ds_ns)
+            safe_verify(element, fingerprints, {hash_function, key_algorithm}, ds_ns)
 
           :error ->
             require Logger
@@ -421,6 +421,18 @@ defmodule ExSaml.Core.Xml.Dsig do
       _ ->
         {:error, :multiple_signatures}
     end
+  end
+
+  # A Signature that is well-formed XML but not a well-formed XML-DSig — no
+  # exclusive-c14n Transform, several References, a DigestValue or a
+  # certificate that does not decode — is attacker-controlled input and must
+  # fail closed as `:bad_signature`, never as an exception.
+  defp safe_verify(element, fingerprints, method, ds_ns) do
+    do_verify(element, fingerprints, method, ds_ns)
+  rescue
+    _ -> {:error, :bad_signature}
+  catch
+    _, _ -> {:error, :bad_signature}
   end
 
   defp do_verify(element, fingerprints, {hash_function, _} = method, ds_ns) do

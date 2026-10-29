@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject an assertion whose `NameID` or `AttributeValue` contains an XML comment or a processing instruction (`:bad_assertion`)
 - Restrict the redirect target of the IdP-initiated flow to relative paths when `allowed_target_urls` is not set
 - Remove the `https://start-from:` RelayState redirect of the assertion consumer service: a `RelayState` containing `https://start-from:` was followed as a redirect target before any validation of the `SAMLResponse`, which made the ACS an open redirect for anyone who knew an IdP id. A `RelayState` is only ever read after the response is validated
+- `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :bad_signature}` for a `ds:Signature` that is not a well-formed XML-DSig — no exclusive-c14n `Transform`, several `Reference` elements, a `DigestValue`, `SignatureValue` or `X509Certificate` that does not decode — instead of raising. A crafted `SAMLResponse` could make the ACS answer 500 instead of redirecting with an error
 
 ## [1.2.0] - 2026-10-28
 
