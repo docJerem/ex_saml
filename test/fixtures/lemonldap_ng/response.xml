@@ -1,0 +1,73 @@
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_B9639A8D0F43EB6F553EC62C954948AB" Version="2.0" IssueInstant="2026-10-29T10:26:28Z" Destination="https://sp.example.com/sso/consume/llng"><saml:Issuer>http://auth.example.com/saml/metadata</saml:Issuer><Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+<SignedInfo>
+<CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+<SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+<Reference URI="#_B9639A8D0F43EB6F553EC62C954948AB">
+<Transforms>
+<Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>
+<Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+</Transforms>
+<DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+<DigestValue>5fC+z088KRWjCv0/LMLPc3orejLXTKThsS2W1txG9qo=</DigestValue>
+</Reference>
+</SignedInfo>
+<SignatureValue>ousjllCbgccI0v98AQkk1Oy1vv6QGfLJVWjBpHD61ThQfAe4VyBLDQz0cL2D5qIl
+eu0RN4+nj6VEpesuiTck54Wz3tCP0Fde0oNWBlOTQDcIpGlTrFEfwNtVrf/BaqEW
+g6JT+7SBu4I5X/u50OqAO8RTU7CHbTdMjvn3ZxiyknP/IFH1ijUC79F5DHWCfEFu
+6zZQmVuxhRVoadiNWqoD5TN8+lI1Q8X12QJj+vuFQsR4WcUkuOTzZNglcj2GqnEW
+lnwQu1LNq94Rvbfkp+KAui/e7grDF37sfPI8ucH8EBM0YJpEL7Vs2Nsw0/FCCNRE
+I3OJMOMYgLPSwoyOiF+QUQ==</SignatureValue>
+<KeyInfo>
+<KeyValue>
+<RSAKeyValue>
+<Modulus>
+0z2zazfLojGGWMs49l+xGC5tH0V4eHfL0xCDvE8/9gMKXQ2IGeNa002zRhi7SnSr
+PTLLxAgBiRt8BhtPAMqllq+yEN2PSKZ/VAvvW54irJzGh9Ia8BmxIsnR/Nt9DE79
+9D9jojDSJQlVTp/XNduxRzEKXIDEb1d72YgfBGDb4q9FLBJX1THNfRqGztUvLwv4
+FGR5Omh6z1jZxYhaNoKyclYpdb2pqFIAVuycvt31rAfTDcggW2J8x5sYQM9qHlXU
+Z9ZaqPita+PXWzQXJ8X3CqShDh9cpHfDBPKA56mbq4RA2E3xWn8H9iSpnWK7oQO+
+SORp5I3t2vEzq1zHHJhmoQ==
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue>
+</KeyInfo>
+</Signature><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status><saml:Assertion Version="2.0" ID="_D68AEDFD0AAEEE66904B091E73BED332" IssueInstant="2026-10-29T10:26:28Z"><saml:Issuer>http://auth.example.com/saml/metadata</saml:Issuer><Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+<SignedInfo>
+<CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+<SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+<Reference URI="#_D68AEDFD0AAEEE66904B091E73BED332">
+<Transforms>
+<Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>
+<Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+</Transforms>
+<DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+<DigestValue>m66T8HWfZ6fQQ9Eal6dbpH/EfJzR+/VJp3WyamXq5PA=</DigestValue>
+</Reference>
+</SignedInfo>
+<SignatureValue>YA7wQln/Teo2H7eeKVbym5n9psao5lsXFo88ZpwWtAHWlFP+v0P+NH9AwGWWZ6CS
+RhPkN9qvoRdujR7LK8jW6u6Vas/wqNw7NUF2/TiAg61eswKYFcoiuBUieK+1EEm6
+6ABQn5Pap3wZbdC9Ea68JFATLQ/qnvnLviyTAxKOykWWcCSHHNzpmelWaOIwedEZ
+fqU0x+tUIj98cI60gVlBh8QlQRHJHzXMexFH6F/MTxC/Km8ZB5DwRa/pZtYLwzGR
+xkOqiAwJxpzNuGlZswaBIQqRQY3f3vsAEDBot2H0FEp3YAAArqiw2i6DJN70i0ew
+x2NDfn9939oB9DhRPFNwQw==</SignatureValue>
+<KeyInfo>
+<KeyValue>
+<RSAKeyValue>
+<Modulus>
+0z2zazfLojGGWMs49l+xGC5tH0V4eHfL0xCDvE8/9gMKXQ2IGeNa002zRhi7SnSr
+PTLLxAgBiRt8BhtPAMqllq+yEN2PSKZ/VAvvW54irJzGh9Ia8BmxIsnR/Nt9DE79
+9D9jojDSJQlVTp/XNduxRzEKXIDEb1d72YgfBGDb4q9FLBJX1THNfRqGztUvLwv4
+FGR5Omh6z1jZxYhaNoKyclYpdb2pqFIAVuycvt31rAfTDcggW2J8x5sYQM9qHlXU
+Z9ZaqPita+PXWzQXJ8X3CqShDh9cpHfDBPKA56mbq4RA2E3xWn8H9iSpnWK7oQO+
+SORp5I3t2vEzq1zHHJhmoQ==
+</Modulus>
+<Exponent>
+AQAB
+</Exponent>
+</RSAKeyValue>
+</KeyValue>
+</KeyInfo>
+</Signature><saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">dwho@badwolf.org</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData NotOnOrAfter="2026-10-30T06:26:28Z" Recipient="https://sp.example.com/sso/consume/llng"/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="2026-10-29T10:25:28Z" NotOnOrAfter="2026-10-30T10:27:28Z"><saml:AudienceRestriction><saml:Audience>https://sp.example.com/sso/metadata/llng</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="2026-10-29T10:26:26Z" SessionIndex="e3b3a0c4df22b6e1e594252600b33e7d068811fc8b4e1bf9d390053cee134cc7" SessionNotOnOrAfter="2026-10-30T06:26:26Z"><saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:unspecified</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement><saml:AttributeStatement><saml:Attribute Name="mail" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic" FriendlyName="mail"><saml:AttributeValue>dwho@badwolf.org</saml:AttributeValue></saml:Attribute><saml:Attribute Name="uid" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic" FriendlyName="uid"><saml:AttributeValue>dwho</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion></samlp:Response>

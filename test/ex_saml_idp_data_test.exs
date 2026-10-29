@@ -152,6 +152,12 @@ defmodule ExSamlIdpDataTest do
     assert log =~ "Skipping identity provider: idp1"
   end
 
+  test "the IdP metadata certificates are the SP's trusted_certs, in DER", %{sps: sps} do
+    %IdpData{} = idp_data = IdpData.load_provider(@idp_config1, sps)
+    assert idp_data.certs != []
+    assert idp_data.sp_config.trusted_certs == Enum.map(idp_data.certs, &Base.decode64!/1)
+  end
+
   test "idp_signs_logout_responses is required by default and can be turned off", %{sps: sps} do
     %IdpData{} = idp_data = IdpData.load_provider(@idp_config1, sps)
     assert idp_data.idp_signs_logout_responses

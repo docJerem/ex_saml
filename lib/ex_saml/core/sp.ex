@@ -438,7 +438,7 @@ defmodule ExSaml.Core.Sp do
 
   defp verify_envelope_signature(xml, sp) do
     if sp.idp_signs_envelopes do
-      case Dsig.verify(xml, sp.trusted_fingerprints) do
+      case Dsig.verify(xml, sp.trusted_fingerprints, trusted_certs: sp.trusted_certs) do
         :ok -> :ok
         error -> {:error, {:envelope, error}}
       end
@@ -449,7 +449,7 @@ defmodule ExSaml.Core.Sp do
 
   defp verify_assertion_signature(assertion_xml, sp) do
     if sp.idp_signs_assertions do
-      case Dsig.verify(assertion_xml, sp.trusted_fingerprints) do
+      case Dsig.verify(assertion_xml, sp.trusted_fingerprints, trusted_certs: sp.trusted_certs) do
         :ok -> :ok
         error -> {:error, {:assertion, error}}
       end
@@ -581,7 +581,7 @@ defmodule ExSaml.Core.Sp do
 
   defp verify_logout_request_signature(xml, sp) do
     if sp.idp_signs_logout_requests do
-      Dsig.verify(xml, sp.trusted_fingerprints)
+      Dsig.verify(xml, sp.trusted_fingerprints, trusted_certs: sp.trusted_certs)
     else
       :ok
     end
@@ -630,7 +630,7 @@ defmodule ExSaml.Core.Sp do
       )
 
     if sp.idp_signs_logout_responses or signed? do
-      Dsig.verify(xml, sp.trusted_fingerprints)
+      Dsig.verify(xml, sp.trusted_fingerprints, trusted_certs: sp.trusted_certs)
     else
       :ok
     end

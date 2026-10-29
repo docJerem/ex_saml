@@ -455,6 +455,8 @@ defmodule ExSaml.IdpData do
       allow_unsigned_cbc: idp_data.allow_unsigned_cbc,
       allow_unsigned: idp_data.allow_unsigned,
       trusted_fingerprints: idp_data.fingerprints,
+      # DER, for a Signature that carries no certificate of its own.
+      trusted_certs: Enum.map(idp_data.certs, &Base.decode64!/1),
       metadata_uri: Helper.get_metadata_uri(idp_data.base_url, path_segment_idp_id),
       consume_uri: Helper.get_consume_uri(idp_data.base_url, path_segment_idp_id),
       logout_uri: Helper.get_logout_uri(idp_data.base_url, path_segment_idp_id),

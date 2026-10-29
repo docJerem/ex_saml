@@ -382,9 +382,20 @@ defmodule ExSaml.Core.Xml.Dsig do
 
   `fingerprints` is a list of valid cert fingerprints that can be accepted,
   or `:any` to accept any valid certificate.
+
+  Options:
+
+    * `:trusted_certs` — DER certificates, those of the IdP metadata, to
+      verify with when the `ds:Signature` carries no `ds:X509Certificate`.
+      LemonLDAP::NG, for one, puts the bare public key (`ds:KeyValue`) in its
+      `ds:KeyInfo`; a key the message itself carries is never trusted, so the
+      signature must verify with one of these certificates, which the
+      `fingerprints` must accept like an embedded one. Without the option, such
+      a signature is `{:error, :missing_certificate}`.
   """
-  @spec verify(record(:xmlElement), [fingerprint()] | :any) :: :ok | {:error, verify_error()}
-  def verify(element, fingerprints) do
+  @spec verify(record(:xmlElement), [fingerprint()] | :any, keyword()) ::
+          :ok | {:error, verify_error()}
+  def verify(element, fingerprints, opts \\ []) do
     ds_ns = @xpath_ns
 
     case :xmerl_xpath.string(
@@ -410,7 +421,7 @@ defmodule ExSaml.Core.Xml.Dsig do
             {:error, :insecure_algorithm}
 
           {:ok, {hash_function, _, _, key_algorithm}} ->
-            safe_verify(element, fingerprints, {hash_function, key_algorithm}, ds_ns)
+            safe_verify(element, fingerprints, {hash_function, key_algorithm}, ds_ns, opts)
 
           :error ->
             require Logger
@@ -427,21 +438,21 @@ defmodule ExSaml.Core.Xml.Dsig do
   # exclusive-c14n Transform, several References, a DigestValue or a
   # certificate that does not decode — is attacker-controlled input and must
   # fail closed as `:bad_signature`, never as an exception.
-  defp safe_verify(element, fingerprints, method, ds_ns) do
-    do_verify(element, fingerprints, method, ds_ns)
+  defp safe_verify(element, fingerprints, method, ds_ns, opts) do
+    do_verify(element, fingerprints, method, ds_ns, opts)
   rescue
     _ -> {:error, :bad_signature}
   catch
     _, _ -> {:error, :bad_signature}
   end
 
-  defp do_verify(element, fingerprints, {hash_function, _} = method, ds_ns) do
+  defp do_verify(element, fingerprints, {hash_function, _} = method, ds_ns, opts) do
     incl_ns = extract_inclusive_ns(element, ds_ns)
     computed_digest = compute_digest(element, hash_function, incl_ns)
     expected_digest = extract_expected_digest(element, ds_ns)
 
     with :ok <- verify_digest(computed_digest, expected_digest) do
-      verify_signature(element, method, ds_ns, fingerprints)
+      verify_signature(element, method, ds_ns, fingerprints, opts)
     end
   end
 
@@ -479,7 +490,7 @@ defmodule ExSaml.Core.Xml.Dsig do
   defp verify_digest(computed, expected) when computed == expected, do: :ok
   defp verify_digest(_, _), do: {:error, :bad_digest}
 
-  defp verify_signature(element, {hash_function, key_algorithm}, ds_ns, fingerprints) do
+  defp verify_signature(element, {hash_function, key_algorithm}, ds_ns, fingerprints, opts) do
     [sig_info] =
       :xmerl_xpath.string(~c"ds:Signature/ds:SignedInfo", element, namespace: ds_ns)
 
@@ -490,48 +501,66 @@ defmodule ExSaml.Core.Xml.Dsig do
 
     sig = :base64.decode(xmlText(sig_text, :value))
 
-    # The certificate's key must be of the type the signature method names,
-    # and one the module supports.
-    with {:ok, {spki, cert_bin}} <- extract_public_key_info(element, ds_ns),
-         {^key_algorithm, parameters, key_bits} <- spki,
-         {:ok, key} <- key_algorithm.public_key(parameters, key_bits),
-         true <- key_algorithm.verify(data, hash_function, sig, key) do
-      check_fingerprints(cert_bin, fingerprints)
-    else
-      {:error, :missing_certificate} = error -> error
-      _ -> {:error, :bad_signature}
+    with {:ok, candidates} <- signing_certs(element, ds_ns, Keyword.get(opts, :trusted_certs, [])) do
+      first_accepted(candidates, {hash_function, key_algorithm}, data, sig, fingerprints)
     end
   end
 
-  # The SubjectPublicKeyInfo of the signing certificate, as the module of its
-  # algorithm (nil for an unsupported one), the algorithm parameters and the
-  # subjectPublicKey bits.
-  defp extract_public_key_info(element, ds_ns) do
+  # The first certificate whose key verifies the signature decides; its
+  # fingerprint must then be an accepted one.
+  defp first_accepted(candidates, {hash_function, key_algorithm}, data, sig, fingerprints) do
+    Enum.find_value(candidates, {:error, :bad_signature}, fn cert_bin ->
+      case verify_with_cert(cert_bin, key_algorithm, hash_function, data, sig) do
+        :ok -> check_fingerprints(cert_bin, fingerprints)
+        {:error, :bad_signature} -> nil
+      end
+    end)
+  end
+
+  # The certificates to verify with: the one the Signature carries (the first
+  # X509Certificate is the signing one, the rest is its chain), else the
+  # trusted ones, from the IdP metadata.
+  defp signing_certs(element, ds_ns, trusted_certs) do
     case :xmerl_xpath.string(
            ~c"ds:Signature//ds:X509Certificate/text()",
            element,
            namespace: ds_ns
          ) do
-      [] ->
-        {:error, :missing_certificate}
-
-      # The first certificate is the signing one; the rest is its chain.
-      [cert_text | _] ->
-        cert_bin = :base64.decode(xmlText(cert_text, :value))
-        cert = :public_key.pkix_decode_cert(cert_bin, :plain)
-        tbs = certificate(cert, :tbsCertificate)
-        spki = tbs_certificate(tbs, :subjectPublicKeyInfo)
-
-        key_bin =
-          case subject_public_key_info(spki, :subjectPublicKey) do
-            {_, kb} -> kb
-            kb -> kb
-          end
-
-        {:AlgorithmIdentifier, algorithm, parameters} = subject_public_key_info(spki, :algorithm)
-        key_algorithm = Enum.find(@key_algorithms, &(&1.spki_algorithm() == algorithm))
-        {:ok, {{key_algorithm, parameters, key_bin}, cert_bin}}
+      [cert_text | _] -> {:ok, [:base64.decode(xmlText(cert_text, :value))]}
+      [] when trusted_certs == [] -> {:error, :missing_certificate}
+      [] -> {:ok, trusted_certs}
     end
+  end
+
+  # The certificate's key must be of the type the signature method names,
+  # and one the module supports.
+  defp verify_with_cert(cert_bin, key_algorithm, hash_function, data, sig) do
+    with {^key_algorithm, parameters, key_bits} <- public_key_info(cert_bin),
+         {:ok, key} <- key_algorithm.public_key(parameters, key_bits),
+         true <- key_algorithm.verify(data, hash_function, sig, key) do
+      :ok
+    else
+      _ -> {:error, :bad_signature}
+    end
+  end
+
+  # The SubjectPublicKeyInfo of a DER certificate, as the module of its
+  # algorithm (nil for an unsupported one), the algorithm parameters and the
+  # subjectPublicKey bits.
+  defp public_key_info(cert_bin) do
+    cert = :public_key.pkix_decode_cert(cert_bin, :plain)
+    tbs = certificate(cert, :tbsCertificate)
+    spki = tbs_certificate(tbs, :subjectPublicKeyInfo)
+
+    key_bin =
+      case subject_public_key_info(spki, :subjectPublicKey) do
+        {_, kb} -> kb
+        kb -> kb
+      end
+
+    {:AlgorithmIdentifier, algorithm, parameters} = subject_public_key_info(spki, :algorithm)
+    key_algorithm = Enum.find(@key_algorithms, &(&1.spki_algorithm() == algorithm))
+    {key_algorithm, parameters, key_bin}
   end
 
   defp check_fingerprints(_cert_bin, :any), do: :ok

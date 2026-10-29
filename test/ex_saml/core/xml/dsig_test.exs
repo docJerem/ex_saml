@@ -297,6 +297,50 @@ defmodule ExSaml.Core.Xml.DsigTest do
       assert {:error, :missing_certificate} =
                Dsig.verify(certless_doc, [:crypto.hash(:sha, cert_bin)])
     end
+
+    # LemonLDAP::NG carries the bare key in KeyInfo: the IdP metadata
+    # certificates verify such a signature.
+    test "signature without X509Certificate verifies with a trusted certificate" do
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+      {_other_key, other_cert_bin} = test_sign_key()
+
+      certless_doc =
+        [Dsig.sign(doc, key, cert_bin, :rsa_sha256)]
+        |> :xmerl.export(:xmerl_xml)
+        |> List.flatten()
+        |> to_string()
+        |> String.replace(~r|<ds:KeyInfo>.*</ds:KeyInfo>|s, "")
+        |> parse_xml()
+
+      fingerprint = {:sha256, :crypto.hash(:sha256, cert_bin)}
+
+      assert :ok = Dsig.verify(certless_doc, [fingerprint], trusted_certs: [cert_bin])
+      assert :ok = Dsig.verify(certless_doc, :any, trusted_certs: [other_cert_bin, cert_bin])
+
+      assert {:error, :bad_signature} =
+               Dsig.verify(certless_doc, [fingerprint], trusted_certs: [other_cert_bin])
+
+      # A trusted certificate is still subject to the fingerprints.
+      assert {:error, :cert_not_accepted} =
+               Dsig.verify(certless_doc, [{:sha256, <<0::256>>}], trusted_certs: [cert_bin])
+    end
+
+    test "an embedded certificate is used before the trusted ones" do
+      doc =
+        parse_xml(~S|<x:foo id="test" xmlns:x="urn:foo:x:"><x:name>blah</x:name></x:foo>|)
+
+      {key, cert_bin} = test_sign_256_key()
+      {_other_key, other_cert_bin} = test_sign_key()
+      signed_xml = Dsig.sign(doc, key, cert_bin, :rsa_sha256)
+
+      assert {:error, :cert_not_accepted} =
+               Dsig.verify(signed_xml, [{:sha256, :crypto.hash(:sha256, other_cert_bin)}],
+                 trusted_certs: [other_cert_bin]
+               )
+    end
   end
 
   describe "ECDSA" do

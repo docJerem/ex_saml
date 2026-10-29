@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Responses whose `ds:Signature` carries no `ds:X509Certificate` are verified with the signing certificates of the IdP metadata, now on `ExSaml.Core.SpConfig.trusted_certs` (DER) and passed to `ExSaml.Core.Xml.Dsig.verify/3` as `trusted_certs:`. LemonLDAP::NG puts the bare RSA key (`ds:KeyValue`) in its `ds:KeyInfo`, so every signature it produced was rejected with `:missing_certificate`, whatever its algorithm. Verified against LemonLDAP::NG 2.20.2 (`test/fixtures/lemonldap_ng`): its Response and Assertion signatures, RSA-SHA256 with exclusive c14n, verify. A key carried by the message is never trusted on its own, and a trusted certificate is still subject to the fingerprints
 - `ExSaml.Core.Sp.validate_logout_request/2` and `validate_logout_response/2` return the verifier's `{:error, reason}` as is; a failed signature check used to come back as `{:error, {:error, reason}}`
 
 ### Security
