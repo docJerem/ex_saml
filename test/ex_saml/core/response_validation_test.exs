@@ -269,6 +269,17 @@ defmodule ExSaml.Core.ResponseValidationTest do
       assert :duplicate in ValidationContext.enforced_checks()
     end
 
+    test "[] and an explicit list keep :duplicate enforced" do
+      Application.put_env(:ex_saml, :enforced_response_checks, [])
+      assert ValidationContext.enforced_checks() == [:duplicate]
+
+      Application.put_env(:ex_saml, :enforced_response_checks, [:bad_issuer])
+      assert Enum.sort(ValidationContext.enforced_checks()) == [:bad_issuer, :duplicate]
+
+      Application.put_env(:ex_saml, :enforced_response_checks, [:duplicate, :bad_issuer])
+      assert Enum.sort(ValidationContext.enforced_checks()) == [:bad_issuer, :duplicate]
+    end
+
     test "always_enforce/2 enforces one check on top of a log-only policy" do
       Application.put_env(:ex_saml, :enforced_response_checks, [])
       forced = ValidationContext.always_enforce(ctx(enforce: nil), :duplicate)
@@ -627,15 +638,11 @@ defmodule ExSaml.Core.ResponseValidationTest do
       assert {:ok, _} = consume(response_xml(@idp_entity_id, id: "_a2"))
     end
 
-    test "a replay only warns when the check is not enforced" do
+    test "a replay is rejected whatever the policy" do
       Application.put_env(:ex_saml, :enforced_response_checks, [])
       xml = response_xml(@idp_entity_id)
       assert {:ok, _} = consume(xml)
-
-      log = capture_log(fn -> assert {:ok, _} = consume(xml) end)
-
-      assert log =~ "[ExSaml] saml_validation check=:duplicate enforced=false"
-      assert log =~ ~s(assertion_id="_a1")
+      assert {:error, :duplicate} = consume(xml)
     end
 
     # Core §2.5.1.5.

@@ -246,7 +246,7 @@ defmodule ExSaml.SsoFlowTest do
       assert rejected_with(conn) == {:error, :duplicate}
     end
 
-    test "with the check in warn mode a re-post signs in again and the warning is logged" do
+    test "a re-post is still rejected with every other check in warn mode" do
       Application.put_env(:ex_saml, :enforced_response_checks, [])
       {_conn, relay_state} = start_sso()
       id = authn_request_id(relay_state)
@@ -254,10 +254,9 @@ defmodule ExSaml.SsoFlowTest do
 
       assert relay_state |> post_payload(payload, id) |> signed_in?()
 
-      log = capture_log(fn -> assert relay_state |> post_payload(payload, id) |> signed_in?() end)
-
-      assert log =~ "saml_validation check=:duplicate enforced=false"
-      assert log =~ ~s(assertion_id="_a1")
+      conn = post_payload(relay_state, payload, id)
+      refute signed_in?(conn)
+      assert rejected_with(conn) == {:error, :duplicate}
     end
 
     test "a Destination equal to the ACS URL signs in" do

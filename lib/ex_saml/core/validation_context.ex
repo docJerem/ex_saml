@@ -104,6 +104,11 @@ defmodule ExSaml.Core.ValidationContext do
   # ship log-only first.
   @default_enforced @all_checks
 
+  # Checks no policy can downgrade to log-only. A replayed assertion is a
+  # second sign-in with the same credential, not an interoperability glitch
+  # that a rollout policy needs room for.
+  @never_downgraded [:duplicate]
+
   @doc """
   Builds a context from the SP configuration for one IdP, evaluated at the
   current time.
@@ -143,6 +148,9 @@ defmodule ExSaml.Core.ValidationContext do
   @doc """
   The checks that reject rather than warn.
 
+  `:duplicate` is always among them: an explicit list that leaves it out, or
+  `[]`, still enforces it.
+
   Read at call time rather than at compile time so the policy can be changed
   without recompiling the library, and so `Credo.Check.Warning.ApplicationConfigInModuleAttribute`
   stays happy.
@@ -151,10 +159,14 @@ defmodule ExSaml.Core.ValidationContext do
   def enforced_checks do
     case Application.get_env(:ex_saml, :enforced_response_checks, @default_enforced) do
       :all -> @all_checks
-      list when is_list(list) -> list
+      list when is_list(list) -> Enum.uniq(@never_downgraded ++ list)
       _ -> @default_enforced
     end
   end
+
+  @doc "The checks no policy can downgrade to log-only."
+  @spec never_downgraded() :: [check()]
+  def never_downgraded, do: @never_downgraded
 
   @doc """
   The context with `check` enforced whatever the configured policy, for an

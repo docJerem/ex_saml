@@ -308,12 +308,13 @@ Two rules are outside the policy below and always reject: an
 
 `config :ex_saml, :enforced_response_checks` lists the checks that reject a
 response. A check absent from the list is still evaluated: a failure logs one
-line and the sign-in goes on.
+line and the sign-in goes on. `:duplicate` cannot be downgraded: it is
+enforced whatever the list says.
 
 ```elixir
 config :ex_saml, enforced_response_checks: :all   # the default: every check above
-config :ex_saml, enforced_response_checks: []     # everything log-only
-config :ex_saml, enforced_response_checks: [:bad_issuer, :duplicate]  # exactly these
+config :ex_saml, enforced_response_checks: []     # everything but :duplicate log-only
+config :ex_saml, enforced_response_checks: [:bad_issuer]  # exactly these, plus :duplicate
 ```
 
 ```
@@ -330,8 +331,8 @@ is recorded in `ExSaml.AssertionReplayCache`, keyed by `Assertion/@ID` and its
 the assertion would be rejected as stale: its earliest `NotOnOrAfter`, else
 `IssueInstant` + 5 minutes, plus the clock skew. It uses the configured cache
 through `put_new/3`, so detection spans every node sharing that cache; with a
-node-local cache it is per node. For an assertion carrying `OneTimeUse`,
-`:duplicate` is enforced whatever the policy. `ExSaml.Core.Sp.validate_assertion/2`
+node-local cache it is per node. `:duplicate` is enforced whatever the
+policy. `ExSaml.Core.Sp.validate_assertion/2`
 keeps a no-op duplicate function; a direct caller passes
 `ExSaml.AssertionReplayCache.duplicate_fun(sp)` to `validate_assertion/3`.
 
