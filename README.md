@@ -76,6 +76,8 @@ config :ex_saml, ExSaml.Provider,
       allow_idp_initiated_flow: true,
       use_redirect_for_req: false,
       use_redirect_for_slo: false,
+      # The IdP signs its LogoutResponses (false: a signature is verified only when present)
+      idp_signs_logout_responses: true,
       allowed_target_urls: ["https://myapp.example.com/dashboard"],
       # Attribute whose value keys the user instead of the NameID (nil: NameID only)
       user_key_attribute: "idp_user_id"

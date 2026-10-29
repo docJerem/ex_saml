@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ExSaml.AssertionReplayCache`, which records the consumed assertion IDs in the configured cache until the assertion would be stale, plus the clock skew. `ExSaml.SPHandler` uses it on every response; `ExSaml.AssertionReplayCache.duplicate_fun/1` can be passed to `ExSaml.Core.Sp.validate_assertion/3` (#55)
 - `ExSaml.Core.ValidationContext` and `ExSaml.Core.Saml.validate_assertion/2`, which validates an assertion against it; `ExSaml.Core.SpConfig` gains `idp_entity_id`, `idp_id` (filled from `%ExSaml.IdpData{}`) and `SpConfig.entity_id/1`; `ExSaml.Core.Sp.xml_id/1` reads back the ID of a generated request, which `ExSaml.AuthHandler` stores in the relay state and in the session (`"authn_request_id"`). `ExSaml.Core.Assertion` gains `id`, `audience_restrictions`, `one_time_use` and `response_in_response_to` (the `Response/@InResponseTo`, also on `ExSaml.Assertion`), `ExSaml.Core.Subject` gains `notbefore` (#55)
 - Error messages in English and French for `:bad_issuer`, `:bad_in_response_to`, `:bad_destination`, `:bad_subject_confirmation`, `:session_expired`, `:duplicate` (#55) and `:bad_name_id`
+- `idp_signs_logout_responses` IdP option (`true` by default) and `ExSaml.Core.SpConfig` field: whether a `LogoutResponse` must carry a signature. With it off, a signature is verified only when present, as before
 - `user_key_attribute` IdP option: the attribute whose value keys the signed-in user instead of the NameID, when the assertion carries it. It defaults to `"idp_user_id"`, the attribute that was read until now; `nil` keys on the NameID only. When the IdP sends several values, the first one keys the user and a warning is logged: the key is always one value, so the NameID of a logout request can match it
 
 ### Changed
@@ -32,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ExSaml.SPHandler` rejects a sign-in with `:bad_name_id` when neither the `user_key_attribute` nor the NameID gives the user a non-blank key; it used to key every such user of the IdP on an empty NameID. The NameID itself stays optional: an assertion without one is accepted when it carries the `user_key_attribute`. A Subject/EncryptedID, which is not decrypted, is logged
 - The authorization code is appended to the target URL with `URI.append_query/2`: a target URL that already has a query string keeps it (`/cb?tenant=acme&code=…`) instead of getting a second `?`
 - IdP-initiated flow: when `allowed_target_urls` is not set, the RelayState is used as the redirect target only when it is a relative path (a single leading `/`, no scheme or host, no backslash or control character); any other value redirects to `/` and logs a warning. With `allowed_target_urls` set, nothing changes. An integration that relies on absolute RelayState targets in the IdP-initiated flow must list them in `allowed_target_urls`
+
+### Fixed
+
+- `ExSaml.Core.Sp.validate_logout_request/2` and `validate_logout_response/2` return the verifier's `{:error, reason}` as is; a failed signature check used to come back as `{:error, {:error, reason}}`
 
 ### Security
 
@@ -53,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Require a signature on every Response: `provider_type` no longer turns off the configured signature requirements, and an IdP that requires neither an assertion nor an envelope signature is rejected at load
 - Reject an assertion whose `NameID` or `AttributeValue` contains an XML comment or a processing instruction (`:bad_assertion`)
 - Restrict the redirect target of the IdP-initiated flow to relative paths when `allowed_target_urls` is not set
+- Require a signature on every `LogoutResponse` unless the IdP is configured with `idp_signs_logout_responses: false`. A signature used to be verified only when present, so stripping it off got an unsigned `LogoutResponse` accepted and the session dropped
 - Remove the `https://start-from:` RelayState redirect of the assertion consumer service: a `RelayState` containing `https://start-from:` was followed as a redirect target before any validation of the `SAMLResponse`, which made the ACS an open redirect for anyone who knew an IdP id. A `RelayState` is only ever read after the response is validated
 - The `target_url` parameter of `ExSaml.AuthRouter` (`/signin/:idp_id`, `/signout/:idp_id`) must be a relative path or one of the IdP's `allowed_target_urls`; any other value answers 400 `invalid target_url`. The authorization code is appended to it after the SAML exchange, so it used to be able to hand the code to any origin the caller named
 - `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :bad_signature}` for a `ds:Signature` that is not a well-formed XML-DSig — no exclusive-c14n `Transform`, several `Reference` elements, a `DigestValue`, `SignatureValue` or `X509Certificate` that does not decode — instead of raising. A crafted `SAMLResponse` could make the ACS answer 500 instead of redirecting with an error

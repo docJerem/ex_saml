@@ -519,10 +519,7 @@ defmodule ExSaml.Core.Sp do
 
   defp verify_logout_request_signature(xml, sp) do
     if sp.idp_signs_logout_requests do
-      case Dsig.verify(xml, sp.trusted_fingerprints) do
-        :ok -> :ok
-        error -> {:error, error}
-      end
+      Dsig.verify(xml, sp.trusted_fingerprints)
     else
       :ok
     end
@@ -559,16 +556,21 @@ defmodule ExSaml.Core.Sp do
     end
   end
 
+  # The signature is required when the IdP signs its LogoutResponses
+  # (`idp_signs_logout_responses`, the default): without it, stripping the
+  # signature off a LogoutResponse would get an unsigned one accepted. With
+  # the option off, a signature is verified only when present.
   defp verify_logout_response_signature(xml, ns, sp) do
-    case :xmerl_xpath.string(~c"/samlp:LogoutResponse/ds:Signature", xml, [{:namespace, ns}]) do
-      [sig] when Record.is_record(sig, :xmlElement) ->
-        case Dsig.verify(xml, sp.trusted_fingerprints) do
-          :ok -> :ok
-          error -> {:error, error}
-        end
+    signed? =
+      match?(
+        [_],
+        :xmerl_xpath.string(~c"/samlp:LogoutResponse/ds:Signature", xml, [{:namespace, ns}])
+      )
 
-      _ ->
-        :ok
+    if sp.idp_signs_logout_responses or signed? do
+      Dsig.verify(xml, sp.trusted_fingerprints)
+    else
+      :ok
     end
   end
 

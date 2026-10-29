@@ -151,6 +151,17 @@ defmodule ExSamlIdpDataTest do
     assert log =~ "Skipping identity provider: idp1"
   end
 
+  test "idp_signs_logout_responses is required by default and can be turned off", %{sps: sps} do
+    %IdpData{} = idp_data = IdpData.load_provider(@idp_config1, sps)
+    assert idp_data.idp_signs_logout_responses
+    assert idp_data.sp_config.idp_signs_logout_responses
+
+    idp_config = Map.put(@idp_config1, :idp_signs_logout_responses, false)
+    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+    refute idp_data.idp_signs_logout_responses
+    refute idp_data.sp_config.idp_signs_logout_responses
+  end
+
   test "an IdP that requires only the envelope signature is valid", %{sps: sps} do
     idp_config =
       Map.merge(@idp_config1, %{signed_assertion_in_resp: false, signed_envelopes_in_resp: true})

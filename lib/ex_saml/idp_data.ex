@@ -24,6 +24,7 @@ defmodule ExSaml.IdpData do
             allow_rsa_1_5_key_transport: false,
             allow_idp_initiated_flow: true,
             use_redirect_for_slo: false,
+            idp_signs_logout_responses: true,
             allowed_target_urls: [],
             user_key_attribute: "idp_user_id",
             entity_id: "",
@@ -53,6 +54,7 @@ defmodule ExSaml.IdpData do
           signed_envelopes_in_resp: boolean(),
           allow_rsa_1_5_key_transport: boolean(),
           allow_idp_initiated_flow: boolean(),
+          idp_signs_logout_responses: boolean(),
           allowed_target_urls: nil | [binary()],
           user_key_attribute: nil | binary(),
           entity_id: binary(),
@@ -141,6 +143,7 @@ defmodule ExSaml.IdpData do
     |> set_boolean_attr(opts_map, :signed_envelopes_in_resp)
     |> set_boolean_attr(opts_map, :allow_rsa_1_5_key_transport)
     |> set_boolean_attr(opts_map, :allow_idp_initiated_flow)
+    |> set_boolean_attr(opts_map, :idp_signs_logout_responses)
     |> set_boolean_attr(opts_map, :remove_saml_encoding)
   end
 
@@ -305,7 +308,7 @@ defmodule ExSaml.IdpData do
   # and `signed_envelopes_in_resp` always keep their configured value.
   @spec set_boolean_attr(%IdpData{}, map(), atom()) :: %IdpData{}
   defp set_boolean_attr(%IdpData{} = idp_data, %{provider_type: :adfs}, attr_name)
-       when attr_name not in ~w(allow_idp_initiated_flow use_redirect_for_slo signed_assertion_in_resp signed_envelopes_in_resp)a do
+       when attr_name not in ~w(allow_idp_initiated_flow use_redirect_for_slo signed_assertion_in_resp signed_envelopes_in_resp idp_signs_logout_responses)a do
     Map.put(idp_data, attr_name, false)
   end
 
@@ -428,6 +431,7 @@ defmodule ExSaml.IdpData do
       sp_sign_metadata: idp_data.sign_metadata,
       idp_signs_envelopes: idp_data.signed_envelopes_in_resp,
       idp_signs_assertions: idp_data.signed_assertion_in_resp,
+      idp_signs_logout_responses: idp_data.idp_signs_logout_responses,
       allow_rsa_1_5_key_transport: idp_data.allow_rsa_1_5_key_transport,
       trusted_fingerprints: idp_data.fingerprints,
       metadata_uri: Helper.get_metadata_uri(idp_data.base_url, path_segment_idp_id),
