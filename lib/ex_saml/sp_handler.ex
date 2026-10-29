@@ -17,6 +17,7 @@ defmodule ExSaml.SPHandler do
   alias ExSaml.{
     Assertion,
     AuthorizationCodeCache,
+    FlowCookie,
     Helper,
     IdpData,
     RelayStateCache,
@@ -101,7 +102,9 @@ defmodule ExSaml.SPHandler do
 
       RelayStateCache.delete(relay_state)
 
-      redirect_with_authorization_code(conn, target_url, assertion_key, nonce)
+      conn
+      |> FlowCookie.delete()
+      |> redirect_with_authorization_code(target_url, assertion_key, nonce)
     else
       {:error, error} ->
         redirect_with_error(conn, relay_state, error)
@@ -285,13 +288,12 @@ defmodule ExSaml.SPHandler do
   # SP-initiated flow auth response.
   defp validate_sp_initiated(conn, %IdpData{id: idp_id}, assertion, relay_state) do
     cached = RelayStateCache.get(relay_state)
-    rs_in_session = session_or_cached(conn, cached, :relay_state)
     idp_id_in_session = session_or_cached(conn, cached, :idp_id)
     saml_nonce_in_session = session_or_cached(conn, cached, :saml_nonce)
     authn_request_id = session_or_cached(conn, cached, :authn_request_id)
 
     cond do
-      rs_in_session == nil || rs_in_session != relay_state ->
+      not browser_bound?(conn, cached, relay_state) ->
         {:error, :invalid_relay_state}
 
       idp_id_in_session == nil || idp_id_in_session != idp_id ->
@@ -302,6 +304,25 @@ defmodule ExSaml.SPHandler do
 
       true ->
         {:ok, :sp_initiated, saml_nonce_in_session}
+    end
+  end
+
+  # The response must come back in the browser that started the flow. When
+  # the browser still sends its session cookie, the session names the relay
+  # state and must match. The IdP posts the response cross-site, where a
+  # SameSite=Lax session cookie is withheld: the session is then empty, and
+  # the relay state must be one `ExSaml.AuthHandler` stored *and* the one
+  # named by the `ExSaml.FlowCookie` it set in that browser. The cache alone
+  # would accept a response the attacker obtained for their own account and
+  # posted in the victim's browser (login CSRF).
+  defp browser_bound?(conn, cached, relay_state) do
+    case get_session(conn, "relay_state") do
+      nil ->
+        cached != nil and cached[:relay_state] == relay_state and
+          FlowCookie.get(conn) == relay_state
+
+      session_relay_state ->
+        session_relay_state == relay_state
     end
   end
 

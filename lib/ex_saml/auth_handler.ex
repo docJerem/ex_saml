@@ -11,11 +11,12 @@ defmodule ExSaml.AuthHandler do
 
   require Logger
   import Plug.Conn
-  alias ExSaml.{Assertion, Helper, IdpData, RelayStateCache, State, Subject}
+  alias ExSaml.{Assertion, FlowCookie, Helper, IdpData, RelayStateCache, State, Subject}
 
   import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 6, redirect: 3]
 
   @relay_state_cache_ttl :timer.minutes(5)
+  @relay_state_cache_ttl_secs div(@relay_state_cache_ttl, 1000)
 
   @doc """
   Handles the full SAML request to the IdP without requiring an intermediate HTML form.
@@ -66,6 +67,7 @@ defmodule ExSaml.AuthHandler do
     |> put_session("idp_id", idp_id)
     |> put_session("target_url", target_url)
     |> put_session("authn_request_id", authn_request_id)
+    |> FlowCookie.put(relay_state, @relay_state_cache_ttl_secs)
     |> send_saml_request(
       idp_signin_url,
       idp.use_redirect_for_req,
@@ -126,6 +128,7 @@ defmodule ExSaml.AuthHandler do
         |> put_session("idp_id", idp_id)
         |> put_session("target_url", target_url)
         |> put_session("authn_request_id", authn_request_id)
+        |> FlowCookie.put(relay_state, @relay_state_cache_ttl_secs)
         |> send_saml_request(
           idp_signin_url,
           idp.use_redirect_for_req,

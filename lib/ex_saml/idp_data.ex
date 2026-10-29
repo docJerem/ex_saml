@@ -24,7 +24,7 @@ defmodule ExSaml.IdpData do
             allow_rsa_1_5_key_transport: false,
             allow_unsigned_cbc: false,
             allow_unsigned: false,
-            allow_idp_initiated_flow: true,
+            allow_idp_initiated_flow: false,
             use_redirect_for_slo: false,
             idp_signs_logout_responses: true,
             allowed_target_urls: [],

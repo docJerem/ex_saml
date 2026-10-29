@@ -4,7 +4,7 @@ defmodule ExSaml.SPHandlerTest do
   import Plug.Conn
   import Plug.Test
 
-  alias ExSaml.{IdpData, SPHandler, Subject}
+  alias ExSaml.{FlowCookie, IdpData, SPHandler, Subject}
 
   # Minimal in-process stub for the cache configured via
   # `config :ex_saml, cache: …`. The real cache is a Nebulex backend, but for
@@ -60,7 +60,7 @@ defmodule ExSaml.SPHandlerTest do
   # that need to drive `validate_authresp/4`'s SP-initiated branch from
   # session-stored values (relay_state, idp_id, saml_nonce). Independent of the
   # default `:conn` provided by `setup` because each test needs its own session.
-  defp build_conn(session) do
+  defp build_conn(session, cookies \\ %{}) do
     secret = String.duplicate("a", 64)
 
     opts =
@@ -74,6 +74,9 @@ defmodule ExSaml.SPHandlerTest do
     conn =
       :get
       |> conn("/")
+      |> then(fn c ->
+        Enum.reduce(cookies, c, fn {k, v}, acc -> put_req_cookie(acc, k, v) end)
+      end)
       |> init_test_session(session)
       |> Map.put(:secret_key_base, secret)
       |> Plug.Session.call(opts)
@@ -342,6 +345,11 @@ defmodule ExSaml.SPHandlerTest do
                SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
     end
 
+    # The IdP posts the response cross-site, where a SameSite=Lax session
+    # cookie is withheld: the flow cookie then names the relay state.
+    defp cross_site_conn(relay_state),
+      do: build_conn(%{}, %{FlowCookie.name() => relay_state})
+
     test "reads the AuthnRequest id from the relay-state cache when the session is empty" do
       idp = %IdpData{id: "idp-1"}
 
@@ -354,7 +362,7 @@ defmodule ExSaml.SPHandlerTest do
 
       assert {:ok, :sp_initiated, "nonce-xyz"} =
                SPHandler.validate_authresp(
-                 build_conn(%{}),
+                 cross_site_conn("rs-abc"),
                  idp,
                  sp_initiated_assertion(),
                  "rs-abc"
@@ -369,11 +377,59 @@ defmodule ExSaml.SPHandlerTest do
 
       assert {:error, :bad_in_response_to} =
                SPHandler.validate_authresp(
+                 cross_site_conn("rs-abc"),
+                 idp,
+                 sp_initiated_assertion(),
+                 "rs-abc"
+               )
+    end
+
+    # Login CSRF: a response the attacker obtained for their own account,
+    # posted in a browser that did not start that flow.
+    test "without a session, a missing or different flow cookie is :invalid_relay_state" do
+      idp = %IdpData{id: "idp-1"}
+
+      Process.put(:stub_relay_cache_value, %{
+        relay_state: "rs-abc",
+        idp_id: "idp-1",
+        saml_nonce: "nonce-xyz",
+        authn_request_id: "request-id-42"
+      })
+
+      assert {:error, :invalid_relay_state} =
+               SPHandler.validate_authresp(
                  build_conn(%{}),
                  idp,
                  sp_initiated_assertion(),
                  "rs-abc"
                )
+
+      assert {:error, :invalid_relay_state} =
+               SPHandler.validate_authresp(
+                 cross_site_conn("rs-other"),
+                 idp,
+                 sp_initiated_assertion(),
+                 "rs-abc"
+               )
+    end
+
+    test "a session naming another relay state is not rescued by the flow cookie" do
+      idp = %IdpData{id: "idp-1"}
+
+      Process.put(:stub_relay_cache_value, %{
+        relay_state: "rs-abc",
+        idp_id: "idp-1",
+        saml_nonce: "nonce-xyz",
+        authn_request_id: "request-id-42"
+      })
+
+      conn =
+        build_conn(%{"relay_state" => "rs-other", "idp_id" => "idp-1"}, %{
+          FlowCookie.name() => "rs-abc"
+        })
+
+      assert {:error, :invalid_relay_state} =
+               SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
     end
 
     test "a bad relay state still reports :invalid_relay_state, not :bad_in_response_to" do

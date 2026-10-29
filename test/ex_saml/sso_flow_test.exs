@@ -15,6 +15,7 @@ defmodule ExSaml.SsoFlowTest do
   alias ExSaml.{
     AuthHandler,
     AuthorizationCodeCache,
+    FlowCookie,
     IdpData,
     RelayStateCache,
     SPHandler,
@@ -71,7 +72,7 @@ defmodule ExSaml.SsoFlowTest do
     }
   end
 
-  defp session_conn(method, path, body, session) do
+  defp session_conn(method, path, body, session, cookies \\ %{}) do
     opts =
       Plug.Session.init(
         store: :cookie,
@@ -82,15 +83,16 @@ defmodule ExSaml.SsoFlowTest do
 
     method
     |> conn(path, body)
+    |> then(fn c -> Enum.reduce(cookies, c, fn {k, v}, acc -> put_req_cookie(acc, k, v) end) end)
     |> Map.put(:secret_key_base, String.duplicate("a", 64))
     |> Plug.Session.call(opts)
     |> fetch_session()
     |> then(fn c -> Enum.reduce(session, c, fn {k, v}, acc -> put_session(acc, k, v) end) end)
   end
 
-  defp acs_conn(body, session) do
+  defp acs_conn(body, session, cookies \\ %{}) do
     :post
-    |> session_conn("/sso/consume/#{@idp_id}", body, session)
+    |> session_conn("/sso/consume/#{@idp_id}", body, session, cookies)
     |> Map.update!(:params, &Map.put(&1, "idp_id", @idp_id))
   end
 
@@ -200,6 +202,47 @@ defmodule ExSaml.SsoFlowTest do
   defp signed_in?(conn), do: location(conn) =~ "#{@target_url}?code="
 
   defp rejected_with(conn), do: get_session(conn, "ex_saml_error")
+
+  # The IdP posts the response from its own origin. Browsers withhold a
+  # SameSite=Lax session cookie on that request, so the browser that started
+  # the flow is recognised by the flow cookie `AuthHandler` set.
+  describe "browser binding" do
+    defp cross_site_post(relay_state, cookie) do
+      body = %{"SAMLResponse" => response_payload(relay_state), "RelayState" => relay_state}
+      cookies = if cookie, do: %{FlowCookie.name() => cookie}, else: %{}
+      conn = SPHandler.consume_signin_response(acs_conn(body, %{}, cookies))
+      assert conn.status == 302
+      conn
+    end
+
+    test "the sign-in request sets the flow cookie to the relay state" do
+      {conn, relay_state} = start_sso()
+      assert %{value: ^relay_state, http_only: true} = conn.resp_cookies[FlowCookie.name()]
+    end
+
+    test "a response posted without the session signs in with the flow cookie, which is cleared" do
+      {_conn, relay_state} = start_sso()
+      conn = cross_site_post(relay_state, relay_state)
+
+      assert signed_in?(conn)
+      assert %{max_age: 0} = conn.resp_cookies[FlowCookie.name()]
+    end
+
+    # Login CSRF: the attacker's own response, posted in the victim's browser.
+    test "a response posted in a browser without the flow cookie is rejected" do
+      {_conn, relay_state} = start_sso()
+      conn = cross_site_post(relay_state, nil)
+      refute signed_in?(conn)
+      assert rejected_with(conn) == {:error, :invalid_relay_state}
+    end
+
+    test "a response posted in a browser whose flow cookie names another flow is rejected" do
+      {_conn, relay_state} = start_sso()
+      conn = cross_site_post(relay_state, "another-flow")
+      refute signed_in?(conn)
+      assert rejected_with(conn) == {:error, :invalid_relay_state}
+    end
+  end
 
   describe "authorization code redirect" do
     test "the code is appended after the query the target URL already has" do

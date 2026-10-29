@@ -75,7 +75,8 @@ config :ex_saml, ExSaml.Provider,
       allow_rsa_1_5_key_transport: false,
       # Only for an IdP that encrypts with AES-CBC and does not sign the Response (see Security)
       allow_unsigned_cbc: false,
-      allow_idp_initiated_flow: true,
+      # An unsolicited response cannot be bound to the browser (see Security)
+      allow_idp_initiated_flow: false,
       use_redirect_for_req: false,
       use_redirect_for_slo: false,
       # The IdP signs its LogoutResponses (false: a signature is verified only when present)
@@ -259,6 +260,7 @@ ExSaml includes hardened defaults for SAML processing:
 - **Algorithm whitelist** — RSA-SHA256/384/512 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; an unknown signature algorithm or a malformed `ds:Signature` returns a clean error instead of crashing; RSA-SHA1 is rejected
 - **Namespace-conformant parsing** — XML is parsed with `namespace_conformant: true`
 - **Identity values read whole** — `NameID` and `AttributeValue` are read as the concatenation of their text nodes; an assertion whose `NameID` or `AttributeValue` contains a comment or a processing instruction is rejected with `:bad_assertion`
+- **Browser-bound sign-in** — A response is accepted only in the browser that started the flow: the session must name its `RelayState`, or, when the IdP's cross-site POST comes without the session cookie (`SameSite=Lax`), the `ExSaml.FlowCookie` that `ExSaml.AuthHandler` set must. The cookie is `SameSite=None; Secure` over HTTPS, directly or behind a proxy forwarding `x-forwarded-proto: https`, which is what lets the browser send it on that POST. IdP-initiated responses cannot be bound this way and are off by default (`allow_idp_initiated_flow: false`)
 - **Response validation** — `Issuer`, `InResponseTo`, `Destination`, `Audience`, `SessionNotOnOrAfter`, the bearer confirmation method and its `NotBefore` are checked on every response, and an assertion is accepted only once (see [Response validation checks](#response-validation-checks))
 - **Encrypted assertions** — AES-128/192/256 in GCM or CBC mode, with the key transported in RSA-OAEP (`rsa-oaep-mgf1p` or XML Encryption 1.1 `rsa-oaep`, with their digest, MGF and OAEP parameters). RSA-1_5 key transport is rejected unless an IdP is configured with `allow_rsa_1_5_key_transport: true`. When the IdP signs the Response (`signed_envelopes_in_resp: true`), its signature is verified before the assertion is decrypted. An AES-CBC assertion in a Response whose signature is not required is decrypted before anything is verified, which exposes a padding oracle: this is the `:unsigned_cbc` check (log-only by default, see [Response validation checks](#response-validation-checks)); an IdP that cannot encrypt with AES-GCM or sign the Response can be configured with `allow_unsigned_cbc: true`
 

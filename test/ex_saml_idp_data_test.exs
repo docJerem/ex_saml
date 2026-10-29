@@ -94,6 +94,7 @@ defmodule ExSamlIdpDataTest do
     assert idp_data.sign_metadata
     assert idp_data.signed_assertion_in_resp
     refute idp_data.signed_envelopes_in_resp
+    refute idp_data.allow_idp_initiated_flow
   end
 
   test "valid-idp-config-3", %{sps: sps} do
