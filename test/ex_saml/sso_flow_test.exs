@@ -200,6 +200,33 @@ defmodule ExSaml.SsoFlowTest do
 
   defp rejected_with(conn), do: get_session(conn, "ex_saml_error")
 
+  describe "authorization code redirect" do
+    test "the code is appended after the query the target URL already has" do
+      target_url = @target_url <> "?tenant=acme"
+
+      conn =
+        :get
+        |> session_conn("/sso/auth/#{@idp_id}", %{}, %{})
+        |> put_private(:ex_saml_target_url, target_url)
+        |> AuthHandler.request_idp(@idp_id)
+
+      relay_state = get_session(conn, "relay_state")
+      id = authn_request_id(relay_state)
+      body = %{"SAMLResponse" => saml_response(id), "RelayState" => relay_state}
+
+      session = %{
+        "relay_state" => relay_state,
+        "idp_id" => @idp_id,
+        "target_url" => target_url,
+        "authn_request_id" => id
+      }
+
+      conn = SPHandler.consume_signin_response(acs_conn(body, session))
+      assert conn.status == 302
+      assert location(conn) =~ "#{@target_url}?tenant=acme&code="
+    end
+  end
+
   describe "InResponseTo check end to end" do
     test "the AuthnRequest id is minted, stored and matched" do
       {conn, relay_state} = start_sso()

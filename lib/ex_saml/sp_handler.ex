@@ -27,7 +27,9 @@ defmodule ExSaml.SPHandler do
   alias ExSaml.Core.ValidationContext
 
   import ExSaml.Helper, only: [get_idp: 1]
-  import ExSaml.RouterUtil, only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3]
+
+  import ExSaml.RouterUtil,
+    only: [ensure_sp_uris_set: 2, send_saml_request: 5, redirect: 3, relative_path?: 1]
 
   @doc "Returns the SP metadata XML for the IdP in `conn.private[:ex_saml_idp]`."
   # metadata is generated from SP config by Helper.sp_metadata/1, not from user input.
@@ -190,7 +192,16 @@ defmodule ExSaml.SPHandler do
       saml_nonce_candidate: nonce
     })
 
-    redirect(conn, 302, "#{target_url}?code=#{code}")
+    redirect(conn, 302, with_code(target_url, code))
+  end
+
+  # The target URL with the authorization code in its query, after any query
+  # it already has.
+  defp with_code(target_url, code) do
+    target_url
+    |> URI.parse()
+    |> URI.append_query("code=" <> code)
+    |> URI.to_string()
   end
 
   defp redirect_with_error(conn, _, :invalid_target_url) do
@@ -245,14 +256,6 @@ defmodule ExSaml.SPHandler do
     [subject_value, Map.get(assertion, :response_in_response_to, "")]
     |> Enum.map(&to_string/1)
     |> Enum.reject(&(&1 == ""))
-  end
-
-  # A path on this host: a single leading `/`, no scheme or authority, and
-  # nothing a browser could read as one (backslashes, control characters).
-  defp relative_path?(url) do
-    String.starts_with?(url, "/") and not String.starts_with?(url, "//") and
-      not String.contains?(url, "\\") and not String.match?(url, ~r/[\x00-\x1F\x7F]/) and
-      match?(%URI{scheme: nil, host: nil}, URI.parse(url))
   end
 
   @doc false

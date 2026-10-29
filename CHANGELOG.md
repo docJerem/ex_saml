@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An IdP configured with both `signed_assertion_in_resp: false` and `signed_envelopes_in_resp: false` is invalid: it is logged as an error and skipped when the providers are loaded
 - `NameID` and each `AttributeValue` are read as the concatenation of their text nodes, so a value split across text and CDATA sections reads whole; a value split in several text nodes used to read as `""` for `NameID` and as a list of parts for an attribute
 - `ExSaml.SPHandler` rejects a sign-in with `:bad_name_id` when neither the `user_key_attribute` nor the NameID gives the user a non-blank key; it used to key every such user of the IdP on an empty NameID. The NameID itself stays optional: an assertion without one is accepted when it carries the `user_key_attribute`. A Subject/EncryptedID, which is not decrypted, is logged
+- The authorization code is appended to the target URL with `URI.append_query/2`: a target URL that already has a query string keeps it (`/cb?tenant=acme&code=…`) instead of getting a second `?`
 - IdP-initiated flow: when `allowed_target_urls` is not set, the RelayState is used as the redirect target only when it is a relative path (a single leading `/`, no scheme or host, no backslash or control character); any other value redirects to `/` and logs a warning. With `allowed_target_urls` set, nothing changes. An integration that relies on absolute RelayState targets in the IdP-initiated flow must list them in `allowed_target_urls`
 
 ### Security
@@ -53,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject an assertion whose `NameID` or `AttributeValue` contains an XML comment or a processing instruction (`:bad_assertion`)
 - Restrict the redirect target of the IdP-initiated flow to relative paths when `allowed_target_urls` is not set
 - Remove the `https://start-from:` RelayState redirect of the assertion consumer service: a `RelayState` containing `https://start-from:` was followed as a redirect target before any validation of the `SAMLResponse`, which made the ACS an open redirect for anyone who knew an IdP id. A `RelayState` is only ever read after the response is validated
+- The `target_url` parameter of `ExSaml.AuthRouter` (`/signin/:idp_id`, `/signout/:idp_id`) must be a relative path or one of the IdP's `allowed_target_urls`; any other value answers 400 `invalid target_url`. The authorization code is appended to it after the SAML exchange, so it used to be able to hand the code to any origin the caller named
 - `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :bad_signature}` for a `ds:Signature` that is not a well-formed XML-DSig — no exclusive-c14n `Transform`, several `Reference` elements, a `DigestValue`, `SignatureValue` or `X509Certificate` that does not decode — instead of raising. A crafted `SAMLResponse` could make the ACS answer 500 instead of redirecting with an error
 
 ## [1.2.0] - 2026-10-28

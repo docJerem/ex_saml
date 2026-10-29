@@ -38,9 +38,34 @@ defmodule ExSaml.RouterUtil do
     end
   end
 
+  @doc """
+  Reads the `target_url` parameter, the URL the browser is sent to after the
+  SAML exchange, into `conn.private[:ex_saml_target_url]`.
+
+  The value must be a relative path, or one of the IdP's `allowed_target_urls`
+  when the IdP is known (`conn.private[:ex_saml_idp]`); anything else answers
+  400. The authorization code is appended to it, so it must not point
+  anywhere the application does not control.
+  """
   def check_target_url(conn, _opts) do
-    target_url = conn.params["target_url"] && URI.decode_www_form(conn.params["target_url"])
-    conn |> Conn.put_private(:ex_saml_target_url, target_url)
+    case conn.params["target_url"] do
+      nil ->
+        Conn.put_private(conn, :ex_saml_target_url, nil)
+
+      raw ->
+        target_url = URI.decode_www_form(raw)
+
+        if target_url_allowed?(target_url, conn.private[:ex_saml_idp]) do
+          Conn.put_private(conn, :ex_saml_target_url, target_url)
+        else
+          Logger.error(
+            "[ExSaml] target_url must be a relative path or one of allowed_target_urls: " <>
+              inspect(target_url)
+          )
+
+          conn |> Conn.send_resp(400, "invalid target_url") |> Conn.halt()
+        end
+    end
   rescue
     ArgumentError ->
       Logger.error(
@@ -49,6 +74,28 @@ defmodule ExSaml.RouterUtil do
 
       conn |> Conn.send_resp(400, "target_url must be x-www-form-urlencoded") |> Conn.halt()
   end
+
+  @doc false
+  def target_url_allowed?(url, idp) when is_binary(url) do
+    relative_path?(url) or
+      (match?(%IdpData{allowed_target_urls: [_ | _]}, idp) and url in idp.allowed_target_urls)
+  end
+
+  def target_url_allowed?(_url, _idp), do: false
+
+  @doc """
+  Whether `url` is a path on this host: a single leading `/`, no scheme or
+  authority, and nothing a browser could read as one (backslashes, control
+  characters).
+  """
+  @spec relative_path?(String.t()) :: boolean()
+  def relative_path?(url) when is_binary(url) do
+    String.starts_with?(url, "/") and not String.starts_with?(url, "//") and
+      not String.contains?(url, "\\") and not String.match?(url, ~r/[\x00-\x1F\x7F]/) and
+      match?(%URI{scheme: nil, host: nil}, URI.parse(url))
+  end
+
+  def relative_path?(_), do: false
 
   # generate URIs using the idp_id
   @spec ensure_sp_uris_set(Core.SpConfig.t(), Conn.t()) :: Core.SpConfig.t()

@@ -167,6 +167,11 @@ This exposes:
 - `POST /sso/auth/signout/:idp_id` - Initiate sign-out
 - `POST /sso/csp-report` - CSP violation report endpoint
 
+The sign-in and sign-out routes take a `target_url` parameter
+(x-www-form-urlencoded), the URL the browser is sent to afterwards with the
+authorization code appended to its query. It must be a relative path, or one
+of the IdP's `allowed_target_urls`; anything else answers 400.
+
 SP endpoints (metadata, ACS, SLO) are configured via `ExSaml.Helper` URI builders and handled by `ExSaml.SPHandler`.
 
 ## Usage
