@@ -65,7 +65,6 @@ defmodule ExSaml.SsoFlowTest do
         consume_uri: @consume_uri,
         idp_signs_assertions: false,
         idp_signs_envelopes: false,
-        allow_unsigned: true,
         idp_entity_id: @idp_entity_id,
         idp_id: @idp_id
       }

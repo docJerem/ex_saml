@@ -27,7 +27,6 @@ defmodule ExSaml.Core.SpConfig do
             encrypt_mandatory: false,
             allow_rsa_1_5_key_transport: false,
             allow_unsigned_cbc: false,
-            allow_unsigned: false,
             entity_id: nil,
             idp_entity_id: nil,
             idp_id: nil
@@ -52,7 +51,6 @@ defmodule ExSaml.Core.SpConfig do
           encrypt_mandatory: boolean(),
           allow_rsa_1_5_key_transport: boolean(),
           allow_unsigned_cbc: boolean(),
-          allow_unsigned: boolean(),
           entity_id: String.t() | nil,
           idp_entity_id: String.t() | nil,
           idp_id: String.t() | nil

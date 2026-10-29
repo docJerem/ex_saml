@@ -55,6 +55,3 @@ msgstr "This response does not identify the user: the assertion has no NameID or
 
 msgid "unsigned_cbc"
 msgstr "The assertion is encrypted with AES-CBC in a Response the IdP does not sign. Configure the IdP to encrypt with AES-GCM or to sign the Response."
-
-msgid "unsigned_not_allowed"
-msgstr "This identity provider is configured to sign neither the assertion nor the Response, so its responses cannot be trusted. Configure the signature it sends."

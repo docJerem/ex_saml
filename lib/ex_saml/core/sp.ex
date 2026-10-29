@@ -291,8 +291,7 @@ defmodule ExSaml.Core.Sp do
 
     # The envelope signature is checked before an EncryptedAssertion is
     # decrypted, so an altered ciphertext is rejected without being decrypted.
-    with :ok <- check_signature_requirements(sp),
-         :ok <- check_status_code(xml, ns, success_status),
+    with :ok <- check_status_code(xml, ns, success_status),
          :ok <- verify_envelope_signature(xml, sp),
          {:ok, assertion_xml} <- extract_assertion(xml, ns, sp, ctx),
          :ok <- verify_assertion_signature(assertion_xml, sp),
@@ -315,31 +314,6 @@ defmodule ExSaml.Core.Sp do
   end
 
   # -- assertion validation helpers --
-
-  # A Response is trusted on the strength of a signature. A configuration that
-  # requires none is refused unless `allow_unsigned` says so, in which case
-  # every validation says, at error level, that it verified nothing.
-  defp check_signature_requirements(%SpConfig{
-         idp_signs_assertions: false,
-         idp_signs_envelopes: false,
-         allow_unsigned: allow_unsigned,
-         idp_id: idp_id
-       }) do
-    if allow_unsigned do
-      require Logger
-
-      Logger.error(
-        "[ExSaml] Response for identity provider #{inspect(idp_id)} accepted without any " <>
-          "signature (allow_unsigned: true): nothing authenticates this sign-in"
-      )
-
-      :ok
-    else
-      {:error, :unsigned_not_allowed}
-    end
-  end
-
-  defp check_signature_requirements(%SpConfig{}), do: :ok
 
   defp check_status_code(xml, ns, success_status) do
     case :xmerl_xpath.string(

@@ -23,7 +23,6 @@ defmodule ExSaml.IdpData do
             signed_envelopes_in_resp: false,
             allow_rsa_1_5_key_transport: false,
             allow_unsigned_cbc: false,
-            allow_unsigned: false,
             allow_idp_initiated_flow: false,
             use_redirect_for_slo: false,
             idp_signs_logout_responses: true,
@@ -56,7 +55,6 @@ defmodule ExSaml.IdpData do
           signed_envelopes_in_resp: boolean(),
           allow_rsa_1_5_key_transport: boolean(),
           allow_unsigned_cbc: boolean(),
-          allow_unsigned: boolean(),
           allow_idp_initiated_flow: boolean(),
           idp_signs_logout_responses: boolean(),
           allowed_target_urls: nil | [binary()],
@@ -147,7 +145,6 @@ defmodule ExSaml.IdpData do
     |> set_boolean_attr(opts_map, :signed_envelopes_in_resp)
     |> set_boolean_attr(opts_map, :allow_rsa_1_5_key_transport)
     |> set_boolean_attr(opts_map, :allow_unsigned_cbc)
-    |> set_boolean_attr(opts_map, :allow_unsigned)
     |> set_boolean_attr(opts_map, :allow_idp_initiated_flow)
     |> set_boolean_attr(opts_map, :idp_signs_logout_responses)
     |> set_boolean_attr(opts_map, :remove_saml_encoding)
@@ -212,31 +209,18 @@ defmodule ExSaml.IdpData do
   end
 
   # Responses are only trusted when signed: at least one of the assertion and
-  # the envelope must carry a signature. `allow_unsigned: true` loads the IdP
-  # anyway, with no security at all on its responses, and says so.
+  # the envelope must carry a signature.
   @spec signature_config_ok?(%IdpData{}) :: boolean
   defp signature_config_ok?(%IdpData{} = idp_data) do
-    cond do
-      idp_data.signed_assertion_in_resp || idp_data.signed_envelopes_in_resp ->
-        true
+    if idp_data.signed_assertion_in_resp || idp_data.signed_envelopes_in_resp do
+      true
+    else
+      Logger.error(
+        "[ExSaml] signed_assertion_in_resp and signed_envelopes_in_resp are both false - " <>
+          "Skipping identity provider: #{idp_data.id}"
+      )
 
-      idp_data.allow_unsigned ->
-        Logger.error(
-          "[ExSaml] signed_assertion_in_resp and signed_envelopes_in_resp are both false and " <>
-            "allow_unsigned is true: the responses of identity provider #{idp_data.id} are " <>
-            "accepted without any signature. Anyone who can post to its ACS can sign in as " <>
-            "any of its users"
-        )
-
-        true
-
-      true ->
-        Logger.error(
-          "[ExSaml] signed_assertion_in_resp and signed_envelopes_in_resp are both false - " <>
-            "Skipping identity provider: #{idp_data.id}"
-        )
-
-        false
+      false
     end
   end
 
@@ -327,7 +311,7 @@ defmodule ExSaml.IdpData do
   # and `signed_envelopes_in_resp` always keep their configured value.
   @spec set_boolean_attr(%IdpData{}, map(), atom()) :: %IdpData{}
   defp set_boolean_attr(%IdpData{} = idp_data, %{provider_type: :adfs}, attr_name)
-       when attr_name not in ~w(allow_idp_initiated_flow use_redirect_for_slo signed_assertion_in_resp signed_envelopes_in_resp idp_signs_logout_responses allow_unsigned_cbc allow_unsigned)a do
+       when attr_name not in ~w(allow_idp_initiated_flow use_redirect_for_slo signed_assertion_in_resp signed_envelopes_in_resp idp_signs_logout_responses allow_unsigned_cbc)a do
     Map.put(idp_data, attr_name, false)
   end
 
@@ -453,7 +437,6 @@ defmodule ExSaml.IdpData do
       idp_signs_logout_responses: idp_data.idp_signs_logout_responses,
       allow_rsa_1_5_key_transport: idp_data.allow_rsa_1_5_key_transport,
       allow_unsigned_cbc: idp_data.allow_unsigned_cbc,
-      allow_unsigned: idp_data.allow_unsigned,
       trusted_fingerprints: idp_data.fingerprints,
       # DER, for a Signature that carries no certificate of its own.
       trusted_certs: Enum.map(idp_data.certs, &Base.decode64!/1),

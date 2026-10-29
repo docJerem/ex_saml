@@ -79,7 +79,6 @@ defmodule ExSaml.Core.SpEncryptedAssertionTest do
         key: key,
         idp_signs_assertions: false,
         idp_signs_envelopes: false,
-        allow_unsigned: true,
         org: %Org{name: "Test Org", displayname: "Test Org", url: "https://example.com"},
         tech: %Contact{name: "Admin", email: "admin@example.com"}
       },

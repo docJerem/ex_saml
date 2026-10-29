@@ -169,28 +169,6 @@ defmodule ExSamlIdpDataTest do
     refute idp_data.sp_config.idp_signs_logout_responses
   end
 
-  test "allow_unsigned loads an IdP that requires no signature, and says so", %{sps: sps} do
-    idp_config =
-      Map.merge(@idp_config1, %{
-        signed_assertion_in_resp: false,
-        signed_envelopes_in_resp: false,
-        allow_unsigned: true
-      })
-
-    log =
-      capture_log(fn ->
-        %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-        assert idp_data.valid?
-        assert idp_data.allow_unsigned
-        assert idp_data.sp_config.allow_unsigned
-        refute idp_data.sp_config.idp_signs_assertions
-        refute idp_data.sp_config.idp_signs_envelopes
-      end)
-
-    assert log =~ "accepted without any signature"
-    refute log =~ "Skipping identity provider"
-  end
-
   test "an IdP that requires only the envelope signature is valid", %{sps: sps} do
     idp_config =
       Map.merge(@idp_config1, %{signed_assertion_in_resp: false, signed_envelopes_in_resp: true})
