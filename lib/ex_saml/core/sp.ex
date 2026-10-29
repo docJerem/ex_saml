@@ -23,6 +23,8 @@ defmodule ExSaml.Core.Sp do
     Record.extract(:xmlNamespace, from_lib: "xmerl/include/xmerl.hrl")
   )
 
+  require Logger
+
   alias ExSaml.Core.{
     AuthnRequest,
     LogoutRequest,
@@ -299,9 +301,26 @@ defmodule ExSaml.Core.Sp do
          :ok <- check_destination(xml, ctx),
          {:ok, assertion} <- Saml.validate_assertion(assertion_xml, ctx),
          :ok <- check_duplicate(assertion, xml, duplicate_fun) do
+      warn_unsigned(sp)
       {:ok, %{assertion | response_in_response_to: response_in_response_to(xml, ns)}}
     end
   end
+
+  # A Response is trusted on the strength of a signature. A configuration that
+  # requires none accepts the response unverified: every such sign-in says so
+  # at error level.
+  defp warn_unsigned(%SpConfig{
+         idp_signs_assertions: false,
+         idp_signs_envelopes: false,
+         idp_id: idp_id
+       }) do
+    Logger.error(
+      "[ExSaml] Response for identity provider #{inspect(idp_id)} accepted without any " <>
+        "signature: nothing authenticates this sign-in"
+    )
+  end
+
+  defp warn_unsigned(%SpConfig{}), do: :ok
 
   # `Response/@InResponseTo` (Core §3.2.2), `""` when absent. The consumer
   # matches it, like `SubjectConfirmationData/@InResponseTo`, against the

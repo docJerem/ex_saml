@@ -186,10 +186,7 @@ defmodule ExSaml.IdpData do
         idp_data = %IdpData{idp_data | idp_metadata: build_idp_metadata(idp_data, opts_map)}
         idp_data = %IdpData{idp_data | sp_config: build_sp_config(sp, idp_data)}
 
-        %IdpData{
-          idp_data
-          | valid?: cert_config_ok?(idp_data, sp) and signature_config_ok?(idp_data)
-        }
+        warn_unsigned(%IdpData{idp_data | valid?: cert_config_ok?(idp_data, sp)})
 
       _ ->
         Logger.error("[ExSaml] Unknown/invalid sp_id: #{idp_data.sp_id}")
@@ -208,21 +205,24 @@ defmodule ExSaml.IdpData do
     end
   end
 
-  # Responses are only trusted when signed: at least one of the assertion and
-  # the envelope must carry a signature.
-  @spec signature_config_ok?(%IdpData{}) :: boolean
-  defp signature_config_ok?(%IdpData{} = idp_data) do
-    if idp_data.signed_assertion_in_resp || idp_data.signed_envelopes_in_resp do
-      true
-    else
-      Logger.error(
-        "[ExSaml] signed_assertion_in_resp and signed_envelopes_in_resp are both false - " <>
-          "Skipping identity provider: #{idp_data.id}"
-      )
+  # Responses are trusted on the strength of a signature. An IdP that requires
+  # neither the assertion nor the envelope signature is loaded as configured,
+  # and its responses are then accepted with no signature verified at all:
+  # said here at error level, and on every sign-in by `ExSaml.Core.Sp`.
+  @spec warn_unsigned(%IdpData{}) :: %IdpData{}
+  defp warn_unsigned(
+         %IdpData{signed_assertion_in_resp: false, signed_envelopes_in_resp: false} = idp_data
+       ) do
+    Logger.error(
+      "[ExSaml] signed_assertion_in_resp and signed_envelopes_in_resp are both false: the " <>
+        "responses of identity provider #{idp_data.id} are accepted without any signature. " <>
+        "Anyone who can post to its ACS can sign in as any of its users"
+    )
 
-      false
-    end
+    idp_data
   end
+
+  defp warn_unsigned(%IdpData{} = idp_data), do: idp_data
 
   @spec verify_slo_url(%IdpData{}) :: %IdpData{}
   defp verify_slo_url(%IdpData{} = idp_data) do

@@ -138,18 +138,21 @@ defmodule ExSamlIdpDataTest do
     assert log =~ "signed_assertion_in_resp and signed_envelopes_in_resp are both false"
   end
 
-  test "an IdP that requires no signature on its responses is invalid", %{sps: sps} do
+  test "an IdP that requires no signature on its responses is loaded, and says so", %{sps: sps} do
     idp_config =
       Map.merge(@idp_config1, %{signed_assertion_in_resp: false, signed_envelopes_in_resp: false})
 
     log =
       capture_log(fn ->
         %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
-        refute idp_data.valid?
-        assert IdpData.load_providers([idp_config], sps) == %{}
+        assert idp_data.valid?
+        refute idp_data.sp_config.idp_signs_assertions
+        refute idp_data.sp_config.idp_signs_envelopes
+        assert %{"idp1" => %IdpData{}} = IdpData.load_providers([idp_config], sps)
       end)
 
-    assert log =~ "Skipping identity provider: idp1"
+    assert log =~ "responses of identity provider idp1 are accepted without any signature"
+    refute log =~ "Skipping identity provider"
   end
 
   test "the IdP metadata certificates are the SP's trusted_certs, in DER", %{sps: sps} do

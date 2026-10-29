@@ -102,9 +102,12 @@ otherwise. Set it to another attribute name, or to `nil` to key on the NameID
 only. A sign-in for which neither gives a non-blank value is rejected with
 `:bad_name_id`.
 
-At least one of `signed_assertion_in_resp` and `signed_envelopes_in_resp` must
-be `true`: an IdP configured with both set to `false` is logged as an error and
-skipped. `provider_type` never changes these two options.
+`provider_type` never changes `signed_assertion_in_resp` and
+`signed_envelopes_in_resp`. An IdP configured with both set to `false` is
+loaded as configured, and its responses are then accepted with no signature
+verified at all, so anyone who can post to its ACS can sign in as any of its
+users: an error is logged when the IdP is loaded and on every sign-in. Set at
+least one of the two to `true` as soon as the IdP signs.
 
 ### State Store
 

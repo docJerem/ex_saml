@@ -384,6 +384,31 @@ defmodule ExSaml.Core.ResponseValidationTest do
     )
   end
 
+  describe "a configuration that requires no signature" do
+    test "every accepted response logs that nothing was verified" do
+      log =
+        capture_log(fn ->
+          assert {:ok, _} = Sp.validate_assertion(response_xml(@idp_entity_id), unsigned_sp())
+        end)
+
+      assert log =~
+               ~s([ExSaml] Response for identity provider "idp-1" accepted without any signature)
+    end
+
+    test "a rejected response does not" do
+      log =
+        capture_log(fn ->
+          assert {:error, :bad_issuer} =
+                   Sp.validate_assertion(
+                     response_xml("https://other-idp.example.com"),
+                     unsigned_sp()
+                   )
+        end)
+
+      refute log =~ "accepted without any signature"
+    end
+  end
+
   describe ":bad_issuer on the response envelope" do
     test "a matching response issuer passes" do
       assert {:ok, _} = Sp.validate_assertion(response_xml(@idp_entity_id), unsigned_sp())
