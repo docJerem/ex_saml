@@ -610,13 +610,13 @@ defmodule ExSaml.Core.Xml.DsigTest do
           rsa_sha384: :rsa_sha512,
           rsa_sha256: :rsa_sha512
         ] do
-      # The Reference is digested with the claimed method's hash, so the
-      # DigestValue no longer matches.
-      test "#{signed_with} relabelled #{claimed} is rejected with :bad_digest" do
+      # The Reference is still digested with its own DigestMethod, so the
+      # digest matches, but the SignatureValue no longer covers the SignedInfo.
+      test "#{signed_with} relabelled #{claimed} is rejected with :bad_signature" do
         {key, cert_bin} = test_sign_256_key()
         {_, _, claimed_uri} = Dsig.signature_props(unquote(claimed))
 
-        assert {:error, :bad_digest} =
+        assert {:error, :bad_signature} =
                  key
                  |> signed_foo(cert_bin, unquote(signed_with))
                  |> with_signature_method(claimed_uri)
@@ -649,6 +649,115 @@ defmodule ExSaml.Core.Xml.DsigTest do
         end)
 
       assert log =~ "rsa-sha224"
+    end
+  end
+
+  describe "the DigestMethod of a Reference" do
+    import ExUnit.CaptureLog
+
+    # Rewrites the signed document, then signs its SignedInfo again with
+    # `method`, as an IdP pairing that SignatureMethod with the DigestMethod
+    # left in the Reference would.
+    defp resigned(signed_xml, key, method, rewrite) do
+      rewritten = signed_xml |> to_xml_string() |> rewrite.() |> parse_xml()
+      {hash, _, _} = Dsig.signature_props(method)
+
+      key_algorithm =
+        if Dsig.Ecdsa.private_key?(key), do: Dsig.Ecdsa, else: Dsig.Rsa
+
+      signature = rewritten |> signed_info_bytes() |> key_algorithm.sign(hash, key)
+
+      rewritten
+      |> to_xml_string()
+      |> String.replace(
+        ~r|<ds:SignatureValue>[^<]*</ds:SignatureValue>|,
+        "<ds:SignatureValue>#{Base.encode64(signature)}</ds:SignatureValue>"
+      )
+      |> parse_xml()
+    end
+
+    defp with_digest_method(xml, digest_uri) do
+      String.replace(
+        xml,
+        ~r|<ds:DigestMethod Algorithm="[^"]+"|,
+        ~s|<ds:DigestMethod Algorithm="#{digest_uri}"|
+      )
+    end
+
+    for {digested_with, signed_with, key} <- [
+          {:rsa_sha256, :rsa_sha512, :rsa},
+          {:rsa_sha256, :rsa_sha384, :rsa},
+          {:rsa_sha512, :rsa_sha256, :rsa},
+          {:ecdsa_sha256, :ecdsa_sha384, :secp384r1},
+          {:ecdsa_sha512, :ecdsa_sha256, :secp521r1}
+        ] do
+      test "a #{digested_with} digest under a #{signed_with} signature verifies" do
+        {key, cert_bin} =
+          if unquote(key) == :rsa, do: test_sign_256_key(), else: ec_key(unquote(key))
+
+        {_, _, method_uri} = Dsig.signature_props(unquote(signed_with))
+
+        mixed =
+          key
+          |> signed_foo(cert_bin, unquote(digested_with))
+          |> resigned(key, unquote(signed_with), fn xml ->
+            String.replace(
+              xml,
+              ~r|<ds:SignatureMethod Algorithm="[^"]+"|,
+              ~s|<ds:SignatureMethod Algorithm="#{method_uri}"|
+            )
+          end)
+
+        assert :ok = Dsig.verify(mixed, [{:sha256, :crypto.hash(:sha256, cert_bin)}])
+
+        tampered =
+          mixed
+          |> to_xml_string()
+          |> String.replace("<x:name>blah</x:name>", "<x:name>b1ah</x:name>")
+          |> parse_xml()
+
+        assert {:error, :bad_digest} = Dsig.verify(tampered)
+      end
+    end
+
+    test "a SHA1 digest is rejected as insecure" do
+      {key, cert_bin} = test_sign_256_key()
+
+      sha1_digest =
+        key
+        |> signed_foo(cert_bin, :rsa_sha256)
+        |> resigned(
+          key,
+          :rsa_sha256,
+          &with_digest_method(&1, "http://www.w3.org/2000/09/xmldsig#sha1")
+        )
+
+      log =
+        capture_log(fn ->
+          assert {:error, :insecure_algorithm} = Dsig.verify(sha1_digest)
+        end)
+
+      assert log =~ "SHA1 digest rejected"
+    end
+
+    test "an unknown digest is rejected as unsupported" do
+      {key, cert_bin} = test_sign_256_key()
+
+      unknown_digest =
+        key
+        |> signed_foo(cert_bin, :rsa_sha256)
+        |> resigned(
+          key,
+          :rsa_sha256,
+          &with_digest_method(&1, "http://www.w3.org/2001/04/xmldsig-more#md5")
+        )
+
+      log =
+        capture_log(fn ->
+          assert {:error, :unsupported_algorithm} = Dsig.verify(unknown_digest)
+        end)
+
+      assert log =~ "xmldsig-more#md5"
     end
   end
 

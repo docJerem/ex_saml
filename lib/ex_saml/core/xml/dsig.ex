@@ -7,6 +7,9 @@ defmodule ExSaml.Core.Xml.Dsig do
 
   Currently supports RSA + SHA1|SHA256|SHA384|SHA512 and
   ECDSA + SHA256|SHA384|SHA512 signatures. RSA-SHA1 is rejected on verification.
+  The `Reference` is digested with the hash its `DigestMethod` names
+  (SHA256|SHA384|SHA512), which need not be the signature method's; a SHA1
+  digest is rejected on verification.
 
   This module owns the XML side: canonicalization, the `Reference` digest,
   the `ds:Signature` structure and the certificate. Producing and checking
@@ -121,6 +124,15 @@ defmodule ExSaml.Core.Xml.Dsig do
     ecdsa_sha384: {:sha384, @digest_sha384, @ecdsa_sha384, Ecdsa},
     ecdsa_sha512: {:sha512, @digest_sha512, @ecdsa_sha512, Ecdsa}
   ]
+
+  # The hash function of each DigestMethod URI. The Reference is digested with
+  # the hash its own DigestMethod names, which need not be the SignatureMethod's.
+  @digest_by_uri %{
+    @digest_sha1 => :sha,
+    @digest_sha256 => :sha256,
+    @digest_sha384 => :sha384,
+    @digest_sha512 => :sha512
+  }
 
   @method_by_name Enum.reduce(@methods, %{}, fn {name, {_, _, uri, _} = row}, acc ->
                     acc
@@ -423,13 +435,47 @@ defmodule ExSaml.Core.Xml.Dsig do
     end
   end
 
-  defp do_verify(element, fingerprints, {hash_function, _} = method, ds_ns) do
-    incl_ns = extract_inclusive_ns(element, ds_ns)
-    computed_digest = compute_digest(element, hash_function, incl_ns)
-    expected_digest = extract_expected_digest(element, ds_ns)
-
-    with :ok <- verify_digest(computed_digest, expected_digest) do
+  defp do_verify(element, fingerprints, method, ds_ns) do
+    with {:ok, digest_function} <- extract_digest_function(element, ds_ns),
+         incl_ns = extract_inclusive_ns(element, ds_ns),
+         computed_digest = compute_digest(element, digest_function, incl_ns),
+         expected_digest = extract_expected_digest(element, ds_ns),
+         :ok <- verify_digest(computed_digest, expected_digest) do
       verify_signature(element, method, ds_ns, fingerprints)
+    end
+  end
+
+  defp extract_digest_function(element, ds_ns) do
+    case :xmerl_xpath.string(
+           ~c"ds:Signature/ds:SignedInfo/ds:Reference/ds:DigestMethod/@Algorithm",
+           element,
+           namespace: ds_ns
+         ) do
+      [algo_attr] when Record.is_record(algo_attr, :xmlAttribute) ->
+        algo = algo_attr |> xmlAttribute(:value) |> to_string()
+
+        case Map.fetch(@digest_by_uri, algo) do
+          {:ok, :sha} ->
+            require Logger
+
+            Logger.error(
+              "[ExSaml.Core] SHA1 digest rejected: algorithm is cryptographically broken. " <>
+                "The IdP must be configured to use SHA256 or stronger."
+            )
+
+            {:error, :insecure_algorithm}
+
+          {:ok, digest_function} ->
+            {:ok, digest_function}
+
+          :error ->
+            require Logger
+            Logger.error("[ExSaml.Core] Unsupported digest algorithm: #{algo}")
+            {:error, :unsupported_algorithm}
+        end
+
+      _ ->
+        {:error, :unsupported_algorithm}
     end
   end
 

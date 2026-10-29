@@ -214,7 +214,7 @@ ExSaml includes hardened defaults for SAML processing:
 
 - **XXE protection** — All XML parsing uses `allow_entities: false` ([CVE-2026-28809](https://cna.erlef.org/cves/CVE-2026-28809.html))
 - **NotBefore validation** — Assertions are rejected if issued in the future (with 5s clock skew tolerance)
-- **Algorithm whitelist** — RSA-SHA256/384/512 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; unknown signature algorithms return a clean error instead of crashing; RSA-SHA1 is rejected
+- **Algorithm whitelist** — RSA-SHA256/384/512 and ECDSA-SHA256/384/512 (P-256, P-384, P-521) are accepted; the Reference digest may be any of SHA256/384/512, whatever the signature method; unknown signature or digest algorithms return a clean error instead of crashing; RSA-SHA1 signatures and SHA1 digests are rejected
 - **Namespace-conformant parsing** — All `xmerl_scan` calls enforce `namespace_conformant: true`
 
 To report a security issue, email security@cryptr.co.
