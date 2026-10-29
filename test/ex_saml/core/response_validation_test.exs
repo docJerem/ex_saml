@@ -378,10 +378,31 @@ defmodule ExSaml.Core.ResponseValidationTest do
         idp_entity_id: @idp_entity_id,
         idp_id: "idp-1",
         idp_signs_assertions: false,
-        idp_signs_envelopes: false
+        idp_signs_envelopes: false,
+        allow_unsigned: true
       },
       overrides
     )
+  end
+
+  describe "allow_unsigned" do
+    test "a configuration requiring no signature is refused by default" do
+      assert {:error, :unsigned_not_allowed} =
+               Sp.validate_assertion(
+                 response_xml(@idp_entity_id),
+                 unsigned_sp(allow_unsigned: false)
+               )
+    end
+
+    test "with allow_unsigned every validation logs that nothing was verified" do
+      log =
+        capture_log(fn ->
+          assert {:ok, _} = Sp.validate_assertion(response_xml(@idp_entity_id), unsigned_sp())
+        end)
+
+      assert log =~
+               ~s([ExSaml] Response for identity provider "idp-1" accepted without any signature)
+    end
   end
 
   describe ":bad_issuer on the response envelope" do

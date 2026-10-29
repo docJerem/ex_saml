@@ -105,6 +105,12 @@ At least one of `signed_assertion_in_resp` and `signed_envelopes_in_resp` must
 be `true`: an IdP configured with both set to `false` is logged as an error and
 skipped. `provider_type` never changes these two options.
 
+`allow_unsigned: true` loads such an IdP anyway. Its responses are then
+accepted with no signature verified at all, so anyone who can post to its ACS
+can sign in as any of its users: an error is logged when the IdP is loaded and
+on every sign-in. It exists to keep an IdP that cannot sign working while it
+is fixed, nothing else.
+
 ### State Store
 
 Choose where authenticated assertions are stored:
