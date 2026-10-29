@@ -142,6 +142,18 @@ defmodule ExSaml.Core.Xml.SafeXml do
   end
 
   @doc """
+  The atom budget of this node: the units drawn so far and the configured
+  `:max_new_atoms`, for a metric or a health check. The budget never
+  replenishes, so `used` only grows until the node restarts; a `used` that
+  climbs towards `max` is worth an alert before documents start being
+  rejected.
+  """
+  @spec atom_budget() :: %{used: non_neg_integer(), max: non_neg_integer()}
+  def atom_budget do
+    %{used: AtomBudget.used(), max: AtomBudget.max_new_atoms(config())}
+  end
+
+  @doc """
   Inflate a raw DEFLATE stream (RFC 1951), as carried by the SAML
   HTTP-Redirect binding, without producing more than `:max_document_size`
   bytes.

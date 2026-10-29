@@ -7,6 +7,12 @@ defmodule ExSaml.Core.Xml.SafeXmlTest do
   alias ExSaml.Core.Xml.SafeXml
   alias ExSaml.Core.Xml.SafeXml.{AtomBudget, KnownNames, Prescan}
 
+  test "atom_budget/0 reports the units drawn and the maximum" do
+    assert %{used: used, max: max} = SafeXml.atom_budget()
+    assert used == AtomBudget.used()
+    assert is_integer(max) and max >= used
+  end
+
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))

@@ -126,7 +126,8 @@ defmodule ExSaml.Core.Xml.SafeXml.AtomBudget do
 
   defp counter, do: :persistent_term.get(@key, nil) || init()
 
-  defp max_new_atoms(config) do
+  @doc false
+  def max_new_atoms(config) do
     case Keyword.get(config, :max_new_atoms, @default_max_new_atoms) do
       n when is_integer(n) and n >= 0 -> n
       _ -> @default_max_new_atoms

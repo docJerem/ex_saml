@@ -289,7 +289,10 @@ draws from it the first time each name is seen; declare them with
 `:extra_prefixes` / `:extra_names` to make them independent of the budget.
 When the budget is spent, documents introducing new names are rejected
 (`kind: :rejected, payload: :atom_budget_exhausted` in the `:on_error` hook)
-and a warning is logged once.
+and a warning is logged once. The budget never replenishes before the node
+restarts: `ExSaml.Core.Xml.SafeXml.atom_budget/0` returns `%{used: …, max: …}`
+for a metric or a health check, so the budget can be watched before it runs
+out.
 
 ### Response validation checks
 
