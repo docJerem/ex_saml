@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `ExSaml.Core.Xml.Dsig.verify/2` digests the `Reference` with the hash its `DigestMethod` names, as XML-DSig requires, instead of the signature method's. A signature pairing different hashes, such as `rsa-sha512` or `ecdsa-sha384` over a `sha256` digest (what an IdP whose signer takes the signature and digest algorithms as separate settings, such as one built on xmlsec, produces when only the former is raised), was rejected with `:bad_digest`. A `sha1` `DigestMethod` is rejected with `:insecure_algorithm`, like `rsa-sha1`, and an unknown one with `:unsupported_algorithm`; both used to fail with `:bad_digest`. A `SignatureMethod` rewritten after signing is now rejected with `:bad_signature` rather than `:bad_digest`
+
 ## [1.2.0] - 2026-10-28
 
 ### Added
