@@ -90,8 +90,7 @@ defmodule ExSaml.SPHandler do
     rls = conn.body_params["RelayState"] || Map.get(conn.params, "RelayState")
     relay_state = safe_decode_www_form(rls)
 
-    with :ok <- maybe_redirect_to_start_url(conn, rls),
-         {:ok, %{assertion: assertion, nonce: nonce}} <-
+    with {:ok, %{assertion: assertion, nonce: nonce}} <-
            consume_signin_response(conn, idp_data),
          {:ok, user_key} <- user_key(assertion, idp_data) do
       assertion_key = {idp_data.id, user_key}
@@ -102,9 +101,6 @@ defmodule ExSaml.SPHandler do
 
       redirect_with_authorization_code(conn, target_url, assertion_key, nonce)
     else
-      {:halted, conn} ->
-        conn
-
       {:error, error} ->
         redirect_with_error(conn, relay_state, error)
 
@@ -166,16 +162,6 @@ defmodule ExSaml.SPHandler do
 
   defp user_key_attribute(%{attributes: attributes}, %IdpData{user_key_attribute: attr}),
     do: Map.get(attributes, attr)
-
-  defp maybe_redirect_to_start_url(_, nil), do: :ok
-
-  defp maybe_redirect_to_start_url(conn, rls) do
-    if String.contains?(rls, "https://start-from:") do
-      {:halted, redirect(conn, 302, String.replace(rls, "start-from:", ""))}
-    else
-      :ok
-    end
-  end
 
   defp redirect_with_authorization_code(conn, target_url, assertion_key, nonce) do
     code = State.gen_id()

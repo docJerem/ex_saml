@@ -369,6 +369,22 @@ defmodule ExSaml.SsoFlowTest do
     end
   end
 
+  # The RelayState is never followed before the SAMLResponse is validated: a
+  # `https://start-from:` RelayState used to be redirected to as-is, before any
+  # check of the response.
+  describe "RelayState before validation" do
+    test "an invalid response is not redirected to a start-from RelayState" do
+      relay_state = "https://start-from:evil.example/phish"
+      body = %{"SAMLResponse" => "not a response", "RelayState" => relay_state}
+
+      conn = SPHandler.consume_signin_response(acs_conn(body, %{}))
+
+      assert conn.status == 302
+      assert location(conn) == "/"
+      assert {:error, {:invalid_response, _}} = rejected_with(conn)
+    end
+  end
+
   # The assertion is keyed on the value of the IdP's `user_key_attribute` when
   # the assertion carries it, on the NameID otherwise.
   describe "user key" do

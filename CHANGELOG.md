@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Require a signature on every Response: `provider_type` no longer turns off the configured signature requirements, and an IdP that requires neither an assertion nor an envelope signature is rejected at load
 - Reject an assertion whose `NameID` or `AttributeValue` contains an XML comment or a processing instruction (`:bad_assertion`)
 - Restrict the redirect target of the IdP-initiated flow to relative paths when `allowed_target_urls` is not set
+- Remove the `https://start-from:` RelayState redirect of the assertion consumer service: a `RelayState` containing `https://start-from:` was followed as a redirect target before any validation of the `SAMLResponse`, which made the ACS an open redirect for anyone who knew an IdP id. A `RelayState` is only ever read after the response is validated
 
 ## [1.2.0] - 2026-10-28
 
