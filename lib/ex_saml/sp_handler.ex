@@ -153,15 +153,34 @@ defmodule ExSaml.SPHandler do
   end
 
   defp present(value) when is_binary(value), do: if(String.trim(value) != "", do: value)
-  defp present([_ | _] = values), do: values
   defp present(_), do: nil
 
   # The value of the IdP's `user_key_attribute`, which keys the assertion
-  # instead of the NameID when the assertion carries it.
+  # instead of the NameID when the assertion carries it. A key is one value:
+  # when the IdP sends several, the first one keys the user, so the key stays
+  # a binary that the logout request's NameID can match.
   defp user_key_attribute(_assertion, %IdpData{user_key_attribute: nil}), do: nil
 
-  defp user_key_attribute(%{attributes: attributes}, %IdpData{user_key_attribute: attr}),
-    do: Map.get(attributes, attr)
+  defp user_key_attribute(%{attributes: attributes}, %IdpData{
+         id: idp_id,
+         user_key_attribute: attr
+       }) do
+    case Map.get(attributes, attr) do
+      [first | rest] = values when rest != [] ->
+        Logger.warning(
+          "[ExSaml] user_key_attribute #{inspect(attr)} of #{inspect(idp_id)} has " <>
+            "#{length(values)} values: keying the user on the first one"
+        )
+
+        first
+
+      [first] ->
+        first
+
+      value ->
+        value
+    end
+  end
 
   defp redirect_with_authorization_code(conn, target_url, assertion_key, nonce) do
     code = State.gen_id()

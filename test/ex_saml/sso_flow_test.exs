@@ -116,10 +116,12 @@ defmodule ExSaml.SsoFlowTest do
         else: ""
 
     attributes_el =
-      for {name, value} <- Keyword.get(opts, :attributes, []),
-          into: "",
-          do:
-            ~s(<saml:Attribute Name="#{name}"><saml:AttributeValue>#{value}</saml:AttributeValue></saml:Attribute>)
+      for {name, value} <- Keyword.get(opts, :attributes, []), into: "" do
+        values_el =
+          Enum.map_join(List.wrap(value), &"<saml:AttributeValue>#{&1}</saml:AttributeValue>")
+
+        ~s(<saml:Attribute Name="#{name}">#{values_el}</saml:Attribute>)
+      end
 
     Base.encode64("""
     <samlp:Response #{@ns} ID="_r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z"#{dest_attr}#{resp_irt_attr}>
@@ -476,6 +478,16 @@ defmodule ExSaml.SsoFlowTest do
 
     test "is the NameID when the attribute is blank" do
       assert sign_in_key([], attributes: [{"idp_user_id", " "}]) == {@idp_id, "jane@corp.com"}
+    end
+
+    test "is the first value of a multi-valued attribute, and logs it" do
+      log =
+        capture_log(fn ->
+          assert sign_in_key([], attributes: [{"idp_user_id", ["u-1", "u-2"]}]) ==
+                   {@idp_id, "u-1"}
+        end)
+
+      assert log =~ ~s(user_key_attribute "idp_user_id" of "acme" has 2 values)
     end
 
     # An empty key would key every user of the IdP the same. One sign-in per
