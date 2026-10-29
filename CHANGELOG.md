@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `target_url` parameter of `ExSaml.AuthRouter` (`/signin/:idp_id`, `/signout/:idp_id`) must be a relative path or one of the IdP's `allowed_target_urls`; any other value answers 400 `invalid target_url`. The authorization code is appended to it after the SAML exchange, so it used to be able to hand the code to any origin the caller named
 - `ExSaml.Core.Xml.Dsig.verify/2` returns `{:error, :bad_signature}` for a `ds:Signature` that is not a well-formed XML-DSig — no exclusive-c14n `Transform`, several `Reference` elements, a `DigestValue`, `SignatureValue` or `X509Certificate` that does not decode — instead of raising. A crafted `SAMLResponse` could make the ACS answer 500 instead of redirecting with an error
 
+### Removed
+
+- `ExSaml.Core.Util.load_metadata/1` and `load_metadata/2`, which fetched IdP metadata over `:httpc` without TLS verification and without the signature check their second argument promised. Nothing in the library called them; IdP metadata is loaded from `metadata` or `metadata_file` in the IdP configuration. The `:ex_saml_core_idp_meta_cache` ETS table and the `:inets` application dependency go with them
+
 ## [1.2.0] - 2026-10-28
 
 ### Added

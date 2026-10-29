@@ -5,8 +5,7 @@ defmodule ExSaml.Core.TableOwner do
   @tables [
     :ex_saml_core_assertion_seen,
     :ex_saml_core_privkey_cache,
-    :ex_saml_core_certbin_cache,
-    :ex_saml_core_idp_meta_cache
+    :ex_saml_core_certbin_cache
   ]
 
   def start_link(opts \\ []) do

@@ -404,66 +404,6 @@ defmodule ExSaml.Core.Util do
   end
 
   # ---------------------------------------------------------------------------
-  # Metadata loading
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Fetches IdP metadata XML from the given URL via `:httpc`.
-
-  The raw XML binary is cached in the `:ex_saml_core_idp_meta_cache` ETS table.
-
-  Returns `{:ok, xml_binary}` or `{:error, reason}`.
-  """
-  @spec load_metadata(String.t() | charlist()) :: {:ok, binary()} | {:error, term()}
-  def load_metadata(url) do
-    url_charlist = to_charlist_url(url)
-
-    case :ets.lookup(:ex_saml_core_idp_meta_cache, url_charlist) do
-      [{^url_charlist, xml}] ->
-        {:ok, xml}
-
-      [] ->
-        _ = ensure_httpc_started()
-
-        case :httpc.request(:get, {url_charlist, []}, [{:autoredirect, true}], []) do
-          {:ok, {{_http_ver, 200, _reason}, _headers, body}} ->
-            xml = :erlang.iolist_to_binary(body)
-            :ets.insert(:ex_saml_core_idp_meta_cache, {url_charlist, xml})
-            {:ok, xml}
-
-          {:ok, {{_http_ver, status, reason}, _headers, _body}} ->
-            {:error, {:http, status, reason}}
-
-          {:error, reason} ->
-            {:error, {:httpc, reason}}
-        end
-    end
-  end
-
-  @doc """
-  Fetches IdP metadata XML from the given URL and verifies its XML signature
-  using the provided fingerprints.
-
-  This is a structural port — signature verification will be refined later.
-  Returns `{:ok, xml_binary}` or `{:error, reason}`.
-  """
-  @spec load_metadata(String.t() | charlist(), [binary() | {atom(), binary()}]) ::
-          {:ok, binary()} | {:error, term()}
-  def load_metadata(url, _fingerprints) do
-    # Signature verification against fingerprints will be added in Phase 2 (security fixes)
-    load_metadata(url)
-  end
-
-  defp ensure_httpc_started do
-    {:ok, _} = Application.ensure_all_started(:inets)
-    {:ok, _} = Application.ensure_all_started(:ssl)
-    :ok
-  end
-
-  defp to_charlist_url(url) when is_binary(url), do: String.to_charlist(url)
-  defp to_charlist_url(url) when is_list(url), do: url
-
-  # ---------------------------------------------------------------------------
   # Duplicate assertion checking
   # ---------------------------------------------------------------------------
 

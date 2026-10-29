@@ -28,7 +28,7 @@ defmodule ExSaml.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger, :xmerl, :crypto, :public_key, :inets],
+      extra_applications: [:logger, :xmerl, :crypto, :public_key],
       mod: {ExSaml.Application, []}
     ]
   end
