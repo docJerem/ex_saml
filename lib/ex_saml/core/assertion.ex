@@ -11,7 +11,10 @@ defmodule ExSaml.Core.Assertion do
     * `audience_restrictions` — the `Audience` values of each
       `Conditions/AudienceRestriction`, one list per element (Core §2.5.1.4).
       `conditions[:audience]` keeps the first value for compatibility;
-    * `one_time_use` — whether `Conditions/OneTimeUse` is present (Core §2.5.1.5).
+    * `one_time_use` — whether `Conditions/OneTimeUse` is present (Core §2.5.1.5);
+    * `response_in_response_to` — the `InResponseTo` of the `Response` that
+      carried the assertion (Core §3.2.2), `""` when absent. Filled by
+      `ExSaml.Core.Sp.validate_assertion/3`, which sees the envelope.
   """
 
   alias ExSaml.Core.Subject
@@ -26,7 +29,8 @@ defmodule ExSaml.Core.Assertion do
             audience_restrictions: [],
             one_time_use: false,
             attributes: [],
-            authn: []
+            authn: [],
+            response_in_response_to: ""
 
   @type t :: %__MODULE__{
           id: String.t(),
@@ -39,6 +43,7 @@ defmodule ExSaml.Core.Assertion do
           audience_restrictions: [[String.t()]],
           one_time_use: boolean(),
           attributes: keyword(),
-          authn: keyword()
+          authn: keyword(),
+          response_in_response_to: String.t()
         }
 end

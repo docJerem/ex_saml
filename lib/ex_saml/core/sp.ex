@@ -299,7 +299,17 @@ defmodule ExSaml.Core.Sp do
          :ok <- check_destination(xml, ctx),
          {:ok, assertion} <- Saml.validate_assertion(assertion_xml, ctx),
          :ok <- check_duplicate(assertion, xml, duplicate_fun) do
-      {:ok, assertion}
+      {:ok, %{assertion | response_in_response_to: response_in_response_to(xml, ns)}}
+    end
+  end
+
+  # `Response/@InResponseTo` (Core §3.2.2), `""` when absent. The consumer
+  # matches it, like `SubjectConfirmationData/@InResponseTo`, against the
+  # AuthnRequest it sent (Profiles §4.1.4.3).
+  defp response_in_response_to(xml, ns) do
+    case :xmerl_xpath.string(~c"/samlp:Response/@InResponseTo", xml, [{:namespace, ns}]) do
+      [attr] when Record.is_record(attr, :xmlAttribute) -> to_string(xmlAttribute(attr, :value))
+      _ -> ""
     end
   end
 

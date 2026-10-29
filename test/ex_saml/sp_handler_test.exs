@@ -85,6 +85,13 @@ defmodule ExSaml.SPHandlerTest do
   defp idp_initiated_assertion, do: %{subject: %Subject{in_response_to: ""}}
   defp sp_initiated_assertion, do: %{subject: %Subject{in_response_to: "request-id-42"}}
 
+  defp assertion(subject_in_response_to, response_in_response_to) do
+    %{
+      subject: %Subject{in_response_to: subject_in_response_to},
+      response_in_response_to: response_in_response_to
+    }
+  end
+
   # ---------------------------------------------------------------------------
   # target_url/2
   # ---------------------------------------------------------------------------
@@ -232,6 +239,52 @@ defmodule ExSaml.SPHandlerTest do
 
       assert {:ok, :sp_initiated, "nonce-xyz"} =
                SPHandler.validate_authresp(conn, idp, sp_initiated_assertion(), "rs-abc")
+    end
+
+    test "returns :bad_in_response_to when Response/@InResponseTo names a different request" do
+      idp = %IdpData{id: "idp-1"}
+
+      conn =
+        build_conn(%{
+          "relay_state" => "rs-abc",
+          "idp_id" => "idp-1",
+          "saml_nonce" => "nonce-xyz",
+          "authn_request_id" => "request-id-42"
+        })
+
+      assert {:ok, :sp_initiated, "nonce-xyz"} =
+               SPHandler.validate_authresp(
+                 conn,
+                 idp,
+                 assertion("request-id-42", "request-id-42"),
+                 "rs-abc"
+               )
+
+      assert {:error, :bad_in_response_to} =
+               SPHandler.validate_authresp(
+                 conn,
+                 idp,
+                 assertion("request-id-42", "request-id-other"),
+                 "rs-abc"
+               )
+    end
+
+    test "an InResponseTo on the Response alone makes the response SP-initiated" do
+      idp = %IdpData{id: "idp-1", allow_idp_initiated_flow: true}
+
+      conn =
+        build_conn(%{
+          "relay_state" => "rs-abc",
+          "idp_id" => "idp-1",
+          "saml_nonce" => "nonce-xyz",
+          "authn_request_id" => "request-id-42"
+        })
+
+      assert {:ok, :sp_initiated, "nonce-xyz"} =
+               SPHandler.validate_authresp(conn, idp, assertion("", "request-id-42"), "rs-abc")
+
+      assert {:error, :bad_in_response_to} =
+               SPHandler.validate_authresp(conn, idp, assertion("", "request-id-other"), "rs-abc")
     end
 
     test "returns :bad_in_response_to when InResponseTo names a different request" do

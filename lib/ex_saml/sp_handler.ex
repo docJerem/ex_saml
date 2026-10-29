@@ -190,14 +190,17 @@ defmodule ExSaml.SPHandler do
   # has already checked it against `allowed_target_urls` when the list is set;
   # without a list, only a relative path is followed, anything else falls back
   # to the default target.
-  defp auth_target_url(_conn, _idp_data, %{subject: %{in_response_to: ""}}, ""), do: "/"
+  defp auth_target_url(conn, idp_data, assertion, relay_state) do
+    if unsolicited?(assertion) do
+      idp_initiated_target_url(idp_data, relay_state)
+    else
+      get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] || "/"
+    end
+  end
 
-  defp auth_target_url(
-         _conn,
-         %IdpData{id: idp_id, allowed_target_urls: nil},
-         %{subject: %{in_response_to: ""}},
-         url
-       ) do
+  defp idp_initiated_target_url(_idp_data, ""), do: "/"
+
+  defp idp_initiated_target_url(%IdpData{id: idp_id, allowed_target_urls: nil}, url) do
     if relative_path?(url) do
       url
     else
@@ -210,10 +213,19 @@ defmodule ExSaml.SPHandler do
     end
   end
 
-  defp auth_target_url(_conn, _idp_data, %{subject: %{in_response_to: ""}}, url), do: url
+  defp idp_initiated_target_url(_idp_data, url), do: url
 
-  defp auth_target_url(conn, _idp_data, _assertion, relay_state) do
-    get_session(conn, "target_url") || RelayStateCache.get(relay_state)[:target_url] || "/"
+  # An unsolicited response (Profiles §4.1.5) answers no AuthnRequest: neither
+  # the `Response` nor the `SubjectConfirmationData` carries an `InResponseTo`
+  # (Core §3.2.2 forbids the attribute on a response to no request).
+  defp unsolicited?(assertion), do: in_response_to_values(assertion) == []
+
+  # The `InResponseTo` values of the response, `Response/@InResponseTo` and
+  # `SubjectConfirmationData/@InResponseTo`, without the absent ones.
+  defp in_response_to_values(%{subject: %{in_response_to: subject_value}} = assertion) do
+    [subject_value, Map.get(assertion, :response_in_response_to, "")]
+    |> Enum.map(&to_string/1)
+    |> Enum.reject(&(&1 == ""))
   end
 
   # A path on this host: a single leading `/`, no scheme or authority, and
@@ -224,10 +236,18 @@ defmodule ExSaml.SPHandler do
       match?(%URI{scheme: nil, host: nil}, URI.parse(url))
   end
 
+  @doc false
+  def validate_authresp(conn, idp_data, assertion, relay_state) do
+    if unsolicited?(assertion) do
+      validate_idp_initiated(idp_data, relay_state)
+    else
+      validate_sp_initiated(conn, idp_data, assertion, relay_state)
+    end
+  end
+
   # IdP-initiated flow auth response. Tagged as `:idp_initiated` with a `nil`
   # nonce since there is no AuthnRequest to bind a nonce to in this flow.
-  @doc false
-  def validate_authresp(_conn, idp_data, %{subject: %{in_response_to: ""}}, relay_state) do
+  defp validate_idp_initiated(idp_data, relay_state) do
     cond do
       !idp_data.allow_idp_initiated_flow ->
         {:error, :idp_initiated_not_allowed}
@@ -241,7 +261,7 @@ defmodule ExSaml.SPHandler do
   end
 
   # SP-initiated flow auth response.
-  def validate_authresp(conn, %IdpData{id: idp_id}, assertion, relay_state) do
+  defp validate_sp_initiated(conn, %IdpData{id: idp_id}, assertion, relay_state) do
     cached = RelayStateCache.get(relay_state)
     rs_in_session = session_or_cached(conn, cached, :relay_state)
     idp_id_in_session = session_or_cached(conn, cached, :idp_id)
@@ -267,26 +287,27 @@ defmodule ExSaml.SPHandler do
   defp session_or_cached(conn, cached, key),
     do: get_session(conn, Atom.to_string(key)) || cached[key]
 
-  # Profiles §4.1.4.3. A stored `nil` means the relay-state entry predates
+  # Profiles §4.1.4.3: every `InResponseTo` the response carries, on the
+  # `Response` and on the `SubjectConfirmationData`, must name the AuthnRequest
+  # we sent. A stored `nil` means the relay-state entry predates
   # AuthnRequest-id tracking — a rolling deploy, or a consumer driving
   # `validate_authresp/4` without going through `ExSaml.AuthHandler` — so it
-  # skips rather than rejects. An empty `InResponseTo` is an unsolicited
-  # response and is handled by the IdP-initiated clause above, never here.
-  # The enforce / warn policy applies like for the other checks.
+  # skips rather than rejects. The enforce / warn policy applies like for the
+  # other checks.
   defp in_response_to_ok?(nil, _assertion, _idp_id), do: true
-  defp in_response_to_ok?(_expected, %{subject: %{in_response_to: ""}}, _idp_id), do: true
 
-  defp in_response_to_ok?(expected, %{subject: %{in_response_to: actual}}, idp_id) do
-    if to_string(expected) == to_string(actual) do
-      true
-    else
-      ctx = %ValidationContext{idp_id: idp_id}
+  defp in_response_to_ok?(expected, assertion, idp_id) do
+    expected = to_string(expected)
 
-      ValidationContext.verdict(ctx, {:error, :bad_in_response_to},
-        expected: expected,
-        actual: actual
-      ) == :ok
-    end
+    Enum.all?(in_response_to_values(assertion), fn actual ->
+      actual == expected or
+        ValidationContext.verdict(
+          %ValidationContext{idp_id: idp_id},
+          {:error, :bad_in_response_to},
+          expected: expected,
+          actual: actual
+        ) == :ok
+    end)
   end
 
   @doc "Processes the IdP logout response and redirects to the target URL."

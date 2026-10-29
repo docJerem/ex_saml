@@ -293,7 +293,7 @@ Profile require of a response. Each one has an error reason of its own:
 | Check | Reason | Spec |
 |---|---|---|
 | `Response/Issuer` and `Assertion/Issuer` match the IdP `entityID` from its metadata | `:bad_issuer` | Core §2.2.3, Profiles §4.1.4.2 |
-| `SubjectConfirmationData/@InResponseTo` matches the ID of the AuthnRequest the SP sent | `:bad_in_response_to` | Profiles §4.1.4.3 |
+| `Response/@InResponseTo` and `SubjectConfirmationData/@InResponseTo` match the ID of the AuthnRequest the SP sent | `:bad_in_response_to` | Core §3.2.2, Profiles §4.1.4.3 |
 | `AuthnStatement/@SessionNotOnOrAfter` has not passed | `:session_expired` | Core §2.7.2 |
 | `SubjectConfirmation/@Method` is present and bearer | `:bad_subject_confirmation` | Core §2.4.1.1, Profiles §4.1.4.2 |
 | `Response/@Destination` equals the ACS URL when present, and is present on a signed `Response` | `:bad_destination` | Core §3.2.2, Bindings §3.5.5.2 |

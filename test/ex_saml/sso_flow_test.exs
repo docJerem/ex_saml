@@ -95,12 +95,18 @@ defmodule ExSaml.SsoFlowTest do
 
   # An unsigned but otherwise valid Response for our SP: recipient, audience
   # and time conditions all pass, `InResponseTo` marks the SP-initiated flow.
-  # Options: `:destination` adds `Response/@Destination`, `:issuer` replaces
-  # the `Response/Issuer`, `:name_id` replaces the NameID (`nil` drops it),
-  # `:attributes` adds attributes, as `{name, value}` pairs.
+  # Options: `:destination` adds `Response/@Destination`,
+  # `:response_in_response_to` adds `Response/@InResponseTo`, `:issuer`
+  # replaces the `Response/Issuer`, `:name_id` replaces the NameID (`nil`
+  # drops it), `:attributes` adds attributes, as `{name, value}` pairs.
   defp saml_response(in_response_to, opts \\ []) do
     dest_attr =
       if dest = Keyword.get(opts, :destination), do: ~s( Destination="#{dest}"), else: ""
+
+    resp_irt_attr =
+      if irt = Keyword.get(opts, :response_in_response_to),
+        do: ~s( InResponseTo="#{irt}"),
+        else: ""
 
     issuer = Keyword.get(opts, :issuer, @idp_entity_id)
 
@@ -116,7 +122,7 @@ defmodule ExSaml.SsoFlowTest do
             ~s(<saml:Attribute Name="#{name}"><saml:AttributeValue>#{value}</saml:AttributeValue></saml:Attribute>)
 
     Base.encode64("""
-    <samlp:Response #{@ns} ID="_r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z"#{dest_attr}>
+    <samlp:Response #{@ns} ID="_r1" Version="2.0" IssueInstant="2026-01-01T00:00:00Z"#{dest_attr}#{resp_irt_attr}>
       <saml:Issuer>#{issuer}</saml:Issuer>
       <samlp:Status>
         <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>
@@ -230,6 +236,46 @@ defmodule ExSaml.SsoFlowTest do
 
       assert log =~ "saml_validation check=:bad_in_response_to enforced=false"
       assert log =~ ~s(actual="_not-our-request")
+    end
+
+    # Core §3.2.2: the Response carries an InResponseTo of its own.
+    test "a Response/@InResponseTo naming the AuthnRequest signs in" do
+      {_conn, relay_state} = start_sso()
+      id = authn_request_id(relay_state)
+
+      assert relay_state
+             |> post_payload(saml_response(id, response_in_response_to: id), id)
+             |> signed_in?()
+    end
+
+    test "a Response/@InResponseTo naming another request is rejected" do
+      {_conn, relay_state} = start_sso()
+      id = authn_request_id(relay_state)
+
+      conn =
+        post_payload(
+          relay_state,
+          saml_response(id, response_in_response_to: "_not-our-request"),
+          id
+        )
+
+      refute signed_in?(conn)
+      assert rejected_with(conn) == {:error, :bad_in_response_to}
+    end
+
+    test "a response with an InResponseTo on the Response only is not unsolicited" do
+      idp = struct!(idp(), allow_idp_initiated_flow: true, allowed_target_urls: nil)
+      Application.put_env(:ex_saml, :identity_providers, %{@idp_id => idp})
+
+      body = %{
+        "SAMLResponse" => saml_response("", response_in_response_to: "_some-request"),
+        "RelayState" => "/dashboard"
+      }
+
+      conn = SPHandler.consume_signin_response(acs_conn(body, %{}))
+
+      refute signed_in?(conn)
+      assert rejected_with(conn) == {:error, :invalid_relay_state}
     end
   end
 

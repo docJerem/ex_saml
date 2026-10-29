@@ -27,8 +27,14 @@ defmodule ExSaml.Assertion do
             attributes: %{},
             authn: %{},
             computed: %{},
-            idp_id: ""
+            idp_id: "",
+            response_in_response_to: ""
 
+  @typedoc """
+  `response_in_response_to` is the `InResponseTo` of the `Response` that
+  carried the assertion, `""` when absent; `subject.in_response_to` is the
+  one of the `SubjectConfirmationData`.
+  """
   @type t :: %__MODULE__{
           version: String.t(),
           issue_instant: String.t(),
@@ -39,7 +45,8 @@ defmodule ExSaml.Assertion do
           attributes: %{required(attr_name_t()) => attr_value_t()},
           authn: map,
           computed: %{required(attr_name_t()) => attr_value_t()},
-          idp_id: String.t()
+          idp_id: String.t(),
+          response_in_response_to: String.t()
         }
 
   def get_from_code(code) do
@@ -66,7 +73,8 @@ defmodule ExSaml.Assertion do
       subject: Subject.from_core(core.subject),
       conditions: core.conditions |> stringize(),
       attributes: core.attributes |> stringize(),
-      authn: core.authn |> stringize()
+      authn: core.authn |> stringize(),
+      response_in_response_to: to_string_safe(core.response_in_response_to)
     }
   end
 
