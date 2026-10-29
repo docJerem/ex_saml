@@ -73,6 +73,8 @@ config :ex_saml, ExSaml.Provider,
       signed_envelopes_in_resp: false,
       # Only for an IdP that still encrypts with RSA-1_5 (see Security)
       allow_rsa_1_5_key_transport: false,
+      # Only for an IdP that encrypts with AES-CBC and does not sign the Response (see Security)
+      allow_unsigned_cbc: false,
       allow_idp_initiated_flow: true,
       use_redirect_for_req: false,
       use_redirect_for_slo: false,
@@ -252,7 +254,7 @@ ExSaml includes hardened defaults for SAML processing:
 - **Namespace-conformant parsing** — XML is parsed with `namespace_conformant: true`
 - **Identity values read whole** — `NameID` and `AttributeValue` are read as the concatenation of their text nodes; an assertion whose `NameID` or `AttributeValue` contains a comment or a processing instruction is rejected with `:bad_assertion`
 - **Response validation** — `Issuer`, `InResponseTo`, `Destination`, `Audience`, `SessionNotOnOrAfter`, the bearer confirmation method and its `NotBefore` are checked on every response, and an assertion is accepted only once (see [Response validation checks](#response-validation-checks))
-- **Encrypted assertions** — AES-128/192/256 in GCM or CBC mode, with the key transported in RSA-OAEP (`rsa-oaep-mgf1p` or XML Encryption 1.1 `rsa-oaep`, with their digest, MGF and OAEP parameters). RSA-1_5 key transport is rejected unless an IdP is configured with `allow_rsa_1_5_key_transport: true`. When the IdP signs the Response (`signed_envelopes_in_resp: true`), its signature is verified before the assertion is decrypted; prefer AES-GCM over AES-CBC
+- **Encrypted assertions** — AES-128/192/256 in GCM or CBC mode, with the key transported in RSA-OAEP (`rsa-oaep-mgf1p` or XML Encryption 1.1 `rsa-oaep`, with their digest, MGF and OAEP parameters). RSA-1_5 key transport is rejected unless an IdP is configured with `allow_rsa_1_5_key_transport: true`. When the IdP signs the Response (`signed_envelopes_in_resp: true`), its signature is verified before the assertion is decrypted. An AES-CBC assertion in a Response whose signature is not required is decrypted before anything is verified, which exposes a padding oracle: this is the `:unsigned_cbc` check (log-only by default, see [Response validation checks](#response-validation-checks)); an IdP that cannot encrypt with AES-GCM or sign the Response can be configured with `allow_unsigned_cbc: true`
 
 To report a security issue, email security@cryptr.co.
 
@@ -310,6 +312,7 @@ Profile require of a response. Each one has an error reason of its own:
 | The assertion ID has not been consumed before | `:duplicate` | Profiles §4.1.4.5, Core §2.5.1.5 |
 | The assertion carries an `Audience` | `:bad_audience` | Profiles §4.1.4.2 |
 | `SubjectConfirmationData/@NotBefore` has passed (5 s clock skew) | `:too_early` | Core §2.4.1.2 |
+| An `EncryptedAssertion` in AES-CBC comes in a `Response` whose signature is required, or the IdP has `allow_unsigned_cbc: true` (log-only by default) | `:unsigned_cbc` | XML Encryption 1.1 §6.1.1 |
 
 Two rules are outside the policy below and always reject: an
 `AudienceRestriction` that does not name the SP entity id (every
@@ -322,10 +325,15 @@ line and the sign-in goes on. `:duplicate` cannot be downgraded: it is
 enforced whatever the list says.
 
 ```elixir
-config :ex_saml, enforced_response_checks: :all   # the default: every check above
+config :ex_saml, enforced_response_checks: :all   # every check above, :unsigned_cbc included
 config :ex_saml, enforced_response_checks: []     # everything but :duplicate log-only
 config :ex_saml, enforced_response_checks: [:bad_issuer]  # exactly these, plus :duplicate
 ```
+
+The default enforces every check but `:unsigned_cbc`, which ships log-only:
+look for `check=:unsigned_cbc` in the logs, move each IdP it names to AES-GCM,
+to a signed `Response` or to `allow_unsigned_cbc: true`, then enforce it with
+`:all`.
 
 ```
 [ExSaml] saml_validation check=:bad_destination enforced=false idp_id="acme" expected="https://sp.example.com/sso/consume/acme" actual="https://sp.example.com/sso/consume/acme/"

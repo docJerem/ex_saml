@@ -25,6 +25,7 @@ defmodule ExSaml.Core.SpConfig do
             logout_uri: nil,
             encrypt_mandatory: false,
             allow_rsa_1_5_key_transport: false,
+            allow_unsigned_cbc: false,
             entity_id: nil,
             idp_entity_id: nil,
             idp_id: nil
@@ -47,6 +48,7 @@ defmodule ExSaml.Core.SpConfig do
           logout_uri: String.t() | nil,
           encrypt_mandatory: boolean(),
           allow_rsa_1_5_key_transport: boolean(),
+          allow_unsigned_cbc: boolean(),
           entity_id: String.t() | nil,
           idp_entity_id: String.t() | nil,
           idp_id: String.t() | nil

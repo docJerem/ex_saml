@@ -51,3 +51,6 @@ msgstr "Cette réponse SAML a déjà été utilisée. Veuillez recommencer la co
 
 msgid "bad_name_id"
 msgstr "Cette réponse n'identifie pas l'utilisateur : l'assertion n'a pas de NameID ou il est vide. Vérifiez le NameID (ou l'identifiant utilisateur) envoyé par votre IdP."
+
+msgid "unsigned_cbc"
+msgstr "L'assertion est chiffrée en AES-CBC dans une réponse que l'IdP ne signe pas. Configurez l'IdP pour chiffrer en AES-GCM ou pour signer la réponse."

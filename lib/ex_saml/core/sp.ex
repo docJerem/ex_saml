@@ -293,7 +293,7 @@ defmodule ExSaml.Core.Sp do
     # decrypted, so an altered ciphertext is rejected without being decrypted.
     with :ok <- check_status_code(xml, ns, success_status),
          :ok <- verify_envelope_signature(xml, sp),
-         {:ok, assertion_xml} <- extract_assertion(xml, ns, sp),
+         {:ok, assertion_xml} <- extract_assertion(xml, ns, sp, ctx),
          :ok <- verify_assertion_signature(assertion_xml, sp),
          :ok <- check_response_issuer(xml, ns, ctx),
          :ok <- check_destination(xml, ctx),
@@ -346,20 +346,15 @@ defmodule ExSaml.Core.Sp do
     {:error, {:saml_error, error_status, error_message}}
   end
 
-  defp extract_assertion(xml, ns, sp) do
+  defp extract_assertion(xml, ns, sp, ctx) do
     case :xmerl_xpath.string(
            ~c"/samlp:Response/saml:EncryptedAssertion",
            xml,
            [{:namespace, ns}]
          ) do
       [encrypted] when Record.is_record(encrypted, :xmlElement) ->
-        with {:ok, decrypted} <- decrypt_assertion(encrypted, sp),
-             true <- Record.is_record(decrypted, :xmlElement),
-             [assertion] <-
-               :xmerl_xpath.string(~c"/saml:Assertion", decrypted, [{:namespace, ns}]) do
-          {:ok, assertion}
-        else
-          _ -> {:error, :bad_assertion}
+        with :ok <- check_unsigned_cbc(encrypted, sp, ctx) do
+          decrypt_to_assertion(encrypted, ns, sp)
         end
 
       _ ->
@@ -371,6 +366,47 @@ defmodule ExSaml.Core.Sp do
           [a] when Record.is_record(a, :xmlElement) -> {:ok, a}
           _ -> {:error, :bad_assertion}
         end
+    end
+  end
+
+  defp decrypt_to_assertion(encrypted, ns, sp) do
+    with {:ok, decrypted} <- decrypt_assertion(encrypted, sp),
+         true <- Record.is_record(decrypted, :xmlElement),
+         [assertion] <- :xmerl_xpath.string(~c"/saml:Assertion", decrypted, [{:namespace, ns}]) do
+      {:ok, assertion}
+    else
+      _ -> {:error, :bad_assertion}
+    end
+  end
+
+  # An AES-CBC EncryptedAssertion in a Response whose signature is not
+  # required is decrypted before anything about it has been verified: the
+  # CBC decryption and its padding check are then an oracle that anyone who
+  # can post to the ACS can query. AES-GCM authenticates the ciphertext
+  # before anything is decrypted, and a signed Response is verified before
+  # decryption, so neither is flagged (`:unsigned_cbc`).
+  defp check_unsigned_cbc(encrypted, sp, ctx) do
+    algorithm = data_encryption_algorithm(encrypted)
+
+    if match?({:cbc, _, _}, Map.get(@block_ciphers, algorithm)) and
+         not sp.idp_signs_envelopes and not sp.allow_unsigned_cbc do
+      ValidationContext.verdict(ctx, {:error, :unsigned_cbc},
+        expected: "AES-GCM, or signed_envelopes_in_resp: true",
+        actual: algorithm
+      )
+    else
+      :ok
+    end
+  end
+
+  defp data_encryption_algorithm(encrypted) do
+    case :xmerl_xpath.string(
+           ~c"./xenc:EncryptedData/xenc:EncryptionMethod/@Algorithm",
+           encrypted,
+           [{:namespace, @xenc_ns}]
+         ) do
+      [attr] when Record.is_record(attr, :xmlAttribute) -> to_string(xmlAttribute(attr, :value))
+      _ -> nil
     end
   end
 

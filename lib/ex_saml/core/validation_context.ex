@@ -76,6 +76,7 @@ defmodule ExSaml.Core.ValidationContext do
           | :duplicate
           | :session_expired
           | :too_early
+          | :unsigned_cbc
 
   @type now :: DateTime.t() | :calendar.datetime() | nil
 
@@ -97,12 +98,15 @@ defmodule ExSaml.Core.ValidationContext do
     :bad_subject_confirmation,
     :duplicate,
     :session_expired,
-    :too_early
+    :too_early,
+    :unsigned_cbc
   ]
 
-  # Every check, today. Kept distinct from `@all_checks` so a future check can
-  # ship log-only first.
-  @default_enforced @all_checks
+  # Every check but `:unsigned_cbc`, which ships log-only first: an IdP that
+  # encrypts with AES-CBC and signs only the assertion is a common setup
+  # (ADFS with encryption on), and each one has to be moved to AES-GCM, to a
+  # signed Response or to `allow_unsigned_cbc: true` before the check rejects.
+  @default_enforced @all_checks -- [:unsigned_cbc]
 
   # Checks no policy can downgrade to log-only. A replayed assertion is a
   # second sign-in with the same credential, not an interoperability glitch

@@ -240,9 +240,10 @@ defmodule ExSaml.Core.ResponseValidationTest do
       assert log =~ ~s(actual="https://other-idp.example.com")
     end
 
-    test "the default enforces every check" do
+    test "the default enforces every check but :unsigned_cbc" do
       Application.delete_env(:ex_saml, :enforced_response_checks)
       enforced = ValidationContext.enforced_checks()
+      refute :unsigned_cbc in enforced
 
       for check <- [
             :bad_audience,
@@ -257,7 +258,7 @@ defmodule ExSaml.Core.ResponseValidationTest do
         assert check in enforced
       end
 
-      assert Enum.sort(enforced) == Enum.sort(ValidationContext.all_checks())
+      assert Enum.sort(enforced) == Enum.sort(ValidationContext.all_checks() -- [:unsigned_cbc])
     end
 
     test ":all enforces every known check, and a garbage value falls back to the default" do

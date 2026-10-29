@@ -2,7 +2,8 @@ defmodule ExSaml.Core.SpEncryptedAssertionTest do
   # Encrypted assertions (XML Encryption 1.0 and 1.1), encrypted by an
   # encrypter independent of ExSaml, built on :crypto and :public_key only,
   # then decrypted by Sp.validate_assertion/2 with the SP's private key.
-  use ExUnit.Case, async: true
+  # Not async: the `:unsigned_cbc` tests set `:enforced_response_checks`.
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
@@ -56,6 +57,18 @@ defmodule ExSaml.Core.SpEncryptedAssertionTest do
       key = :public_key.generate_key({:rsa, 2048, 65_537})
 
     %{sp_key: key, sp_public_key: {:RSAPublicKey, n, e}}
+  end
+
+  setup do
+    previous = Application.get_env(:ex_saml, :enforced_response_checks)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:ex_saml, :enforced_response_checks, previous),
+        else: Application.delete_env(:ex_saml, :enforced_response_checks)
+    end)
+
+    :ok
   end
 
   defp sp(key, overrides \\ []) do
@@ -263,6 +276,68 @@ defmodule ExSaml.Core.SpEncryptedAssertionTest do
     end
   end
 
+  # An AES-CBC assertion in a Response whose signature is not required is
+  # decrypted before anything is verified: a padding oracle for anyone who can
+  # post to the ACS. Log-only by default, so each such IdP can be found and
+  # moved to AES-GCM, a signed Response or `allow_unsigned_cbc` first.
+  describe ":unsigned_cbc" do
+    test "an AES-CBC assertion in an unsigned Response is decrypted and logged by default", %{
+      sp_key: key,
+      sp_public_key: public_key
+    } do
+      xml = encrypted_response(public_key, :aes256_cbc, :rsa_oaep)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %Assertion{}} = Sp.validate_assertion(parse(xml), sp(key))
+        end)
+
+      assert log =~ "[ExSaml] saml_validation check=:unsigned_cbc enforced=false"
+      assert log =~ ~s(actual="http://www.w3.org/2001/04/xmlenc#aes256-cbc")
+    end
+
+    test "is rejected before decryption when the check is enforced", %{
+      sp_key: key,
+      sp_public_key: public_key
+    } do
+      Application.put_env(:ex_saml, :enforced_response_checks, :all)
+      xml = encrypted_response(public_key, :aes128_cbc, :rsa_oaep_mgf1p, pad_len: 17)
+
+      assert {:error, :unsigned_cbc} = Sp.validate_assertion(parse(xml), sp(key))
+    end
+
+    test "is decrypted when the IdP is allowed AES-CBC in an unsigned Response", %{
+      sp_key: key,
+      sp_public_key: public_key
+    } do
+      Application.put_env(:ex_saml, :enforced_response_checks, :all)
+      xml = encrypted_response(public_key, :aes128_cbc, :rsa_oaep_mgf1p)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %Assertion{}} =
+                   Sp.validate_assertion(parse(xml), sp(key, allow_unsigned_cbc: true))
+        end)
+
+      refute log =~ "unsigned_cbc"
+    end
+
+    test "an AES-GCM assertion in an unsigned Response is not flagged", %{
+      sp_key: key,
+      sp_public_key: public_key
+    } do
+      Application.put_env(:ex_saml, :enforced_response_checks, :all)
+      xml = encrypted_response(public_key, :aes128_gcm, :rsa_oaep_mgf1p)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %Assertion{}} = Sp.validate_assertion(parse(xml), sp(key))
+        end)
+
+      refute log =~ "unsigned_cbc"
+    end
+  end
+
   describe "a signed envelope" do
     setup %{sp_key: key, sp_public_key: public_key} do
       %{cert: idp_cert, key: idp_key} =
@@ -285,7 +360,14 @@ defmodule ExSaml.Core.SpEncryptedAssertionTest do
     end
 
     test "is verified, then the assertion decrypted", %{signed_xml: xml, sp: sp} do
-      assert {:ok, %Assertion{}} = Sp.validate_assertion(parse(xml), sp)
+      Application.put_env(:ex_saml, :enforced_response_checks, :all)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %Assertion{}} = Sp.validate_assertion(parse(xml), sp)
+        end)
+
+      refute log =~ "unsigned_cbc"
     end
 
     # An altered ciphertext fails the envelope signature, before any decryption.

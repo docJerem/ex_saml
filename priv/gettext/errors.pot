@@ -45,3 +45,6 @@ msgstr "This SAML response has already been used. Please start the sign-in again
 
 msgid "bad_name_id"
 msgstr "This response does not identify the user: the assertion has no NameID or it is empty. Check the NameID (or user identifier) your IdP sends."
+
+msgid "unsigned_cbc"
+msgstr "The assertion is encrypted with AES-CBC in a Response the IdP does not sign. Configure the IdP to encrypt with AES-GCM or to sign the Response."
