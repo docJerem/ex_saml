@@ -59,11 +59,13 @@ config :ex_saml, ExSaml.State,
 
 ### New: Cache Configuration
 
-ExSaml uses Nebulex for relay state and assertion caching. Configure the cache module:
+ExSaml uses Nebulex 3 for relay state and assertion caching. Configure the cache module:
 
 ```elixir
 config :ex_saml, cache: MyApp.Cache
 ```
+
+Nebulex 3 ships its adapters as separate packages: add the one your cache uses, such as `{:nebulex_local, "~> 3.0"}` for `Nebulex.Adapters.Local`.
 
 ### New: Dynamic Provider Loading
 

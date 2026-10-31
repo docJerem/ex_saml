@@ -102,10 +102,24 @@ config :ex_saml, ExSaml.State,
 
 ### Cache
 
-Configure the Nebulex cache module used for assertions and relay state:
+Configure the Nebulex 3 cache module used for assertions and relay state:
 
 ```elixir
 config :ex_saml, cache: MyApp.Cache
+```
+
+ExSaml depends on `nebulex` only. Nebulex 3 ships its adapters as separate packages, so add the one your cache uses, for example the local adapter:
+
+```elixir
+# mix.exs
+{:nebulex_local, "~> 3.0"}
+
+# lib/my_app/cache.ex
+defmodule MyApp.Cache do
+  use Nebulex.Cache,
+    otp_app: :my_app,
+    adapter: Nebulex.Adapters.Local
+end
 ```
 
 ### Dynamic Provider Loading

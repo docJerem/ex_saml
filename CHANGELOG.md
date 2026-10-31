@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** ExSaml requires Nebulex 3 (`{:nebulex, "~> 3.0"}`) instead of Nebulex 2. An application on Nebulex 3 could not depend on ExSaml, and ExSaml called the Nebulex 2 API on the configured cache: on Nebulex 3, `get/1` returns `{:ok, value}`, so reading a relay state such as `RelayStateCache.get(rs)[:target_url]` raised, and `take/1` returns `{:error, %Nebulex.KeyError{}}` for a missing key. All cache calls now go through one internal module that uses the Nebulex 3 API. The public functions of `ExSaml.RelayStateCache`, `ExSaml.AuthorizationCodeCache` and `ExSaml.State.Cache` keep their contract: a bare value, and `nil` for a missing key. The next release is therefore a major version
+- `ExSaml.AuthorizationCodeCache.put_new!/3` returns `true`, and raises a `Nebulex.Error` with the reason `:key_already_exists` when the code already exists, as it raised `Nebulex.KeyAlreadyExistsError` on Nebulex 2. On Nebulex 3 the cache's own `put_new!/3` returns `false` instead of raising, which would have let the redirect carry a code that was never stored. The documentation, which stated `:ok` or `{:error, :already_exists}`, now describes the behaviour
+
+### Migration
+
+- Move the application to Nebulex 3: `{:nebulex, "~> 3.0"}`, plus the adapter package of the cache given to `config :ex_saml, cache: MyApp.Cache`, which Nebulex 3 ships separately. For the local adapter, add `{:nebulex_local, "~> 3.0"}`; the adapter module keeps its name, `Nebulex.Adapters.Local`. The cache's own configuration and calls follow the [Nebulex 3 upgrade guide](https://hexdocs.pm/nebulex/v3-0.html)
+- Code that calls `ExSaml.State.Cache`, `ExSaml.RelayStateCache` or `ExSaml.AuthorizationCodeCache` needs no change. A cache module given to ExSaml that is not a Nebulex cache must now implement the Nebulex 3 functions ExSaml calls: `get!/1`, `put!/3`, `put_new!/3`, `delete!/1`, `take/1`, `ttl/1` and `get_all!/1`
+
 ## [1.2.0] - 2026-10-28
 
 ### Added

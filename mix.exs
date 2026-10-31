@@ -39,7 +39,8 @@ defmodule ExSaml.MixProject do
       {:ex_doc, "~> 0.38", only: :dev, runtime: false},
       {:gettext, ">= 0.26.0"},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
-      {:nebulex, "~> 2.6"},
+      {:nebulex, "~> 3.0"},
+      {:nebulex_local, "~> 3.0", only: :test},
       {:plug, "~> 1.18"},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
       {:sweet_xml, "~> 0.7"}

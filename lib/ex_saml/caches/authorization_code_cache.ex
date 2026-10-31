@@ -8,6 +8,7 @@ defmodule ExSaml.AuthorizationCodeCache do
   The `take/1` function atomically retrieves and deletes the code,
   ensuring single-use consumption.
   """
+  alias ExSaml.Cache
 
   @ttl :timer.seconds(30)
 
@@ -15,27 +16,30 @@ defmodule ExSaml.AuthorizationCodeCache do
   def ttl, do: @ttl
 
   @doc "Retrieves the authorization code data for the given key."
-  def get(key), do: cache().get(cache_key(key))
+  def get(key), do: Cache.get(cache_key(key))
 
   @doc "Stores authorization code data with the default TTL."
   def put(key, value, opts \\ []) do
     ttl = Keyword.get(opts, :ttl, @ttl)
-    cache().put(cache_key(key), value, ttl: ttl)
+    Cache.put(cache_key(key), value, ttl: ttl)
   end
 
   @doc "Atomically retrieves and deletes the authorization code (single-use)."
-  def take(key), do: cache().take(cache_key(key))
+  def take(key), do: Cache.take(cache_key(key))
 
-  @doc "Stores only if the key doesn't already exist. Returns `:ok` or `{:error, :already_exists}`."
+  @doc """
+  Stores authorization code data only if the key doesn't already exist.
+
+  Returns `true`, and raises a `Nebulex.Error` with the reason
+  `:key_already_exists` when the key already exists.
+  """
   def put_new!(key, value, opts \\ []) do
     ttl = Keyword.get(opts, :ttl, @ttl)
 
     ck = cache_key(key)
 
-    cache().put_new!(ck, value, ttl: ttl)
+    Cache.put_new!(ck, value, ttl: ttl)
   end
-
-  defp cache, do: Application.get_env(:ex_saml, :cache)
 
   defp cache_key(key), do: {__MODULE__, key}
 end
