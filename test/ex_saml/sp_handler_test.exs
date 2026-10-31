@@ -7,15 +7,15 @@ defmodule ExSaml.SPHandlerTest do
   alias ExSaml.{IdpData, SPHandler, Subject}
 
   # Minimal in-process stub for the cache configured via
-  # `config :ex_saml, cache: …`. The real cache is a Nebulex backend, but for
-  # unit-testing the `SPHandler` we only need `get/1`. The returned value is
+  # `config :ex_saml, cache: …`. The real cache is a Nebulex 3 backend, but for
+  # unit-testing the `SPHandler` we only need `get!/1`. The returned value is
   # read from the process dictionary so each test can drive its own scenario.
   defmodule StubRelayCache do
-    def get(_key), do: Process.get(:stub_relay_cache_value)
-    def put(_key, _value, _opts), do: :ok
-    def delete(_key), do: :ok
-    def take(_key), do: nil
-    def ttl(_key), do: nil
+    def get!(_key), do: Process.get(:stub_relay_cache_value)
+    def put!(_key, _value, _opts), do: :ok
+    def delete!(_key), do: :ok
+    def take(key), do: {:error, %Nebulex.KeyError{key: key}}
+    def ttl(key), do: {:error, %Nebulex.KeyError{key: key}}
   end
 
   setup do

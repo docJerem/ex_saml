@@ -1,20 +1,20 @@
 defmodule ExSaml.AssertionCache do
   @moduledoc false
-  def all(query, opts \\ []), do: assertion_cache().all(query, opts)
+  alias ExSaml.Cache
 
-  def ttl(key), do: assertion_cache().ttl(cache_key(key))
+  def all(query_spec \\ []), do: Cache.get_all(query_spec)
 
-  def get(key), do: assertion_cache().get(cache_key(key))
+  def ttl(key), do: Cache.ttl(cache_key(key))
+
+  def get(key), do: Cache.get(cache_key(key))
 
   def put(key, assertion, ttl: ttl),
-    do: assertion_cache().put(cache_key(key), assertion, ttl: ttl)
+    do: Cache.put(cache_key(key), assertion, ttl: ttl)
 
-  def delete(key), do: assertion_cache().delete(cache_key(key))
+  def delete(key), do: Cache.delete(cache_key(key))
 
   @doc "Atomically retrieves and deletes the assertion (anti-replay)."
-  def take(key), do: assertion_cache().take(cache_key(key))
-
-  defp assertion_cache, do: Application.get_env(:ex_saml, :cache)
+  def take(key), do: Cache.take(cache_key(key))
 
   defp cache_key(key), do: {__MODULE__, key}
 end
