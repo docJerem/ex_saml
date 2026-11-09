@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Encrypted assertions in AES-192-CBC, AES-192-GCM and AES-256-GCM, and with the key transported in XML Encryption 1.1 `rsa-oaep`. The `ds:DigestMethod`, `xenc11:MGF` and `xenc:OAEPparams` of an RSA-OAEP `EncryptedKey` are now honoured, so a key wrapped with RSA-OAEP over SHA-256 decrypts; they used to be ignored and every such assertion was rejected with `:bad_assertion`
+
+### Changed
+
+- RSA-1_5 key transport is rejected by default: `Sp.validate_assertion/2` returns `{:error, :bad_assertion}` and logs why. PKCS#1 v1.5 encryption is open to Bleichenbacher's attack (XML Encryption 1.1 §5.5.1). An IdP that still uses it can be allowed with the new `allow_rsa_1_5_key_transport: true` IdP option
+
+### Security
+
+- `Sp.validate_assertion/2` verifies the Response signature, when the IdP signs it, before decrypting an `EncryptedAssertion`. A ciphertext altered to probe the AES-CBC decryption (Jager and Somorovsky's padding oracle) is now rejected without being decrypted
+- The AES-CBC padding is removed by the length its last byte gives (XML Encryption §5.4.1), and an invalid length is rejected. Every trailing byte below 16 used to be stripped, whatever the padding said
+
 ## [1.2.0] - 2026-10-28
 
 ### Added
