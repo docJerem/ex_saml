@@ -673,9 +673,14 @@ defmodule ExSaml.Core.Sp do
     end
   end
 
-  # CBC: a 16-byte IV, then the ciphertext of the padded plaintext.
+  # CBC: a 16-byte IV, then the ciphertext of the padded plaintext, a whole
+  # number of blocks (XML Encryption 1.1 §5.2). :crypto would silently drop a
+  # trailing partial block instead of failing.
   defp block_decrypt(:cbc, cipher, symmetric_key, cipher_value) do
     <<iv::binary-16, encrypted::binary>> = cipher_value
+
+    if encrypted == <<>> or rem(byte_size(encrypted), 16) != 0,
+      do: raise(ArgumentError, "AES-CBC ciphertext is not a whole number of blocks")
 
     cipher
     |> :crypto.crypto_one_time(symmetric_key, iv, encrypted, false)
