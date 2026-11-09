@@ -7,6 +7,7 @@ defmodule ExSaml.Core.Sp do
   Assertions, and SP metadata.
   """
 
+  require Logger
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
@@ -610,9 +611,7 @@ defmodule ExSaml.Core.Sp do
         if sp.allow_rsa_1_5_key_transport do
           [rsa_padding: :rsa_pkcs1_padding]
         else
-          require Logger
-
-          Logger.error(
+          Logger.warning(
             "[ExSaml.Core] RSA-1_5 key transport rejected: it is open to Bleichenbacher's " <>
               "attack. The IdP must encrypt with RSA-OAEP, or the SP be configured with " <>
               "allow_rsa_1_5_key_transport: true."

@@ -13,12 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- RSA-1_5 key transport is rejected by default: `Sp.validate_assertion/2` returns `{:error, :bad_assertion}` and logs why. PKCS#1 v1.5 encryption is open to Bleichenbacher's attack (XML Encryption 1.1 §5.5.1). An IdP that still uses it can be allowed with the new `allow_rsa_1_5_key_transport: true` IdP option
+- RSA-1_5 key transport is rejected by default: `Sp.validate_assertion/2` returns `{:error, :bad_assertion}` and logs why. PKCS#1 v1.5 encryption is open to Bleichenbacher's attack (XML Encryption 1.1 §5.5.1). An IdP that still uses it can be allowed with the new `allow_rsa_1_5_key_transport: true` IdP option, whatever its `provider_type`
+- When the IdP signs the Response, `Sp.validate_assertion/2` checks that signature before reading the assertion: a Response with both an invalid signature and no valid assertion now returns `{:error, {:envelope, _}}` instead of `{:error, :bad_assertion}`
 
 ### Security
 
 - `Sp.validate_assertion/2` verifies the Response signature, when the IdP signs it, before decrypting an `EncryptedAssertion`. A ciphertext altered to probe the AES-CBC decryption (Jager and Somorovsky's padding oracle) is now rejected without being decrypted
-- The AES-CBC padding is removed by the length its last byte gives (XML Encryption §5.4.1), and an invalid length is rejected. Every trailing byte below 16 used to be stripped, whatever the padding said
+- The AES-CBC padding is removed by the length its last byte gives (XML Encryption §5.4.1), and an invalid length is rejected. Every trailing byte below 16 used to be stripped, whatever the padding said. An AES-CBC ciphertext that is not a whole number of blocks is rejected; its trailing partial block used to be ignored
 
 ## [1.2.0] - 2026-10-28
 
