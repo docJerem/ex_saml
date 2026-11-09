@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Encrypted assertions in AES-192-CBC, AES-192-GCM and AES-256-GCM, and with the key transported in XML Encryption 1.1 `rsa-oaep`. The `ds:DigestMethod`, `xenc11:MGF` and `xenc:OAEPparams` of an RSA-OAEP `EncryptedKey` are now honoured, so a key wrapped with RSA-OAEP over SHA-256 decrypts; they used to be ignored and every such assertion was rejected with `:bad_assertion`
+- `ExSaml.Core.Xml.Enc`, the XML Encryption decryption moved out of `ExSaml.Core.Sp`: `decrypt/3` for an `EncryptedData`, `decrypt_key/3` for an `EncryptedKey`, `decrypt_block/3` for a block cipher. It is tested against the W3C XML Encryption 1.1 test cases and Wycheproof's AES-GCM, AES-CBC and RSA-OAEP vectors
 
 ### Changed
 

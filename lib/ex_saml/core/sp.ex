@@ -7,7 +7,6 @@ defmodule ExSaml.Core.Sp do
   Assertions, and SP metadata.
   """
 
-  require Logger
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
@@ -16,8 +15,6 @@ defmodule ExSaml.Core.Sp do
     :xmlAttribute,
     Record.extract(:xmlAttribute, from_lib: "xmerl/include/xmerl.hrl")
   )
-
-  Record.defrecord(:xmlText, Record.extract(:xmlText, from_lib: "xmerl/include/xmerl.hrl"))
 
   Record.defrecord(
     :xmlNamespace,
@@ -33,7 +30,8 @@ defmodule ExSaml.Core.Sp do
     SpMetadata,
     Subject,
     Util,
-    Xml.Dsig
+    Xml.Dsig,
+    Xml.Enc
   }
 
   @type xml :: record(:xmlElement)
@@ -47,41 +45,6 @@ defmodule ExSaml.Core.Sp do
   @dsig_ns [{~c"ds", :"http://www.w3.org/2000/09/xmldsig#"}]
 
   @xenc_ns [{~c"xenc", :"http://www.w3.org/2001/04/xmlenc#"}]
-
-  @xenc11_ns [{~c"xenc11", :"http://www.w3.org/2009/xmlenc11#"}]
-
-  # XML Encryption block ciphers of an EncryptedData: mode, :crypto cipher
-  # and key size in bytes.
-  @block_ciphers %{
-    "http://www.w3.org/2001/04/xmlenc#aes128-cbc" => {:cbc, :aes_128_cbc, 16},
-    "http://www.w3.org/2001/04/xmlenc#aes192-cbc" => {:cbc, :aes_192_cbc, 24},
-    "http://www.w3.org/2001/04/xmlenc#aes256-cbc" => {:cbc, :aes_256_cbc, 32},
-    "http://www.w3.org/2009/xmlenc11#aes128-gcm" => {:gcm, :aes_128_gcm, 16},
-    "http://www.w3.org/2009/xmlenc11#aes192-gcm" => {:gcm, :aes_192_gcm, 24},
-    "http://www.w3.org/2009/xmlenc11#aes256-gcm" => {:gcm, :aes_256_gcm, 32}
-  }
-
-  # XML Encryption key transports of an EncryptedKey.
-  @rsa_oaep_mgf1p "http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p"
-  @rsa_oaep "http://www.w3.org/2009/xmlenc11#rsa-oaep"
-  @rsa_1_5 "http://www.w3.org/2001/04/xmlenc#rsa-1_5"
-
-  # The OAEP digest (ds:DigestMethod) and mask generation function
-  # (xenc11:MGF) URIs; both default to SHA-1.
-  @oaep_digests %{
-    "http://www.w3.org/2000/09/xmldsig#sha1" => :sha,
-    "http://www.w3.org/2001/04/xmlenc#sha256" => :sha256,
-    "http://www.w3.org/2001/04/xmldsig-more#sha384" => :sha384,
-    "http://www.w3.org/2001/04/xmlenc#sha512" => :sha512
-  }
-
-  @oaep_mgf1_digests %{
-    "http://www.w3.org/2009/xmlenc11#mgf1sha1" => :sha,
-    "http://www.w3.org/2009/xmlenc11#mgf1sha224" => :sha224,
-    "http://www.w3.org/2009/xmlenc11#mgf1sha256" => :sha256,
-    "http://www.w3.org/2009/xmlenc11#mgf1sha384" => :sha384,
-    "http://www.w3.org/2009/xmlenc11#mgf1sha512" => :sha512
-  }
 
   # ---------------------------------------------------------------------------
   # Setup
@@ -526,34 +489,13 @@ defmodule ExSaml.Core.Sp do
   # Decryption helpers
   # ---------------------------------------------------------------------------
 
-  defp decrypt_assertion(xml, %SpConfig{} = sp) do
-    xenc_ns = @xenc_ns
+  defp decrypt_assertion(xml, %SpConfig{key: key} = sp) do
+    [encrypted_data] = :xmerl_xpath.string(~c"./xenc:EncryptedData", xml, namespace: @xenc_ns)
 
-    [encrypted_data] =
-      :xmerl_xpath.string(~c"./xenc:EncryptedData", xml, [{:namespace, xenc_ns}])
-
-    [cipher_text] =
-      :xmerl_xpath.string(
-        ~c"xenc:CipherData/xenc:CipherValue/text()",
-        encrypted_data,
-        [{:namespace, xenc_ns}]
+    {:ok, assertion_xml} =
+      Enc.decrypt(encrypted_data, key,
+        allow_rsa_1_5_key_transport: sp.allow_rsa_1_5_key_transport
       )
-
-    cipher_value_b64 = xmlText(cipher_text, :value)
-    cipher_value = :base64.decode(cipher_value_b64)
-
-    symmetric_key = decrypt_key_info(encrypted_data, sp)
-
-    [algorithm_attr] =
-      :xmerl_xpath.string(
-        ~c"./xenc:EncryptionMethod/@Algorithm",
-        encrypted_data,
-        [{:namespace, xenc_ns}]
-      )
-
-    algorithm = xmlAttribute(algorithm_attr, :value)
-
-    assertion_xml = block_decrypt(to_string(algorithm), symmetric_key, cipher_value)
 
     {assertion, _} =
       :xmerl_scan.string(:binary.bin_to_list(assertion_xml),
@@ -562,138 +504,5 @@ defmodule ExSaml.Core.Sp do
       )
 
     assertion
-  end
-
-  defp decrypt_key_info(encrypted_data, %SpConfig{key: key} = sp) do
-    ds_ns = @dsig_ns
-    xenc_ns = @xenc_ns
-
-    [key_info] =
-      :xmerl_xpath.string(~c"./ds:KeyInfo", encrypted_data, [{:namespace, ds_ns}])
-
-    [encryption_method] =
-      :xmerl_xpath.string(
-        ~c"./xenc:EncryptedKey/xenc:EncryptionMethod",
-        key_info,
-        [{:namespace, xenc_ns}]
-      )
-
-    [cipher_text] =
-      :xmerl_xpath.string(
-        ~c"./xenc:EncryptedKey/xenc:CipherData/xenc:CipherValue/text()",
-        key_info,
-        [{:namespace, xenc_ns}]
-      )
-
-    cipher_value_b64 = xmlText(cipher_text, :value)
-    cipher_value = :base64.decode(cipher_value_b64)
-
-    :public_key.decrypt_private(cipher_value, key, key_transport_opts(encryption_method, sp))
-  end
-
-  # The :public_key options of an EncryptedKey's EncryptionMethod.
-  defp key_transport_opts(encryption_method, sp) do
-    [algorithm_attr] = :xmerl_xpath.string(~c"@Algorithm", encryption_method)
-
-    case to_string(xmlAttribute(algorithm_attr, :value)) do
-      @rsa_oaep_mgf1p ->
-        oaep_opts(encryption_method, :sha)
-
-      @rsa_oaep ->
-        mgf1_digest =
-          encryption_method
-          |> child_algorithm(~c"xenc11:MGF", @xenc11_ns)
-          |> lookup_algorithm(@oaep_mgf1_digests, :sha)
-
-        oaep_opts(encryption_method, mgf1_digest)
-
-      @rsa_1_5 ->
-        if sp.allow_rsa_1_5_key_transport do
-          [rsa_padding: :rsa_pkcs1_padding]
-        else
-          Logger.warning(
-            "[ExSaml.Core] RSA-1_5 key transport rejected: it is open to Bleichenbacher's " <>
-              "attack. The IdP must encrypt with RSA-OAEP, or the SP be configured with " <>
-              "allow_rsa_1_5_key_transport: true."
-          )
-
-          raise ArgumentError, "RSA-1_5 key transport not allowed"
-        end
-    end
-  end
-
-  defp oaep_opts(encryption_method, mgf1_digest) do
-    digest =
-      encryption_method
-      |> child_algorithm(~c"ds:DigestMethod", @dsig_ns)
-      |> lookup_algorithm(@oaep_digests, :sha)
-
-    label =
-      case :xmerl_xpath.string(~c"xenc:OAEPparams/text()", encryption_method, namespace: @xenc_ns) do
-        [text] -> :base64.decode(xmlText(text, :value))
-        [] -> <<>>
-      end
-
-    [
-      rsa_padding: :rsa_pkcs1_oaep_padding,
-      rsa_oaep_md: digest,
-      rsa_mgf1_md: mgf1_digest,
-      rsa_oaep_label: label
-    ]
-  end
-
-  # The Algorithm of a child element, nil when the element is absent.
-  defp child_algorithm(element, path, ns) do
-    case :xmerl_xpath.string(path ++ ~c"/@Algorithm", element, namespace: ns) do
-      [attr] -> to_string(xmlAttribute(attr, :value))
-      [] -> nil
-    end
-  end
-
-  # An unknown algorithm raises, which rejects the assertion.
-  defp lookup_algorithm(nil, _algorithms, default), do: default
-  defp lookup_algorithm(uri, algorithms, _default), do: Map.fetch!(algorithms, uri)
-
-  defp block_decrypt(algorithm, symmetric_key, cipher_value) do
-    {mode, cipher, key_size} = Map.fetch!(@block_ciphers, algorithm)
-    ^key_size = byte_size(symmetric_key)
-    block_decrypt(mode, cipher, symmetric_key, cipher_value)
-  end
-
-  # GCM: a 12-byte IV, the ciphertext, then a 16-byte tag.
-  defp block_decrypt(:gcm, cipher, symmetric_key, cipher_value) do
-    encrypted_size = byte_size(cipher_value) - 12 - 16
-
-    <<iv::binary-12, encrypted::binary-size(encrypted_size), tag::binary-16>> = cipher_value
-
-    case :crypto.crypto_one_time_aead(cipher, symmetric_key, iv, encrypted, <<>>, tag, false) do
-      plaintext when is_binary(plaintext) -> plaintext
-      :error -> raise ArgumentError, "AES-GCM authentication failed"
-    end
-  end
-
-  # CBC: a 16-byte IV, then the ciphertext of the padded plaintext, a whole
-  # number of blocks (XML Encryption 1.1 §5.2). :crypto would silently drop a
-  # trailing partial block instead of failing.
-  defp block_decrypt(:cbc, cipher, symmetric_key, cipher_value) do
-    <<iv::binary-16, encrypted::binary>> = cipher_value
-
-    if encrypted == <<>> or rem(byte_size(encrypted), 16) != 0,
-      do: raise(ArgumentError, "AES-CBC ciphertext is not a whole number of blocks")
-
-    cipher
-    |> :crypto.crypto_one_time(symmetric_key, iv, encrypted, false)
-    |> unpad()
-  end
-
-  # XML Encryption padding (XML Encryption 1.1 §5.4.1): the last byte is the
-  # padding length, from 1 to the 16-byte block size, and the padding bytes
-  # before it are arbitrary.
-  defp unpad(padded) do
-    pad_len = :binary.last(padded)
-
-    if pad_len in 1..16 and pad_len <= byte_size(padded),
-      do: binary_part(padded, 0, byte_size(padded) - pad_len),
-      else: raise(ArgumentError, "bad XML Encryption padding")
   end
 end
