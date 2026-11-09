@@ -7,6 +7,7 @@ defmodule ExSaml.Core.Sp do
   Assertions, and SP metadata.
   """
 
+  require Logger
   require Record
 
   Record.defrecord(:xmlElement, Record.extract(:xmlElement, from_lib: "xmerl/include/xmerl.hrl"))
@@ -610,9 +611,7 @@ defmodule ExSaml.Core.Sp do
         if sp.allow_rsa_1_5_key_transport do
           [rsa_padding: :rsa_pkcs1_padding]
         else
-          require Logger
-
-          Logger.error(
+          Logger.warning(
             "[ExSaml.Core] RSA-1_5 key transport rejected: it is open to Bleichenbacher's " <>
               "attack. The IdP must encrypt with RSA-OAEP, or the SP be configured with " <>
               "allow_rsa_1_5_key_transport: true."
@@ -673,9 +672,14 @@ defmodule ExSaml.Core.Sp do
     end
   end
 
-  # CBC: a 16-byte IV, then the ciphertext of the padded plaintext.
+  # CBC: a 16-byte IV, then the ciphertext of the padded plaintext, a whole
+  # number of blocks (XML Encryption 1.1 §5.2). :crypto would silently drop a
+  # trailing partial block instead of failing.
   defp block_decrypt(:cbc, cipher, symmetric_key, cipher_value) do
     <<iv::binary-16, encrypted::binary>> = cipher_value
+
+    if encrypted == <<>> or rem(byte_size(encrypted), 16) != 0,
+      do: raise(ArgumentError, "AES-CBC ciphertext is not a whole number of blocks")
 
     cipher
     |> :crypto.crypto_one_time(symmetric_key, iv, encrypted, false)

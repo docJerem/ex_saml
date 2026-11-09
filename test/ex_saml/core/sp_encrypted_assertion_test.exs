@@ -96,10 +96,13 @@ defmodule ExSaml.Core.SpEncryptedAssertionTest do
   end
 
   # XML Encryption padding (§5.4.1): any bytes, then the padding length.
+  # Fills the last block whatever :pad_len says, so that the last decrypted
+  # byte is :pad_len, even an invalid one.
   defp pad(plaintext, opts) do
-    pad_len = Keyword.get(opts, :pad_len, 16 - rem(byte_size(plaintext), 16))
+    fill_len = 16 - rem(byte_size(plaintext), 16)
+    pad_len = Keyword.get(opts, :pad_len, fill_len)
     filler = Keyword.get(opts, :padding_filler, 0xAA)
-    plaintext <> :binary.copy(<<filler>>, max(pad_len - 1, 0)) <> <<pad_len>>
+    plaintext <> :binary.copy(<<filler>>, fill_len - 1) <> <<pad_len>>
   end
 
   defp encrypt_block(plaintext, cipher, key, opts)
@@ -112,7 +115,13 @@ defmodule ExSaml.Core.SpEncryptedAssertionTest do
 
   defp encrypt_block(plaintext, cipher, key, opts) do
     iv = :crypto.strong_rand_bytes(16)
-    iv <> :crypto.crypto_one_time(cipher, key, iv, pad(plaintext, opts), true)
+    padded = pad(plaintext, opts)
+    # :crypto silently drops a trailing partial block.
+    0 = rem(byte_size(padded), 16)
+
+    iv <>
+      :crypto.crypto_one_time(cipher, key, iv, padded, true) <>
+      Keyword.get(opts, :trailing_bytes, <<>>)
   end
 
   defp encrypt_key(symmetric_key, public_key, {_uri, [rsa_padding: padding], _xml}),
@@ -250,6 +259,22 @@ defmodule ExSaml.Core.SpEncryptedAssertionTest do
           encrypted_response(public_key, :aes128_cbc, :rsa_oaep_mgf1p,
             pad_len: unquote(pad_len),
             padding_filler: 0x20
+          )
+
+        assert {:error, :bad_assertion} = Sp.validate_assertion(parse(xml), sp(key))
+      end
+    end
+
+    # The ciphertext is a whole number of blocks; :crypto would ignore a
+    # trailing partial block.
+    for trailing <- [1, 15] do
+      test "an AES-CBC ciphertext with #{trailing} trailing bytes", %{
+        sp_key: key,
+        sp_public_key: public_key
+      } do
+        xml =
+          encrypted_response(public_key, :aes128_cbc, :rsa_oaep_mgf1p,
+            trailing_bytes: :binary.copy(<<0>>, unquote(trailing))
           )
 
         assert {:error, :bad_assertion} = Sp.validate_assertion(parse(xml), sp(key))

@@ -125,6 +125,24 @@ defmodule ExSamlIdpDataTest do
     assert idp_data.sp_config.allow_rsa_1_5_key_transport
   end
 
+  # The provider_type defaults force other booleans to false.
+  for provider_type <- [:adfs, :ping_federate, :ping_one, :okta] do
+    test "RSA-1_5 key transport can be allowed with provider_type #{provider_type}", %{sps: sps} do
+      idp_config =
+        Map.merge(@idp_config1, %{
+          provider_type: unquote(provider_type),
+          allow_rsa_1_5_key_transport: true
+        })
+
+      %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+      assert idp_data.allow_rsa_1_5_key_transport
+      assert idp_data.sp_config.allow_rsa_1_5_key_transport
+
+      idp_data = IdpData.load_provider(%{idp_config | allow_rsa_1_5_key_transport: false}, sps)
+      refute idp_data.sp_config.allow_rsa_1_5_key_transport
+    end
+  end
+
   test "valid-idp-config-5", %{sps: sps} do
     idp_config = %{@idp_config1 | base_url: nil}
     %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
