@@ -38,6 +38,7 @@ defmodule ExSaml.MixProject do
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false},
       {:gettext, ">= 0.26.0"},
+      {:jason, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:nebulex, "~> 2.6"},
       {:plug, "~> 1.18"},
