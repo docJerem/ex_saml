@@ -135,7 +135,7 @@ defmodule ExSaml.IdpData do
     |> set_boolean_attr(opts_map, :sign_metadata)
     |> set_boolean_attr(opts_map, :signed_assertion_in_resp)
     |> set_boolean_attr(opts_map, :signed_envelopes_in_resp)
-    |> set_boolean_attr(opts_map, :allow_rsa_1_5_key_transport)
+    |> set_allow_rsa_1_5_key_transport(opts_map)
     |> set_boolean_attr(opts_map, :allow_idp_initiated_flow)
     |> set_boolean_attr(opts_map, :remove_saml_encoding)
   end
@@ -259,6 +259,17 @@ defmodule ExSaml.IdpData do
     )
 
     idp_data.nameid_format
+  end
+
+  # Not a provider default: the provider_type clauses of set_boolean_attr/3
+  # force booleans to false (all of them for :adfs), which would make this
+  # opt-in impossible to set for some IdPs.
+  @spec set_allow_rsa_1_5_key_transport(%IdpData{}, map()) :: %IdpData{}
+  defp set_allow_rsa_1_5_key_transport(%IdpData{} = idp_data, %{} = opts_map) do
+    %IdpData{
+      idp_data
+      | allow_rsa_1_5_key_transport: Map.get(opts_map, :allow_rsa_1_5_key_transport) == true
+    }
   end
 
   @spec set_boolean_attr(%IdpData{}, map(), atom()) :: %IdpData{}
