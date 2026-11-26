@@ -193,6 +193,34 @@ defmodule ExSamlIdpDataTest do
     assert entity_id == nil
   end
 
+  test "sp entity_id is the service provider's without one on the IdP", %{sps: sps} do
+    %IdpData{} = idp_data = IdpData.load_provider(@idp_config1, sps)
+    assert idp_data.valid?
+    assert idp_data.sp_config.entity_id == ~c"urn:test:sp1"
+  end
+
+  test "sp entity_id of the IdP wins over the service provider's", %{sps: sps} do
+    idp_config = Map.put(@idp_config1, :sp_entity_id, "urn:test:idp1")
+    %IdpData{} = idp_data = IdpData.load_provider(idp_config, sps)
+    assert idp_data.valid?
+    assert idp_data.sp_entity_id == "urn:test:idp1"
+    assert idp_data.sp_config.entity_id == ~c"urn:test:idp1"
+  end
+
+  test "sp entity_id of two IdPs of one service provider differ", %{sps: sps} do
+    idp_a = IdpData.load_provider(Map.put(@idp_config1, :sp_entity_id, "urn:test:a"), sps)
+
+    idp_b =
+      IdpData.load_provider(
+        %{@idp_config1 | id: "idp1b"} |> Map.put(:sp_entity_id, "urn:test:b"),
+        sps
+      )
+
+    assert idp_a.sp_id == idp_b.sp_id
+    assert idp_a.sp_config.entity_id == ~c"urn:test:a"
+    assert idp_b.sp_config.entity_id == ~c"urn:test:b"
+  end
+
   test "invalid-idp-config-1", %{sps: sps} do
     idp_config = %{@idp_config1 | id: ""}
 

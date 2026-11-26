@@ -11,6 +11,7 @@ defmodule ExSaml.IdpData do
 
   defstruct id: "",
             sp_id: "",
+            sp_entity_id: nil,
             base_url: nil,
             metadata: nil,
             metadata_file: nil,
@@ -39,6 +40,7 @@ defmodule ExSaml.IdpData do
   @type t :: %__MODULE__{
           id: binary(),
           sp_id: binary(),
+          sp_entity_id: nil | binary(),
           base_url: nil | binary(),
           metadata: nil | binary(),
           metadata_file: nil | binary(),
@@ -123,6 +125,7 @@ defmodule ExSaml.IdpData do
       idp_data
       | id: id,
         sp_id: sp_id,
+        sp_entity_id: Map.get(opts_map, :sp_entity_id),
         base_url: Map.get(opts_map, :base_url),
         metadata: Map.get(opts_map, :metadata)
     }
@@ -369,8 +372,11 @@ defmodule ExSaml.IdpData do
     idp_id_from = Application.get_env(:ex_saml, :idp_id_from)
     path_segment_idp_id = if idp_id_from == :subdomain, do: nil, else: idp_data.id
 
+    # The IdP's own SP entity ID wins over its service provider's: two IdPs of
+    # one service provider can then be told apart by an IdP that takes an entity
+    # ID once (Microsoft Entra ID).
     sp_entity_id =
-      case sp_data.entity_id do
+      case idp_data.sp_entity_id || sp_data.entity_id do
         "" -> nil
         id -> String.to_charlist(id)
       end

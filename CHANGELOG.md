@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- An identity provider can carry its own service provider entity ID: `sp_entity_id` in an IdP's configuration wins over its service provider's `entity_id` for the `Issuer` of the requests, the `entityID` of the SP metadata and the expected `Audience`. Two IdPs sharing one service provider can then be registered in an IdP that takes an entity ID only once, such as two enterprise applications of one Microsoft Entra ID tenant. `ExSaml.UI.value(:entity_id, idp)` returns it. Without it, nothing changes
+
 ## [1.2.0] - 2026-10-28
 
 ### Added
