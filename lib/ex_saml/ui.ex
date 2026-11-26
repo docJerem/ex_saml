@@ -1,5 +1,7 @@
 defmodule ExSaml.UI do
   @moduledoc false
+  def value(:entity_id, %{sp_entity_id: entity_id}) when is_binary(entity_id), do: entity_id
+
   def value(:entity_id, %{saml_service_provider_id: entity_id, sp_id: nil}),
     do: entity_id
 
